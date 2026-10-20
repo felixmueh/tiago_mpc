@@ -6,10 +6,10 @@ tested as `zero_soft_state_rho10.json` at `c3f226b`, based on application
 `e45c441`; upstream GATO stays at `aeacf16e7733df1a17dfd6627f3b5d15c2ba4387`.
 No solver, model, tracking or experiment-input changes were made.
 
-The frozen100 comparison produced84 arrivals,100 sampled physical-limit passes,
-16 timeouts and no execution errors, versus69/100 arrivals and100/100 limit
-passes with retained soft+ADMM. There were16 gained and one lost arrival.
-The candidate was selected using seven cases also in the100; this is not
+The frozen 100 comparison produced 84 arrivals, 100 sampled physical-limit passes,
+16 timeouts and no execution errors, versus 69/100 arrivals and 100/100 limit
+passes with retained soft+ADMM. There were 16 gained and one lost arrival.
+The candidate was selected using seven cases also in the 100; this is not
 independent holdout evidence. Finite-budget returned plans can violate the
 conservative planning bounds; sampled executed-limit passes do not establish
 hard feasibility, collision safety or physical robot qualification. Fixed
@@ -17,8 +17,8 @@ simulation pacing does not charge solve time to the plant.
 
 Original report, configurations, raw data, timings, failures and source receipts
 remain at `/workspace/tiago_mpc-admm-only/_expr_data/admm-only-reaching-20261020/`.
-This promotion reuses that qualified configuration without another GPU cohort
-or performance claim. No retained results were moved or relabeled.
+This promotion reuses that qualified configuration without another 100-case
+cohort or performance claim. No retained results were moved or relabeled.
 
 Focused CPU verification:
 
@@ -37,7 +37,21 @@ retain their old base; unspecified speed/effort fractions are recorded as null
 with the compiled absolute .1 rad/s / .1 Nm offsets. No-config runs select and
 record the new complete JSON.
 
-The evidence below describes the initial30 ms configuration, before promotion.
+A direct smoke run at committed source `5a38b9b` also passed, using all three
+shared GPU locks after the elapsed-shift experiment released the device:
+
+```bash
+.venv/bin/python examples/reach_sim.py \
+  --output _expr_data/reaching-default-promotion-20261020/default-smoke
+```
+
+The normal comfortable-start example arrived after 0.25 simulated seconds with
+33.60 mm position error and speed L1 0.9753 rad/s. Every saved state and applied
+torque passed raw URDF limits; the command returned zero. This is one basic
+operation check, separate from the frozen random-start study. Its source,
+configuration, trajectory and log remain beside the CPU receipts.
+
+The evidence below describes the initial 30 ms configuration, before promotion.
 
 ## Initial simulation verification — 20 October 2026
 
