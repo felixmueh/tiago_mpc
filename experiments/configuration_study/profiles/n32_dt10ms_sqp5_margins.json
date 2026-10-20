@@ -1,0 +1,20 @@
+{
+  "description": "Same N32/10ms margin configuration with cheaper SQP5 outer cap; preview0.31s.",
+  "controller": {
+    "limits_kw": {
+      "iters": 100,
+      "rho_u": 0.0005,
+      "eps_rel": 0.001
+    }
+  },
+  "save_plan_steps": 5,
+  "solver_params": {
+    "max_sqp_iters": 5
+  },
+  "N": 32,
+  "dt_s": 0.01,
+  "limit_bounds": {
+    "velocity_fraction": 0.8,
+    "effort_fraction": 0.85
+  }
+}
