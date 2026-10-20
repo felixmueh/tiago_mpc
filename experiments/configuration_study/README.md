@@ -101,3 +101,24 @@ all intermediate cohorts and PDF/plot exports are retained at:
 cohort remains separately at
 `/workspace/experiment_data/tiago_mpc/random100-admm-sqp5-20261020/`.
 Separate verified archives are in the adjacent `backups/` directory.
+
+## 10 ms horizon extension pilot
+
+The follow-up at N64 and N128 is retained at
+`/workspace/experiment_data/tiago_mpc/horizon-study-20261020/`
+(`REPORT.md`, self-contained `REPORT.pdf`, independent raw audit and module
+receipts). On the same seven selected cases, explicit ADMM inner PCG gave
+N64: 4 arrivals/7 whole-run physical passes; N128: 3 arrivals/7 physical
+passes, versus selected N32: 5 arrivals/7 physical passes. All completed once,
+with zero execution errors. These are diagnostic pilot counts, not random-task
+success estimates; no full100 N64/N128 run was made in this session.
+
+Native-default N64/N128 each completed only case8990 with severe finite
+position/speed violations; each remaining six-case pilot is held in HOLD.json.
+These horizons select bdsv_factor by default. The separately named
+`n64_dt10ms_sqp5_margins_terminal10_pcg.json` and
+`n128_dt10ms_sqp5_margins_terminal10_pcg.json` preserve PCG explicitly.
+This policy comparison does not establish a causal backend defect. Source,
+model, costs, frozen inputs and grading remain unchanged; timings use the
+fixed simulation clock and are diagnostic. User priorities then moved to
+friction/damping tracking and rendering. All negative cohorts remain retained.
