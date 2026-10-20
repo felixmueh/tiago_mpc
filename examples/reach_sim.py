@@ -125,6 +125,7 @@ def main():
     p.add_argument("--timeout", type=float, default=TIMEOUT_S, help="simulated seconds")
     p.add_argument("--output", type=Path, help="fresh output directory")
     p.add_argument("--build-only", action="store_true", help="build and check model conventions")
+    p.add_argument("--input", type=Path, help="frozen experiment NPZ with initial_state/target_xyz/reference")
     args = p.parse_args()
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         p.error("--timeout must be finite and positive")
@@ -132,7 +133,7 @@ def main():
     out = args.output or ROOT / "results" / stamp
     out.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(__file__, out / "reach_sim.py")
-    result = dict(status="started", mode="hold" if args.hold else "reach",
+    result = dict(status="started", execution_stage="setup", mode="hold" if args.hold else "reach",
                   repository_commit=git("rev-parse", "HEAD") if (ROOT / ".git").exists()
                   and git("rev-list", "--all", "--count") != "0" else None,
                   repository_status=git("status", "--short"),
@@ -147,6 +148,7 @@ def main():
                   orientation="unconstrained", collisions="not checked",
                   urdf_sha256=hashlib.sha256(URDF.read_bytes()).hexdigest())
     times, states, controls, errors, solve_us, wall_s, row_viol = [], [], [], [], [], [], []
+    work = []
     exit_code = 1
     try:
         path, gpu_path, signs = runtime_urdf()
@@ -161,13 +163,38 @@ def main():
         fid = model.getFrameId(EE_FRAME)
         if fid >= model.nframes:
             raise ValueError(f"Missing end-effector frame {EE_FRAME}")
+        x_start = np.r_[Q_START_RAD, np.zeros(7)]
         q_goal = Q_START_RAD + (0.0 if args.hold else Q_GOAL_DELTA_RAD)
-        for q in (Q_START_RAD, q_goal):
+        reference = None
+        if args.input:
+            if args.hold or args.build_only:
+                raise ValueError("--input cannot be combined with --hold/--build-only")
+            with np.load(args.input, allow_pickle=False) as saved:
+                x_start = saved["initial_state"].copy()
+                q_goal = saved["source_goal_q"].copy()
+                target = saved["target_xyz"].copy()
+                reference = saved["reference"].astype(np.float32).reshape(N, 6)
+                historical_seed = saved["first_seed"]
+                expected_seed = np.tile(np.r_[x_start, np.zeros(7)], N)[:-7]
+                if not np.allclose(historical_seed.ravel(), expected_seed, atol=1e-6):
+                    raise ValueError("Frozen task seed differs from state-hold/zero-control policy")
+            if (x_start.shape != (14,) or q_goal.shape != (7,) or target.shape != (3,)
+                    or not all(np.isfinite(a).all() for a in (x_start, q_goal, target, reference))):
+                raise ValueError("Invalid frozen input")
+            result.update(mode="frozen_random_reach", input_file=str(args.input.resolve()),
+                          input_sha256=hashlib.sha256(args.input.read_bytes()).hexdigest())
+        for q in (x_start[:7], q_goal):
             if np.any(q < model.lowerPositionLimit) or np.any(q > model.upperPositionLimit):
                 raise ValueError("Start/target witness outside joint limits")
-        target = ee_position(model, data, q_goal, fid)
-        initial = ee_position(model, data, Q_START_RAD, fid)
-        result.update(q_start_rad=Q_START_RAD.tolist(), q_goal_witness_rad=q_goal.tolist(),
+        witness_target = ee_position(model, data, q_goal, fid)
+        if reference is None:
+            target = witness_target
+            reference = np.zeros((N, 6), dtype=np.float32)
+            reference[:, :3] = target
+        elif not np.allclose(target, witness_target, atol=1e-5, rtol=1e-4):
+            raise ValueError("Frozen target frame differs from the native TIAGo model")
+        initial = ee_position(model, data, x_start[:7], fid)
+        result.update(q_start_rad=x_start[:7].tolist(), q_goal_witness_rad=q_goal.tolist(),
                       target_m=target.tolist(), initial_distance_m=float(np.linalg.norm(target-initial)))
         print(f"Target displacement: {result['initial_distance_m']*1000:.1f} mm", flush=True)
         result["status"] = "building_model"
@@ -177,32 +204,48 @@ def main():
                            plant_type=PLANT, params=PARAMS)
         result["status"] = "checking_model"
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
-        result["model_step_max_abs_errors"] = check_model(solver, model, data, fid, q_goal, signs)
+        # Reuse the already qualified bounded convention check; random task poses
+        # are task inputs, not an expanded numerical qualification campaign.
+        result["model_step_max_abs_errors"] = check_model(
+            solver, model, data, fid, Q_START_RAD+Q_GOAL_DELTA_RAD, signs)
         print("GATO/Pinocchio model checks passed", flush=True)
         if args.build_only:
             result["status"] = "model_checked"
             return 0
         controller = gato.MPCController(solver, limits="admm", linsys="pcg")
-        x = np.r_[Q_START_RAD, np.zeros(7)]
+        result.update(reset_rho_each_step=controller.reset_rho_each_step,
+                      admm_defaults=controller.LIMIT_DEFAULTS["admm"],
+                      admm_linsys_policy=controller.admm_linsys)
+        result.update(status="running", execution_stage="episode")
+        (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
+        x = x_start.copy()
         controller.reset(x*state_signs)
-        reference = np.zeros((N, 6), dtype=np.float32)
-        reference[:, :3] = target
         times.append(0.0); states.append(x.copy()); errors.append(float(np.linalg.norm(initial-target)))
         t, reached = 0.0, False
         # Hold mode runs the full interval to check stability. Reach stops at arrival.
         while t < args.timeout - 1e-12:
             step = controller.step(x*state_signs, reference.ravel())
             u = np.asarray(step.u, dtype=float)*signs
-            if not np.isfinite(u).all() or not np.isfinite(step.solve.xu).all():
-                raise FloatingPointError("Nonfinite torque or predicted trajectory")
+            stats = step.solve.stats
+            work.append(dict(sqp=int(np.sum(stats.sqp_iters)),
+                             pcg=int(np.sum(stats.pcg_iters)),
+                             admm=int(np.sum(stats.admm_iters)),
+                             admm_linsys=int(np.sum(stats.admm_linsys_iters)),
+                             admm_linsys_mode=step.admm_linsys,
+                             zero_pcg_rows=int(np.sum(np.asarray(stats.pcg_iters) == 0))))
             solve_us.append(float(step.solve.solve_time_us)); wall_s.append(float(step.wall_s))
             row_viol.append(np.asarray(step.row_viol).copy())
+            if not np.isfinite(u).all() or not np.isfinite(step.solve.xu).all():
+                np.savez_compressed(out / "failure_solve.npz", state=x, reference=reference,
+                                    torque_nm=u, xu=step.solve.xu)
+                raise FloatingPointError("Nonfinite torque or predicted trajectory")
             interval_end = min(t + DT_S, args.timeout)
             while t < interval_end - 1e-12:
                 h = min(SIM_DT_S, interval_end-t)
                 q, v = rk4(model, data, x[:7], x[7:], u, h)
                 x = np.r_[q, v]
                 if not np.isfinite(x).all():
+                    np.savez_compressed(out / "failure_plant.npz", state=x, torque_nm=u, time_s=t+h)
                     raise FloatingPointError("Nonfinite simulated state")
                 t += h
                 controls.append(u.copy()); times.append(t); states.append(x.copy())
@@ -223,12 +266,15 @@ def main():
                       max_distance_m=max(errors), max_limit_excess=excess,
                       limits_pass=limits_pass, solve_calls=len(solve_us),
                       max_abs_torque_nm=float(np.max(np.abs(u_array))),
+                      work_totals={k:sum(w[k] for w in work) for k in
+                                   ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows")},
                       solve_time_median_ms=float(np.median(solve_us)/1000))
         exit_code = 0 if reached and limits_pass else 1
     except Exception:
         result.update(status="error", error=traceback.format_exc())
         traceback.print_exc()
     finally:
+        (out / "solve_work.json").write_text(json.dumps(work)+"\n")
         np.savez_compressed(out / "trajectory.npz", time_s=times, state=states,
                             applied_torque_nm=controls, distance_m=errors,
                             solve_time_us=solve_us, controller_wall_s=wall_s,

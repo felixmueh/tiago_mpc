@@ -1,0 +1,69 @@
+{
+  "source_base": "85ef2ea5cf5b96726be6f4b5441f4a7c0ca041b4",
+  "timing_mode": "A",
+  "offline_timing": "controller_dt",
+  "N": 32,
+  "knot_dt_s": 0.03,
+  "feedback_s": 0.03,
+  "sim_dt_s": 0.003,
+  "timeout_s": 8.0,
+  "position_tolerance_m": 0.05,
+  "tool_axis_tolerance_deg": 30.0,
+  "velocity_l1_tolerance_rad_s": 1.0,
+  "goal_dwell_s": 0.0,
+  "final_approach": false,
+  "batch": 1,
+  "solver_params": {
+    "max_sqp_iters": 1000,
+    "kkt_tol": 0.001,
+    "max_pcg_iters": 120,
+    "pcg_tol": 0.001,
+    "solve_ratio": 1.0,
+    "mu": 10.0,
+    "q_cost": 4.0,
+    "qd_cost": 0.05,
+    "u_cost": 1e-05,
+    "N_cost": 80.0,
+    "ee_orient_cost": 0.0,
+    "ee_orient_N_cost": 0.0,
+    "q_lim_cost": 0.02125,
+    "vel_lim_cost": 1.275,
+    "ctrl_lim_cost": 0.02,
+    "rho": 0.01
+  },
+  "reset_rho_each_solve": false,
+  "limit_penalty": {
+    "kind": "C2_quadratic_continuation",
+    "reviewed_candidate": "17100c0a9500e23f72f6c4d950717f09ce9551cb",
+    "relaxation_fraction_of_limit_interval": 0.01,
+    "production_base": "b400bdf2bb6eea543b17cefcb0577d5de4d22ce2",
+    "core_change": "Reviewed C2 quadratic continuation plus explicit interior cost bounds at all value/gradient/Hessian callsites; raw limits, dynamics and controller unchanged.",
+    "cost_bounds": {
+      "joint_margin_rad": 0.2,
+      "velocity_fraction_of_physical_limit": 0.8,
+      "effort_fraction_of_physical_limit": 0.85,
+      "velocity_upper_rad_s": [
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "effort_upper_Nm": [
+        36.55,
+        36.55,
+        22.1,
+        22.1,
+        22.1,
+        22.1,
+        22.1
+      ],
+      "initial_states": "Unchanged, including those outside interior cost bounds; no clipping or filtering.",
+      "continuation_width": "1% of interior cost interval"
+    }
+  },
+  "arrival_policy": "position_and_speed_only",
+  "native_module_sha256": "d9bee23f90a1d7816b32db23749bd651db2a7537f94c3dfec15f1a448bb34cc8"
+}

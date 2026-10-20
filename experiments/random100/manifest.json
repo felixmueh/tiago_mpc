@@ -1,0 +1,810 @@
+{
+  "source_repository": "/workspace/GATO",
+  "source_branch": "felix-expr/random-reaching",
+  "source_commit": "be7e3686ce0d69d173c07662ac006740c8c7bcb9",
+  "task_ids": [
+    3546,
+    3331,
+    7366,
+    8048,
+    175,
+    679,
+    502,
+    3258,
+    8783,
+    7065,
+    6617,
+    9571,
+    6566,
+    3903,
+    8327,
+    977,
+    3925,
+    9227,
+    3017,
+    1033,
+    4546,
+    1124,
+    5876,
+    3990,
+    4527,
+    6536,
+    2953,
+    396,
+    764,
+    26,
+    8990,
+    7355,
+    7110,
+    2795,
+    215,
+    7459,
+    8306,
+    966,
+    1915,
+    1167,
+    3196,
+    8922,
+    626,
+    7378,
+    9337,
+    3423,
+    7922,
+    309,
+    7843,
+    9388,
+    3097,
+    9732,
+    4562,
+    4155,
+    6348,
+    2245,
+    2237,
+    1639,
+    5111,
+    542,
+    553,
+    6443,
+    8600,
+    5894,
+    4022,
+    6906,
+    7607,
+    7797,
+    187,
+    4943,
+    3461,
+    660,
+    5050,
+    2263,
+    4096,
+    7930,
+    7410,
+    8518,
+    6596,
+    4471,
+    4105,
+    9624,
+    3126,
+    7003,
+    222,
+    7055,
+    2085,
+    6601,
+    7951,
+    9306,
+    1862,
+    3211,
+    1888,
+    6713,
+    5910,
+    5766,
+    801,
+    577,
+    1446,
+    9637
+  ],
+  "files": {
+    "random_03546.npz": {
+      "sha256": "eb3bcee5dab107815a072d0a2f974ade12404331e8b2c71bccdbb8da5dfe29e1",
+      "original": {
+        "sha256": "eb3bcee5dab107815a072d0a2f974ade12404331e8b2c71bccdbb8da5dfe29e1",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03546/inputs.npz"
+      }
+    },
+    "random_03331.npz": {
+      "sha256": "9ca4e93a99c7e9e27407d5a2671559a487c5c5c3e4c2ac8b91d436c7bc8de5d2",
+      "original": {
+        "sha256": "9ca4e93a99c7e9e27407d5a2671559a487c5c5c3e4c2ac8b91d436c7bc8de5d2",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03331/inputs.npz"
+      }
+    },
+    "random_07366.npz": {
+      "sha256": "15be6311a0d74bf6b829679d4732d31b99e3ad2aac991e888c6d599fec1a8ae2",
+      "original": {
+        "sha256": "15be6311a0d74bf6b829679d4732d31b99e3ad2aac991e888c6d599fec1a8ae2",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07366/inputs.npz"
+      }
+    },
+    "random_08048.npz": {
+      "sha256": "4bc0e18deac716b7471bc597625d18048fb17c752130d0a3016eb96335d7a356",
+      "original": {
+        "sha256": "4bc0e18deac716b7471bc597625d18048fb17c752130d0a3016eb96335d7a356",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08048/inputs.npz"
+      }
+    },
+    "random_00175.npz": {
+      "sha256": "2c8b92b7e6150e8312b45a3cf16760e10ac3db2a6e8e11d04d3bb0bb6d0241fd",
+      "original": {
+        "sha256": "2c8b92b7e6150e8312b45a3cf16760e10ac3db2a6e8e11d04d3bb0bb6d0241fd",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00175/inputs.npz"
+      }
+    },
+    "random_00679.npz": {
+      "sha256": "fc927623aae233c1403fd220b264a6707c2b6210d57b84b847d0f5710c921542",
+      "original": {
+        "sha256": "fc927623aae233c1403fd220b264a6707c2b6210d57b84b847d0f5710c921542",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00679/inputs.npz"
+      }
+    },
+    "random_00502.npz": {
+      "sha256": "bddf8a854ab443dbb2ac2fc2cc246b796aeb5bad543b110b977a248fc97be956",
+      "original": {
+        "sha256": "bddf8a854ab443dbb2ac2fc2cc246b796aeb5bad543b110b977a248fc97be956",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00502/inputs.npz"
+      }
+    },
+    "random_03258.npz": {
+      "sha256": "406954373548e834bc6fb2c1764be257d1795dc717792673648253d85e6874f2",
+      "original": {
+        "sha256": "406954373548e834bc6fb2c1764be257d1795dc717792673648253d85e6874f2",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03258/inputs.npz"
+      }
+    },
+    "random_08783.npz": {
+      "sha256": "54d24fc3f1b3d4493f6f6e478daf7e5de0a494b7c749b59e35b7abb1cb805662",
+      "original": {
+        "sha256": "54d24fc3f1b3d4493f6f6e478daf7e5de0a494b7c749b59e35b7abb1cb805662",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08783/inputs.npz"
+      }
+    },
+    "random_07065.npz": {
+      "sha256": "730890c5aea92fd9c2d3f6628bbe2ff946580a32224afb0f807b77b2bdbba200",
+      "original": {
+        "sha256": "730890c5aea92fd9c2d3f6628bbe2ff946580a32224afb0f807b77b2bdbba200",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07065/inputs.npz"
+      }
+    },
+    "random_06617.npz": {
+      "sha256": "c144863f0473f28c447fd8fa97deea0d42f1122ec547c024ae4bd455f78aac55",
+      "original": {
+        "sha256": "c144863f0473f28c447fd8fa97deea0d42f1122ec547c024ae4bd455f78aac55",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06617/inputs.npz"
+      }
+    },
+    "random_09571.npz": {
+      "sha256": "09d628869d6c594952fcb6474d56e840186d11a7e1ff6c2d80a52c09ec306b53",
+      "original": {
+        "sha256": "09d628869d6c594952fcb6474d56e840186d11a7e1ff6c2d80a52c09ec306b53",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09571/inputs.npz"
+      }
+    },
+    "random_06566.npz": {
+      "sha256": "4eeed827429c37a662115fb2af6c7d38b134d23d33f6d74a7d902287623367f0",
+      "original": {
+        "sha256": "4eeed827429c37a662115fb2af6c7d38b134d23d33f6d74a7d902287623367f0",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06566/inputs.npz"
+      }
+    },
+    "random_03903.npz": {
+      "sha256": "ec62e97ebf4f1b9365c9b3355c28dab793cf6476b6f4eb394943b4ac70105e0c",
+      "original": {
+        "sha256": "ec62e97ebf4f1b9365c9b3355c28dab793cf6476b6f4eb394943b4ac70105e0c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03903/inputs.npz"
+      }
+    },
+    "random_08327.npz": {
+      "sha256": "64bdebfddc3797477055db84bb80e42813ee51c1a86e5a6db8c68c4cb3528167",
+      "original": {
+        "sha256": "64bdebfddc3797477055db84bb80e42813ee51c1a86e5a6db8c68c4cb3528167",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08327/inputs.npz"
+      }
+    },
+    "random_00977.npz": {
+      "sha256": "c6b38fee8edfb33e00101889fb3220576d9fab82dec3a82bdfd7ac685a0a9495",
+      "original": {
+        "sha256": "c6b38fee8edfb33e00101889fb3220576d9fab82dec3a82bdfd7ac685a0a9495",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00977/inputs.npz"
+      }
+    },
+    "random_03925.npz": {
+      "sha256": "f2f707034353ce3482a859fef5d4fa411242046959603436f81c8d76746a7523",
+      "original": {
+        "sha256": "f2f707034353ce3482a859fef5d4fa411242046959603436f81c8d76746a7523",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03925/inputs.npz"
+      }
+    },
+    "random_09227.npz": {
+      "sha256": "0d1accf3e6327d94fef29c1fb2170a289e40589f0850ff7fd0ada3a36f0e3a63",
+      "original": {
+        "sha256": "0d1accf3e6327d94fef29c1fb2170a289e40589f0850ff7fd0ada3a36f0e3a63",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09227/inputs.npz"
+      }
+    },
+    "random_03017.npz": {
+      "sha256": "1a691f3f881959ba6fd4415256a42568b8e559212cf732b5449bde3459f99007",
+      "original": {
+        "sha256": "1a691f3f881959ba6fd4415256a42568b8e559212cf732b5449bde3459f99007",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03017/inputs.npz"
+      }
+    },
+    "random_01033.npz": {
+      "sha256": "7a8033ab48acec8cd0ebe39d825d9207345fc18e325bac63a9ae4d724494a97f",
+      "original": {
+        "sha256": "7a8033ab48acec8cd0ebe39d825d9207345fc18e325bac63a9ae4d724494a97f",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01033/inputs.npz"
+      }
+    },
+    "random_04546.npz": {
+      "sha256": "796ee53501a86240b19fac2cdd81add0c735517f90f97ecc66d23c3433197d75",
+      "original": {
+        "sha256": "796ee53501a86240b19fac2cdd81add0c735517f90f97ecc66d23c3433197d75",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04546/inputs.npz"
+      }
+    },
+    "random_01124.npz": {
+      "sha256": "2f4cdcc4bb822ec0b74cf66c086f72a0cf8222ba8190790d6e7d5545fb480d5c",
+      "original": {
+        "sha256": "2f4cdcc4bb822ec0b74cf66c086f72a0cf8222ba8190790d6e7d5545fb480d5c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01124/inputs.npz"
+      }
+    },
+    "random_05876.npz": {
+      "sha256": "f8e5b0ee9806e851385fe364ac4ebca79e5064eaa778f1c2570ab5da57a2ea6a",
+      "original": {
+        "sha256": "f8e5b0ee9806e851385fe364ac4ebca79e5064eaa778f1c2570ab5da57a2ea6a",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_05876/inputs.npz"
+      }
+    },
+    "random_03990.npz": {
+      "sha256": "64062d64c23220ee5ecb2c0f8a99e056033f41ffcee8a6b2669b2694837af3a1",
+      "original": {
+        "sha256": "64062d64c23220ee5ecb2c0f8a99e056033f41ffcee8a6b2669b2694837af3a1",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03990/inputs.npz"
+      }
+    },
+    "random_04527.npz": {
+      "sha256": "20aa8faf9f6afb0702761b139d6e8149c6dda0dba586e6c67679e8db7c70baa1",
+      "original": {
+        "sha256": "20aa8faf9f6afb0702761b139d6e8149c6dda0dba586e6c67679e8db7c70baa1",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04527/inputs.npz"
+      }
+    },
+    "random_06536.npz": {
+      "sha256": "981f76c612c0256f6c1b90c68220496b7acaf8053f33ef7887a2d02e94119509",
+      "original": {
+        "sha256": "981f76c612c0256f6c1b90c68220496b7acaf8053f33ef7887a2d02e94119509",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06536/inputs.npz"
+      }
+    },
+    "random_02953.npz": {
+      "sha256": "da21b62fb835d2fedefcbb91ee637194c40731cd7c4a425bd96da6cbeadbaa8b",
+      "original": {
+        "sha256": "da21b62fb835d2fedefcbb91ee637194c40731cd7c4a425bd96da6cbeadbaa8b",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_02953/inputs.npz"
+      }
+    },
+    "random_00396.npz": {
+      "sha256": "e0badb8d4c387c057d3e134a2f3dfa4d94c8876c3965b85d35510229a9355b00",
+      "original": {
+        "sha256": "e0badb8d4c387c057d3e134a2f3dfa4d94c8876c3965b85d35510229a9355b00",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00396/inputs.npz"
+      }
+    },
+    "random_00764.npz": {
+      "sha256": "f15d909b2ade877a28612d10358f88bd3d6fba6174ee9badf0058b8b0dcbe7b0",
+      "original": {
+        "sha256": "f15d909b2ade877a28612d10358f88bd3d6fba6174ee9badf0058b8b0dcbe7b0",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00764/inputs.npz"
+      }
+    },
+    "random_00026.npz": {
+      "sha256": "8469866a3fc754921966dfebb8c41363cc8e73817a29a7f0e947bb3ca25e6618",
+      "original": {
+        "sha256": "8469866a3fc754921966dfebb8c41363cc8e73817a29a7f0e947bb3ca25e6618",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00026/inputs.npz"
+      }
+    },
+    "random_08990.npz": {
+      "sha256": "3b01c74bd3ef96543bbff99740ac2b14734bc91e7ba76fdcf8dcd3646589ab9b",
+      "original": {
+        "sha256": "3b01c74bd3ef96543bbff99740ac2b14734bc91e7ba76fdcf8dcd3646589ab9b",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08990/inputs.npz"
+      }
+    },
+    "random_07355.npz": {
+      "sha256": "e9664f49e92a59930b7cceb973965289c8e4460f7f7a5f77b7ec6580abcc7199",
+      "original": {
+        "sha256": "e9664f49e92a59930b7cceb973965289c8e4460f7f7a5f77b7ec6580abcc7199",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07355/inputs.npz"
+      }
+    },
+    "random_07110.npz": {
+      "sha256": "e482b495ab14e743d78db419e41c613342534ac6e719a41be061dea6586c11df",
+      "original": {
+        "sha256": "e482b495ab14e743d78db419e41c613342534ac6e719a41be061dea6586c11df",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07110/inputs.npz"
+      }
+    },
+    "random_02795.npz": {
+      "sha256": "97fdabc860cb67bed88c9a41a51904150707d7881c86a1877b4b6561b9718179",
+      "original": {
+        "sha256": "97fdabc860cb67bed88c9a41a51904150707d7881c86a1877b4b6561b9718179",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_02795/inputs.npz"
+      }
+    },
+    "random_00215.npz": {
+      "sha256": "7be606b367deb4ea2aaeef655857a161c02abecbb4527158b3974aeb097536d7",
+      "original": {
+        "sha256": "7be606b367deb4ea2aaeef655857a161c02abecbb4527158b3974aeb097536d7",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00215/inputs.npz"
+      }
+    },
+    "random_07459.npz": {
+      "sha256": "734482d31efb8a888c4364732db49a0e9a0f9e5eaaee87048a47e3421439adc7",
+      "original": {
+        "sha256": "734482d31efb8a888c4364732db49a0e9a0f9e5eaaee87048a47e3421439adc7",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07459/inputs.npz"
+      }
+    },
+    "random_08306.npz": {
+      "sha256": "f676360e1982fb3d888f23c5650fb50fb13e964d01dd22bbda64926c64bc3008",
+      "original": {
+        "sha256": "f676360e1982fb3d888f23c5650fb50fb13e964d01dd22bbda64926c64bc3008",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08306/inputs.npz"
+      }
+    },
+    "random_00966.npz": {
+      "sha256": "ab40787a4788741a2a1e1191e12dca16a160c6f3c485438c104ebea096052b3b",
+      "original": {
+        "sha256": "ab40787a4788741a2a1e1191e12dca16a160c6f3c485438c104ebea096052b3b",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00966/inputs.npz"
+      }
+    },
+    "random_01915.npz": {
+      "sha256": "4d94da92941f82a95b864b7983432b94649391db1a679f6903c27945fb67ef4c",
+      "original": {
+        "sha256": "4d94da92941f82a95b864b7983432b94649391db1a679f6903c27945fb67ef4c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01915/inputs.npz"
+      }
+    },
+    "random_01167.npz": {
+      "sha256": "a2d1fb2e739c6a44e55ab537491770635b61bbc205863c908410613c0cb407da",
+      "original": {
+        "sha256": "a2d1fb2e739c6a44e55ab537491770635b61bbc205863c908410613c0cb407da",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01167/inputs.npz"
+      }
+    },
+    "random_03196.npz": {
+      "sha256": "4a841b07106938676828119e5b87fd07704167244c84b17a45f560abb2b6c935",
+      "original": {
+        "sha256": "4a841b07106938676828119e5b87fd07704167244c84b17a45f560abb2b6c935",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03196/inputs.npz"
+      }
+    },
+    "random_08922.npz": {
+      "sha256": "4d49b4fb786fc130b47e12e99b5cb6af0e91a6fc62108965bfba66f6bb5e2bee",
+      "original": {
+        "sha256": "4d49b4fb786fc130b47e12e99b5cb6af0e91a6fc62108965bfba66f6bb5e2bee",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08922/inputs.npz"
+      }
+    },
+    "random_00626.npz": {
+      "sha256": "968bfa657ff42df9a202586c38ae7b09b4af67c82bb74c1fba8d548e6ccf86cd",
+      "original": {
+        "sha256": "968bfa657ff42df9a202586c38ae7b09b4af67c82bb74c1fba8d548e6ccf86cd",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00626/inputs.npz"
+      }
+    },
+    "random_07378.npz": {
+      "sha256": "cc441305271a8760793b7f925852e695e6dfb00278ac66c56dd573c30b6c11c6",
+      "original": {
+        "sha256": "cc441305271a8760793b7f925852e695e6dfb00278ac66c56dd573c30b6c11c6",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07378/inputs.npz"
+      }
+    },
+    "random_09337.npz": {
+      "sha256": "ba26d2a3504b76a9c3365289ec9a61a5f1e1e2a75d3c70c1e3e51d11a7c8e4f5",
+      "original": {
+        "sha256": "ba26d2a3504b76a9c3365289ec9a61a5f1e1e2a75d3c70c1e3e51d11a7c8e4f5",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09337/inputs.npz"
+      }
+    },
+    "random_03423.npz": {
+      "sha256": "ffa5451b62b504776c220575c10497c3111d7de91e20d9be0f8c1f3f663c30a2",
+      "original": {
+        "sha256": "ffa5451b62b504776c220575c10497c3111d7de91e20d9be0f8c1f3f663c30a2",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03423/inputs.npz"
+      }
+    },
+    "random_07922.npz": {
+      "sha256": "bbaa86bccd15c9362db45b9492c2a0c4a1cbf1c38e1877b0107a5f2f38dd37c0",
+      "original": {
+        "sha256": "bbaa86bccd15c9362db45b9492c2a0c4a1cbf1c38e1877b0107a5f2f38dd37c0",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07922/inputs.npz"
+      }
+    },
+    "random_00309.npz": {
+      "sha256": "cdda548bd6a05da60a448f969c8f8d6563b9311f6339e484b7e60675bd8f8969",
+      "original": {
+        "sha256": "cdda548bd6a05da60a448f969c8f8d6563b9311f6339e484b7e60675bd8f8969",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00309/inputs.npz"
+      }
+    },
+    "random_07843.npz": {
+      "sha256": "8191301a4405641806b1db42ab8ce8d790d1344b11a419e091b55347d05743ff",
+      "original": {
+        "sha256": "8191301a4405641806b1db42ab8ce8d790d1344b11a419e091b55347d05743ff",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07843/inputs.npz"
+      }
+    },
+    "random_09388.npz": {
+      "sha256": "f45d23dc091849345f00cea5003a87ad05e96b4e00cbdb7ed4c182bded9bed8f",
+      "original": {
+        "sha256": "f45d23dc091849345f00cea5003a87ad05e96b4e00cbdb7ed4c182bded9bed8f",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09388/inputs.npz"
+      }
+    },
+    "random_03097.npz": {
+      "sha256": "d339c4fd8f70a83e64540aaef63706e72355b6813ed17e0ec82de730a5ba37c4",
+      "original": {
+        "sha256": "d339c4fd8f70a83e64540aaef63706e72355b6813ed17e0ec82de730a5ba37c4",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03097/inputs.npz"
+      }
+    },
+    "random_09732.npz": {
+      "sha256": "5e2db8b89fe43a2dd56bea53f89a8cc5138364f82fa2b69f3c5705ac2eb41ba3",
+      "original": {
+        "sha256": "5e2db8b89fe43a2dd56bea53f89a8cc5138364f82fa2b69f3c5705ac2eb41ba3",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09732/inputs.npz"
+      }
+    },
+    "random_04562.npz": {
+      "sha256": "b694dc8f846129c7b2166d4164a9c73efda6c2f82986d1773dba8d9af5565371",
+      "original": {
+        "sha256": "b694dc8f846129c7b2166d4164a9c73efda6c2f82986d1773dba8d9af5565371",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04562/inputs.npz"
+      }
+    },
+    "random_04155.npz": {
+      "sha256": "a2a6877fd44ecd770c459d7c3566ff56914c58f03a4568a602e2f35bc0b9f19d",
+      "original": {
+        "sha256": "a2a6877fd44ecd770c459d7c3566ff56914c58f03a4568a602e2f35bc0b9f19d",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04155/inputs.npz"
+      }
+    },
+    "random_06348.npz": {
+      "sha256": "e739fc81eaa5e179b949fb46ff8c2e02f03bf9315d40f2df948495fd7a79ca5e",
+      "original": {
+        "sha256": "e739fc81eaa5e179b949fb46ff8c2e02f03bf9315d40f2df948495fd7a79ca5e",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06348/inputs.npz"
+      }
+    },
+    "random_02245.npz": {
+      "sha256": "acbe3bb2f5d7e4d8a680e12ff0c16ac7742fac43d95c22b2340964619b89bbff",
+      "original": {
+        "sha256": "acbe3bb2f5d7e4d8a680e12ff0c16ac7742fac43d95c22b2340964619b89bbff",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_02245/inputs.npz"
+      }
+    },
+    "random_02237.npz": {
+      "sha256": "a8ec3bedff714bb4fd615f380a714e8da04cb11213906e62f79f50802256e004",
+      "original": {
+        "sha256": "a8ec3bedff714bb4fd615f380a714e8da04cb11213906e62f79f50802256e004",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_02237/inputs.npz"
+      }
+    },
+    "random_01639.npz": {
+      "sha256": "33b69ba76477ea256ddfe25a3ab8d35a6af13906e50b0446c1c01abd69fffe1c",
+      "original": {
+        "sha256": "33b69ba76477ea256ddfe25a3ab8d35a6af13906e50b0446c1c01abd69fffe1c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01639/inputs.npz"
+      }
+    },
+    "random_05111.npz": {
+      "sha256": "15d465dfd91346b867795377fcf165f6e119db4fd3560fbc57d6d1a0c97db140",
+      "original": {
+        "sha256": "15d465dfd91346b867795377fcf165f6e119db4fd3560fbc57d6d1a0c97db140",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_05111/inputs.npz"
+      }
+    },
+    "random_00542.npz": {
+      "sha256": "b302561bc2658613c9de0a3fbe8b041234379f644c126fe8fc0fbd6940be9a76",
+      "original": {
+        "sha256": "b302561bc2658613c9de0a3fbe8b041234379f644c126fe8fc0fbd6940be9a76",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00542/inputs.npz"
+      }
+    },
+    "random_00553.npz": {
+      "sha256": "90de932d3c347aa6d32e63a220d15e876b2493fb15d9da7e43a4eb53578b2c24",
+      "original": {
+        "sha256": "90de932d3c347aa6d32e63a220d15e876b2493fb15d9da7e43a4eb53578b2c24",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00553/inputs.npz"
+      }
+    },
+    "random_06443.npz": {
+      "sha256": "1f44f69a81c8d86ea2fd834371f3a87deedc5ab9c9926a88ce51dfe29a81d5ed",
+      "original": {
+        "sha256": "1f44f69a81c8d86ea2fd834371f3a87deedc5ab9c9926a88ce51dfe29a81d5ed",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06443/inputs.npz"
+      }
+    },
+    "random_08600.npz": {
+      "sha256": "05560d64266e81fb17b7e1b4c3f65e90eb78d2139b89ec7958efc43bed5cbe6c",
+      "original": {
+        "sha256": "05560d64266e81fb17b7e1b4c3f65e90eb78d2139b89ec7958efc43bed5cbe6c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08600/inputs.npz"
+      }
+    },
+    "random_05894.npz": {
+      "sha256": "8c60324fc416d95fbb46943fbc8c7b133813b771a347014a1e130b7b6e8c2bd0",
+      "original": {
+        "sha256": "8c60324fc416d95fbb46943fbc8c7b133813b771a347014a1e130b7b6e8c2bd0",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_05894/inputs.npz"
+      }
+    },
+    "random_04022.npz": {
+      "sha256": "b59fbf6498e08f90f3575c17c0b2d62f3d60809e7cb5c7e548cfb7d6864f8f3d",
+      "original": {
+        "sha256": "b59fbf6498e08f90f3575c17c0b2d62f3d60809e7cb5c7e548cfb7d6864f8f3d",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04022/inputs.npz"
+      }
+    },
+    "random_06906.npz": {
+      "sha256": "b80d94a6b8f80ac4c79d70e13fb2acfbe7204a008079976c3f6f93f3ddbf5747",
+      "original": {
+        "sha256": "b80d94a6b8f80ac4c79d70e13fb2acfbe7204a008079976c3f6f93f3ddbf5747",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06906/inputs.npz"
+      }
+    },
+    "random_07607.npz": {
+      "sha256": "91e6c7dbf07aa47e18ce23a0de80d440e7be5365ab0d16298d91b3d1c29bb6bd",
+      "original": {
+        "sha256": "91e6c7dbf07aa47e18ce23a0de80d440e7be5365ab0d16298d91b3d1c29bb6bd",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07607/inputs.npz"
+      }
+    },
+    "random_07797.npz": {
+      "sha256": "31957ca63b9f1ab1671f012db18ffa7d74ed7de5a730d055f2ffb9c29ee64045",
+      "original": {
+        "sha256": "31957ca63b9f1ab1671f012db18ffa7d74ed7de5a730d055f2ffb9c29ee64045",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07797/inputs.npz"
+      }
+    },
+    "random_00187.npz": {
+      "sha256": "4e528b9db933e2b8248d2857d06489df044c3aec22d7992f40113ad3530f5cd0",
+      "original": {
+        "sha256": "4e528b9db933e2b8248d2857d06489df044c3aec22d7992f40113ad3530f5cd0",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00187/inputs.npz"
+      }
+    },
+    "random_04943.npz": {
+      "sha256": "1675eb447d9bd24eab76dcedee6505309ea4701d6fc8733b50ab409f065b2a5e",
+      "original": {
+        "sha256": "1675eb447d9bd24eab76dcedee6505309ea4701d6fc8733b50ab409f065b2a5e",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04943/inputs.npz"
+      }
+    },
+    "random_03461.npz": {
+      "sha256": "ab531be5b74c89e4afb899545b78a21c631c3ad01e306e9a499abcacc135144c",
+      "original": {
+        "sha256": "ab531be5b74c89e4afb899545b78a21c631c3ad01e306e9a499abcacc135144c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03461/inputs.npz"
+      }
+    },
+    "random_00660.npz": {
+      "sha256": "68e77dc83b27cddaaf1c86ce5c0bae09da974d8c89a804166261aa175cb498d3",
+      "original": {
+        "sha256": "68e77dc83b27cddaaf1c86ce5c0bae09da974d8c89a804166261aa175cb498d3",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00660/inputs.npz"
+      }
+    },
+    "random_05050.npz": {
+      "sha256": "bcd5db83576abfa2746ad7a0f71c2dce4745ff3f62139da546c613224c8ff81b",
+      "original": {
+        "sha256": "bcd5db83576abfa2746ad7a0f71c2dce4745ff3f62139da546c613224c8ff81b",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_05050/inputs.npz"
+      }
+    },
+    "random_02263.npz": {
+      "sha256": "239b33f6d115b0c61e0e02f304462d12989fb2b7fdde9176acefef78120e63fa",
+      "original": {
+        "sha256": "239b33f6d115b0c61e0e02f304462d12989fb2b7fdde9176acefef78120e63fa",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_02263/inputs.npz"
+      }
+    },
+    "random_04096.npz": {
+      "sha256": "7f64aa032c11858e22f14960ecb381ab42665739fad2f5c36871abe17f0fec2c",
+      "original": {
+        "sha256": "7f64aa032c11858e22f14960ecb381ab42665739fad2f5c36871abe17f0fec2c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04096/inputs.npz"
+      }
+    },
+    "random_07930.npz": {
+      "sha256": "7239c4b1b15c07a1711bc78380496d5acba81f1fefef6a50820f1d0e8cf39972",
+      "original": {
+        "sha256": "7239c4b1b15c07a1711bc78380496d5acba81f1fefef6a50820f1d0e8cf39972",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07930/inputs.npz"
+      }
+    },
+    "random_07410.npz": {
+      "sha256": "6cb1b3b58f4f74e746e43ab5f93ce9fd52619f81511a3842ac112056541b948f",
+      "original": {
+        "sha256": "6cb1b3b58f4f74e746e43ab5f93ce9fd52619f81511a3842ac112056541b948f",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07410/inputs.npz"
+      }
+    },
+    "random_08518.npz": {
+      "sha256": "e85c59a9d4490f56e3961f8a8136f5ec691539fc673c5a3cbd37e9b29c32b6d3",
+      "original": {
+        "sha256": "e85c59a9d4490f56e3961f8a8136f5ec691539fc673c5a3cbd37e9b29c32b6d3",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_08518/inputs.npz"
+      }
+    },
+    "random_06596.npz": {
+      "sha256": "922f54e05361fa30b1872489264d1e977fb3acf4eb95d67b3d1ff76c6cb57bab",
+      "original": {
+        "sha256": "922f54e05361fa30b1872489264d1e977fb3acf4eb95d67b3d1ff76c6cb57bab",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06596/inputs.npz"
+      }
+    },
+    "random_04471.npz": {
+      "sha256": "ee5c10a887166143d7b0544ca78830e0f4954fb54b14fae82f89a1c19a233b75",
+      "original": {
+        "sha256": "ee5c10a887166143d7b0544ca78830e0f4954fb54b14fae82f89a1c19a233b75",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04471/inputs.npz"
+      }
+    },
+    "random_04105.npz": {
+      "sha256": "ed69731c13a139e41cc1b49a8099e604c2e9fbbec0035e9b408c49a36fce4742",
+      "original": {
+        "sha256": "ed69731c13a139e41cc1b49a8099e604c2e9fbbec0035e9b408c49a36fce4742",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_04105/inputs.npz"
+      }
+    },
+    "random_09624.npz": {
+      "sha256": "350c42b4be5cd53a4ec2c656b95a8025a8f8d0bd578ad036afb25c3ac835717f",
+      "original": {
+        "sha256": "350c42b4be5cd53a4ec2c656b95a8025a8f8d0bd578ad036afb25c3ac835717f",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09624/inputs.npz"
+      }
+    },
+    "random_03126.npz": {
+      "sha256": "23b90606dc5a46a1e449506b7e0425c08a3d9dca9d2917ebc7f1bee433e02cb4",
+      "original": {
+        "sha256": "23b90606dc5a46a1e449506b7e0425c08a3d9dca9d2917ebc7f1bee433e02cb4",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03126/inputs.npz"
+      }
+    },
+    "random_07003.npz": {
+      "sha256": "ed412c41072788d9a15ae078a1cfb025dfdd018030feaf8ccb941cbbd1ac1671",
+      "original": {
+        "sha256": "ed412c41072788d9a15ae078a1cfb025dfdd018030feaf8ccb941cbbd1ac1671",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07003/inputs.npz"
+      }
+    },
+    "random_00222.npz": {
+      "sha256": "a94bd4c49129c432d4df58c2fa2799271a8b626ebc96249d5dda6c7767ca5893",
+      "original": {
+        "sha256": "a94bd4c49129c432d4df58c2fa2799271a8b626ebc96249d5dda6c7767ca5893",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00222/inputs.npz"
+      }
+    },
+    "random_07055.npz": {
+      "sha256": "1190baf0b56736ba5d0ab911771a446bd1a2017c4668c148d118a14edc4e3f5a",
+      "original": {
+        "sha256": "1190baf0b56736ba5d0ab911771a446bd1a2017c4668c148d118a14edc4e3f5a",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07055/inputs.npz"
+      }
+    },
+    "random_02085.npz": {
+      "sha256": "2b598b45bc3ba5b670e898742d6a4f32e7509437f5d550ad222def9b16067c5e",
+      "original": {
+        "sha256": "2b598b45bc3ba5b670e898742d6a4f32e7509437f5d550ad222def9b16067c5e",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_02085/inputs.npz"
+      }
+    },
+    "random_06601.npz": {
+      "sha256": "2969c2ab88ceb7a94d75f684c05383e84cc87d449e76fe1f7944b5b92afa8483",
+      "original": {
+        "sha256": "2969c2ab88ceb7a94d75f684c05383e84cc87d449e76fe1f7944b5b92afa8483",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06601/inputs.npz"
+      }
+    },
+    "random_07951.npz": {
+      "sha256": "9e42c7fefb5719ebc7a85fb40dd2a43618e91c33a0eac581d8fdd4d250ab4b75",
+      "original": {
+        "sha256": "9e42c7fefb5719ebc7a85fb40dd2a43618e91c33a0eac581d8fdd4d250ab4b75",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_07951/inputs.npz"
+      }
+    },
+    "random_09306.npz": {
+      "sha256": "d44ee9dfef62d9693e7b404dd67b375d28de28b5151ce13f000dbb84ef121212",
+      "original": {
+        "sha256": "d44ee9dfef62d9693e7b404dd67b375d28de28b5151ce13f000dbb84ef121212",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09306/inputs.npz"
+      }
+    },
+    "random_01862.npz": {
+      "sha256": "efceeaadffdc8a18154a1a47141a8873d96aab597b69cd457473c95962225ff5",
+      "original": {
+        "sha256": "efceeaadffdc8a18154a1a47141a8873d96aab597b69cd457473c95962225ff5",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01862/inputs.npz"
+      }
+    },
+    "random_03211.npz": {
+      "sha256": "7f3505499250e141b15155b307af75702f87e1e155c9721939b60b6a419cd678",
+      "original": {
+        "sha256": "7f3505499250e141b15155b307af75702f87e1e155c9721939b60b6a419cd678",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_03211/inputs.npz"
+      }
+    },
+    "random_01888.npz": {
+      "sha256": "4e447b29186d0585b1c66910cd126fe55bffe1925cdbdd57ec3e38b5e4768ea3",
+      "original": {
+        "sha256": "4e447b29186d0585b1c66910cd126fe55bffe1925cdbdd57ec3e38b5e4768ea3",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01888/inputs.npz"
+      }
+    },
+    "random_06713.npz": {
+      "sha256": "1d2369fee3b6f34ce3079b64efa6bb101a94017ab0db4955fd7321425af8136d",
+      "original": {
+        "sha256": "1d2369fee3b6f34ce3079b64efa6bb101a94017ab0db4955fd7321425af8136d",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_06713/inputs.npz"
+      }
+    },
+    "random_05910.npz": {
+      "sha256": "98e086e55615424eb40c84611a7e094f10477130c795181e7a45648050d6e41a",
+      "original": {
+        "sha256": "98e086e55615424eb40c84611a7e094f10477130c795181e7a45648050d6e41a",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_05910/inputs.npz"
+      }
+    },
+    "random_05766.npz": {
+      "sha256": "82c3de2d34d9ae686a39194f51ffa9234d70f117ecd8eaa46870e5a1a78f3a73",
+      "original": {
+        "sha256": "82c3de2d34d9ae686a39194f51ffa9234d70f117ecd8eaa46870e5a1a78f3a73",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_05766/inputs.npz"
+      }
+    },
+    "random_00801.npz": {
+      "sha256": "94121374ee2bb49c022f05eb18166093eb991ec128a6fe4d194aa54fc4e29dfe",
+      "original": {
+        "sha256": "94121374ee2bb49c022f05eb18166093eb991ec128a6fe4d194aa54fc4e29dfe",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00801/inputs.npz"
+      }
+    },
+    "random_00577.npz": {
+      "sha256": "9fd3b9b90ac394d3f782d0e479376087585fd3d1326dca43a7ae53e9194b9a8c",
+      "original": {
+        "sha256": "9fd3b9b90ac394d3f782d0e479376087585fd3d1326dca43a7ae53e9194b9a8c",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_00577/inputs.npz"
+      }
+    },
+    "random_01446.npz": {
+      "sha256": "f95469f04982ec2b9310e2c34f9dba26145b7a59e4ddad9f663c6b61e9a06fb9",
+      "original": {
+        "sha256": "f95469f04982ec2b9310e2c34f9dba26145b7a59e4ddad9f663c6b61e9a06fb9",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_01446/inputs.npz"
+      }
+    },
+    "random_09637.npz": {
+      "sha256": "926548e68959691470fc7800746fd8de7c5792b01084b6a7df287e78477cd984",
+      "original": {
+        "sha256": "926548e68959691470fc7800746fd8de7c5792b01084b6a7df287e78477cd984",
+        "original": "_expr_results/random-reaching-off-torque-validation-100-20261015/pilot/pair_09637/inputs.npz"
+      }
+    }
+  },
+  "purpose": "Exact frozen random100 inputs; new GATO/ADMM cohort, not a historical numerical replay."
+}
