@@ -16,8 +16,17 @@ compares full-model reduction against the standalone arm's torso-relative tool
 FK, mass matrix and gravity at atol/rtol 1e-8. Coefficients, known-versus-assumed
 comments, exact raw bytes and repeatable preparation are checked separately.
 Current runtime Pinocchio ABA / standard GRiD codegen ignore these passive tags;
-no friction force or codegen option was enabled. No GPU experiment was run, and
+no friction force or codegen option was enabled, and
 the historical 84/100 cohort retains its original source/configuration identity.
+
+A fresh default reach at `d86e041` subsequently passed under all three shared
+GPU locks. It arrived after 0.25 simulated seconds with 33.60 mm position error,
+speed L1 0.9753 rad/s and zero saved raw position/velocity/effort excess. The
+arm's kinematics/inertias are unchanged; these results match the preceding
+default smoke. Raw source/config/history and log are in
+`_expr_data/canonical-model-correction-20261020/default-smoke/` and
+`default-smoke.log`. This is one operation check, not a new 100-case study or
+performance claim.
 
 Commands and retained CPU output:
 
