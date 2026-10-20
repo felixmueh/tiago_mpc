@@ -26,6 +26,8 @@ def main():
     saved = json.loads((out / "summary.json").read_text())
     config = json.loads((out / "configuration.json").read_text())
     rows = saved["cases"]
+    if len(config["task_ids"]) != 100:
+        raise ValueError("Use the configuration-study summarizer for selected diagnostic subsets")
     if [r["task_id"] for r in rows] != config["task_ids"]:
         raise ValueError("Incomplete cohort or changed task order")
     model = pin.buildModelFromUrdf(str(ROOT / "models/tiago_right/tiago_right_arm.urdf"))
@@ -77,6 +79,13 @@ def main():
             inner_modes[w["admm_linsys_mode"]] += 1
     arrivals = [r for r in rows if r.get("reached")]
     valid = [r for r in arrivals if r.get("limits_pass")]
+    first = rows[0]
+    setting_line = (f"N{first['N']}, B1, {1000*first['dt_s']:g} ms feedback/knots, "
+                    f"{1000*first['sim_dt_s']:g} ms Pinocchio RK4, "
+                    f"SQP{first['solver_params']['max_sqp_iters']}/PCG{first['solver_params']['max_pcg_iters']}, "
+                    f"{(first['N']-1)*first['dt_s']:.3g} s preview, {first['timeout_s']:g} simulated seconds.")
+    admm_settings = first.get("admm_effective", first["admm_defaults"])
+    bound_settings = first.get("configuration", {}).get("limit_bounds", {})
     result = dict(counts=saved["counts"], raw_audit_cases=len(audits),
                   violating_episodes={k:sum(a["max_excess"][k] > 1e-5 for a in audits)
                                       for k in ("joint", "speed", "torque")},
@@ -105,7 +114,7 @@ def main():
     axes[1].axhline(50, color="gray", ls="--", label="50 mm arrival threshold")
     axes[1].set(xlabel="Frozen task order", ylabel="Final position error (mm)", yscale="log")
     axes[1].legend()
-    fig.suptitle("Frozen random100 — modern GATO, ADMM limits, SQP5, fixed simulation clock")
+    fig.suptitle(f"Frozen random100 — ADMM, N{first['N']}, SQP{first['solver_params']['max_sqp_iters']}, {1000*first['dt_s']:g} ms fixed clock")
     fig.tight_layout(); fig.savefig(out / "overview.png", dpi=160); fig.savefig(out / "overview.pdf")
     counts = result["counts"]
     from matplotlib.backends.backend_pdf import PdfPages
@@ -115,9 +124,10 @@ def main():
         paragraphs = [
             f"Arrivals: {counts['arrivals']}/100. Arrived within all sampled physical limits: {counts['valid_arrivals']}/100. Full-run limit passes: {counts['full_limit_passes']}/100. Timeouts: {counts['timeouts']}. Execution errors: {counts['execution_errors']}.",
             f"Episodes violating joint position / speed / torque: {result['violating_episodes']['joint']} / {result['violating_episodes']['speed']} / {result['violating_episodes']['torque']}. Maximum excess: {result['max_excess']['joint']:.6g} rad / {result['max_excess']['speed']:.6g} rad/s / {result['max_excess']['torque']:.6g} Nm. Categories can overlap. Independent saved-state audits agree with all completed-case labels.",
-            "All 100 original random-posture start/goal pairs ran once in frozen order. N32, B1, SQP5/PCG120, 30 ms feedback/knots, 3 ms Pinocchio RK4, 8 simulated seconds. Arrival means <=50 mm position error and joint-speed L1 <=1 rad/s, no dwell. Orientation unconstrained. No collision or robot qualification.",
+            "All 100 original random-posture start/goal pairs ran once in frozen order. "+setting_line+" Arrival means <=50 mm position error and joint-speed L1 <=1 rad/s, no dwell. Orientation unconstrained. No collision or robot qualification.",
+            "ADMM settings: "+json.dumps(admm_settings)+". Explicit bound overrides: "+json.dumps(bound_settings)+". Physical limits remain the original URDF values.",
             config['differences_from_historical'],
-            "Finite-budget ADMM does not guarantee feasibility. Fixed simulation pacing leaves solver latency unpaid. Timings are diagnostics, not a benchmark comparison. There were no retries, clipping, candidate vetoes, tuning or solver repairs. Successful episodes stop on arrival, so this does not assess later settling.",
+            "Finite-budget ADMM does not guarantee feasibility. Fixed simulation pacing leaves solver latency unpaid. Timings are diagnostics, not a benchmark comparison. No within-cohort retuning, retries, clipping, candidate vetoes or solver repairs. Earlier diagnostic configuration attempts, if present, remain separate. Successful episodes stop on arrival, so this does not assess later settling.",
             "Application: "+config['application_commit'],
             "Input-source commit: "+config['input_source_commit'],
             "Unmodified upstream GATO aeacf16; GRiD 0.5.1; GTX1070/sm61, CUDA12.9, float. Full histories, source/input identities, case tables and violation details accompany this report.",
@@ -149,12 +159,16 @@ excesses and first violations are in `analysis.json`.
 
 ![Arrival curve and terminal errors](overview.png)
 
-Settings: N32, B1, 30 ms knots/feedback, 3 ms Pinocchio RK4, SQP5/PCG120,
-position tolerance 5 cm, joint-speed L1 <= 1 rad/s, zero dwell. Position-only;
+Settings: {setting_line}
+Position tolerance 5 cm, joint-speed L1 <= 1 rad/s, zero dwell. Position-only;
 no final approach, collisions, clipping or physical hardware. Fixed simulation
 pacing leaves solve latency unpaid. ADMM uses its finite upstream budget;
 actual inner modes/work are retained. GATO is unchanged upstream aeacf16,
 GRiD 0.5.1; GTX1070 sm61 / CUDA12.9 / float.
+
+Effective ADMM settings: `{json.dumps(admm_settings)}`.
+Explicit row-bound overrides: `{json.dumps(bound_settings)}`; the physical
+URDF limits used for grading remain unchanged.
 
 {config['differences_from_historical']}
 

@@ -18,12 +18,15 @@ def main():
     root = args.output.resolve()
     model = pin.buildModelFromUrdf(str(ROOT / "models/tiago_right/tiago_right_arm.urdf"))
     data = model.createData()
-    rows, diagnostics = [], []
+    rows, diagnostics, regressions = [], [], []
     for directory in sorted(root.iterdir()):
         file = directory / "summary.json"
         if not file.is_file():
             continue
         summary = json.loads(file.read_text())
+        if "cases" not in summary:
+            regressions.append(dict(directory=directory.name, **summary))
+            continue
         cases = summary["cases"]
         row = dict(profile=directory.name, **summary["counts"])
         stop = json.loads((directory / "STOP.json").read_text()) if (directory / "STOP.json").exists() else {}
@@ -59,6 +62,7 @@ def main():
         writer.writeheader(); writer.writerows(rows)
     (root / "first_stage_diagnostics.json").write_text(json.dumps(diagnostics, indent=2)+"\n")
     (root / "comparison.json").write_text(json.dumps(rows, indent=2)+"\n")
+    (root / "regression_checks.json").write_text(json.dumps(regressions, indent=2)+"\n")
     print(json.dumps(rows, indent=2))
 
 

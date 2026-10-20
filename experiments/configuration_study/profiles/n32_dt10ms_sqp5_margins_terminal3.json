@@ -1,0 +1,21 @@
+{
+  "description": "N32/10ms SQP5 scaled/tight ADMM100, velocity80%/effort85%, terminal position240 (3x) to improve goal preference with the shorter0.31s preview.",
+  "controller": {
+    "limits_kw": {
+      "iters": 100,
+      "rho_u": 0.0005,
+      "eps_rel": 0.001
+    }
+  },
+  "save_plan_steps": 5,
+  "solver_params": {
+    "max_sqp_iters": 5,
+    "N_cost": 240.0
+  },
+  "N": 32,
+  "dt_s": 0.01,
+  "limit_bounds": {
+    "velocity_fraction": 0.8,
+    "effort_fraction": 0.85
+  }
+}
