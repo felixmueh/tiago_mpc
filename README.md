@@ -89,6 +89,24 @@ See `experiments/random100/README.md` for the explicit differences from the old
 solver experiment. New outputs live under `../experiment_data/tiago_mpc/`.
 Arrival and physical-limit compliance are reported separately.
 
+The configuration study selected an explicit alternative for these random
+starts. It reached 69/100 goals with 100/100 sampled physical-limit passes,
+versus 57 arrivals, 81 limit passes and 47 satisfying both in the initial
+configuration. Both cohorts use the same frozen inputs, once in original order.
+Use the profile explicitly; the original example settings remain reproducible:
+
+```bash
+.venv/bin/python examples/reach_sim.py \
+  --config experiments/configuration_study/profiles/n32_dt10ms_sqp5_margins_terminal10.json
+.venv/bin/python experiments/random100/run.py \
+  --config experiments/configuration_study/profiles/n32_dt10ms_sqp5_margins_terminal10.json
+```
+
+This profile uses stronger ADMM enforcement, conservative speed/torque bounds,
+10 ms control/knots and terminal weight 800. N32 then gives 0.31 s preview,
+instead of the original 0.93 s. See `experiments/configuration_study/README.md`
+for parameter provenance, retained failures and the comparison report.
+
 Simulation uses fixed pacing: computation time does not advance the plant.
 Recorded solve times are diagnostic, not benchmark results. Collision checking
 and hardware deployment are outside this example; planner constraint rows do
