@@ -1,0 +1,9 @@
+{
+  "description": "Only increase ADMM cap from10 to100; same tolerance, costs and bounds.",
+  "controller": {
+    "limits_kw": {
+      "iters": 100
+    }
+  },
+  "save_plan_steps": 5
+}

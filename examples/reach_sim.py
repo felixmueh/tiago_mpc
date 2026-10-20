@@ -126,13 +126,24 @@ def main():
     p.add_argument("--output", type=Path, help="fresh output directory")
     p.add_argument("--build-only", action="store_true", help="build and check model conventions")
     p.add_argument("--input", type=Path, help="frozen experiment NPZ with initial_state/target_xyz/reference")
+    p.add_argument("--config", type=Path, help="JSON overrides for solver/controller/limit bounds")
     args = p.parse_args()
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         p.error("--timeout must be finite and positive")
+    settings = json.loads(args.config.read_text()) if args.config else {}
+    unknown = set(settings)-{"solver_params", "controller", "limit_bounds", "save_plan_steps", "description"}
+    if unknown:
+        p.error(f"Unknown configuration fields: {sorted(unknown)}")
+    params = PARAMS.replace(**settings.get("solver_params", {}))
+    controller_options = settings.get("controller", {})
+    if set(controller_options)-{"limits_kw", "admm_linsys", "reset_rho_each_step", "warm_start"}:
+        p.error("Unknown controller configuration")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     out = args.output or ROOT / "results" / stamp
     out.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(__file__, out / "reach_sim.py")
+    if args.config:
+        shutil.copyfile(args.config, out / "config.json")
     result = dict(status="started", execution_stage="setup", mode="hold" if args.hold else "reach",
                   repository_commit=git("rev-parse", "HEAD") if (ROOT / ".git").exists()
                   and git("rev-list", "--all", "--count") != "0" else None,
@@ -143,12 +154,13 @@ def main():
                             ("gato-mpc", "grid-rbd", "pin", "numpy")},
                   N=N, dt_s=DT_S, sim_dt_s=SIM_DT_S, timeout_s=args.timeout,
                   position_tol_m=POSITION_TOL_M, speed_l1_tol_rad_s=SPEED_L1_TOL_RAD_S,
-                  solver_params=PARAMS.asdict(), limits="admm", linsys="pcg",
+                  solver_params=params.asdict(), configuration=settings, limits="admm", linsys="pcg",
                   timing="fixed simulation time; solve latency does not advance plant",
                   orientation="unconstrained", collisions="not checked",
                   urdf_sha256=hashlib.sha256(URDF.read_bytes()).hexdigest())
     times, states, controls, errors, solve_us, wall_s, row_viol = [], [], [], [], [], [], []
     work = []
+    predicted_states, prediction_errors = [], []
     exit_code = 1
     try:
         path, gpu_path, signs = runtime_urdf()
@@ -201,7 +213,7 @@ def main():
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
         gato.register_robot(PLANT, gpu_path, N=[N], ee_frame=EE_FRAME, jobs=1)
         solver = gato.BSQP(str(gpu_path), batch_size=1, N=N, dt=DT_S,
-                           plant_type=PLANT, params=PARAMS)
+                           plant_type=PLANT, params=params)
         result["status"] = "checking_model"
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
         # Reuse the already qualified bounded convention check; random task poses
@@ -212,9 +224,28 @@ def main():
         if args.build_only:
             result["status"] = "model_checked"
             return 0
-        controller = gato.MPCController(solver, limits="admm", linsys="pcg")
+        controller = gato.MPCController(solver, limits="admm", linsys="pcg", **controller_options)
+        bounds = settings.get("limit_bounds", {})
+        if set(bounds)-{"joint_margin_rad", "velocity_fraction", "effort_fraction"}:
+            raise ValueError("Unknown limit bound configuration")
+        for group, key in ((0, "joint_margin_rad"), (1, "velocity_fraction"), (2, "effort_fraction")):
+            if key not in bounds:
+                continue
+            value = float(bounds[key])
+            if group == 0:
+                if not 0 <= value < .5*np.min(model.upperPositionLimit-model.lowerPositionLimit):
+                    raise ValueError("Invalid joint margin")
+                lo, hi = (model.lowerPositionLimit+value)*signs, (model.upperPositionLimit-value)*signs
+                lo, hi = np.minimum(lo, hi), np.maximum(lo, hi)
+            else:
+                if not 0 < value <= 1:
+                    raise ValueError("Limit fractions must be in (0, 1]")
+                raw = model.velocityLimit if group == 1 else model.effortLimit
+                lo, hi = -value*raw, value*raw
+            solver.set_row_group_bounds(group, lo, hi)
         result.update(reset_rho_each_step=controller.reset_rho_each_step,
                       admm_defaults=controller.LIMIT_DEFAULTS["admm"],
+                      admm_effective={**controller.LIMIT_DEFAULTS["admm"], **controller_options.get("limits_kw", {})},
                       admm_linsys_policy=controller.admm_linsys)
         result.update(status="running", execution_stage="episode")
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
@@ -227,6 +258,11 @@ def main():
             step = controller.step(x*state_signs, reference.ravel())
             u = np.asarray(step.u, dtype=float)*signs
             stats = step.solve.stats
+            predicted_next = np.asarray(step.solve.xu)[0, 21:35]*state_signs
+            predicted_states.append(predicted_next.copy())
+            if len(work) < int(settings.get("save_plan_steps", 0)):
+                np.savez_compressed(out / f"plan_{len(work):04d}.npz", state=x,
+                                    reference=reference, xu=step.solve.xu, signs=signs)
             work.append(dict(sqp=int(np.sum(stats.sqp_iters)),
                              pcg=int(np.sum(stats.pcg_iters)),
                              admm=int(np.sum(stats.admm_iters)),
@@ -250,6 +286,8 @@ def main():
                 t += h
                 controls.append(u.copy()); times.append(t); states.append(x.copy())
                 errors.append(float(np.linalg.norm(ee_position(model, data, q, fid)-target)))
+            prediction_errors.append(np.array([np.max(np.abs(x[:7]-predicted_next[:7])),
+                                               np.max(np.abs(x[7:]-predicted_next[7:]))]))
             reached = errors[-1] <= POSITION_TOL_M and np.abs(x[7:]).sum() <= SPEED_L1_TOL_RAD_S
             if reached and not args.hold:
                 break
@@ -278,7 +316,8 @@ def main():
         np.savez_compressed(out / "trajectory.npz", time_s=times, state=states,
                             applied_torque_nm=controls, distance_m=errors,
                             solve_time_us=solve_us, controller_wall_s=wall_s,
-                            planned_row_violation=row_viol)
+                            planned_row_violation=row_viol, predicted_next_state=predicted_states,
+                            prediction_error_qv=prediction_errors)
         (out / "summary.json").write_text(json.dumps(result, indent=2, allow_nan=False)+"\n")
         print(json.dumps(result, indent=2), flush=True)
         print(f"Saved {out}", flush=True)
