@@ -32,13 +32,18 @@ sources are unmodified. There is no dependency on the historical GATO fork.
 
 ## The example
 
-`examples/reach_sim.py` contains the complete example and its named settings:
+`examples/reach_sim.py` uses the complete reaching defaults in
+`configs/reaching.json`:
 
 - Fixed-base, seven-joint right arm; comfortable high-clearance start.
 - One reachable position goal, computed by FK from a nearby joint pose.
-- Batch 1, N32, 30 ms prediction/control interval and 3 ms RK4 plant steps.
-- SQP cap 5, PCG cap 120; explicit position, velocity and effort costs.
-- Upstream ADMM position/velocity/torque limit rows; linear solver policy PCG.
+- Batch 1, N32, 10 ms prediction/control interval and RK4 plant steps at most 3 ms.
+- SQP cap 5, PCG cap 120/tolerance .001; running position/velocity/effort costs
+  4/.05/.0001, terminal position cost 800, mu 10 and regularization rho .01.
+- Zero soft position/velocity/effort limit costs; upstream ADMM limit rows with
+  100 iterations, relative tolerance .001 and q/qd/u penalties 1/.3/.0005.
+- PCG for both SQP and ADMM; shifted warm starts and rho reset each feedback.
+- Planning bounds: .1 rad position margin, 80% raw velocity, 85% raw effort.
 - Arrival: position error at most 5 cm and joint-speed L1 at most 1 rad/s;
   timeout 8 simulated seconds, no dwell or final-approach stage.
 - Position only: the tool orientation is unconstrained.
@@ -68,8 +73,9 @@ are retained, and no physical-model validation is implied.
 
 Runs save `summary.json`, `trajectory.npz` and `reach.png` in fresh timestamped
 directories under `_expr_data/reaching/`. Histories contain all 3 ms plant states/applied
-torques and per-solve timing/constraint violations. The summary records source
-identities, effective settings, arrival and independent simulated limit checks.
+torques and per-solve timing/constraint violations. The selected JSON and configuration resolver are copied into each output.
+The summary records source identities, effective settings, arrival and
+independent simulated limit checks.
 Exit status is nonzero on timeout, execution error or a simulated limit violation.
 Failed outputs are retained; the script does not retry.
 
@@ -89,23 +95,36 @@ See `experiments/random100/README.md` for the explicit differences from the old
 solver experiment. New outputs live under `_expr_data/`.
 Arrival and physical-limit compliance are reported separately.
 
-The configuration study selected an explicit alternative for these random
-starts. It reached 69/100 goals with 100/100 sampled physical-limit passes,
-versus 57 arrivals, 81 limit passes and 47 satisfying both in the initial
-configuration. Both cohorts use the same frozen inputs, once in original order.
-Use the profile explicitly; the original example settings remain reproducible:
+The current defaults are the tested ADMM-only configuration: **84/100 arrivals
+and 100/100 sampled physical-limit passes**, compared with 69/100 arrivals and
+100/100 limit passes for the retained soft+ADMM profile. The same frozen inputs
+ran once in original order for each cohort. There were 16 gained arrivals and
+one lost arrival; the selected diagnostic pilot overlaps the 100, so these
+counts are not independent holdout evidence. No GPU rerun was needed to promote
+the already tested configuration.
+
+The winning profile is `zero_soft_state_rho10.json` at application commit
+`c3f226b`, based on `e45c441`, in `/workspace/tiago_mpc-admm-only/`.
+Its report, raw cohorts and per-case effective settings remain in that checkout's
+`_expr_data/admm-only-reaching-20261020/`. The complete default pins its effective
+N32/10 ms settings, including the .1 rad planning margin and native N32 ADMM PCG
+policy. Preview is .31 s. See `VERIFICATION.md` for scope and verification.
+
+Both commands above select `configs/reaching.json` when `--config` is omitted.
+The runner's dry-run prints full effective solver, controller and bound settings;
+runs copy the selected JSON and pass that snapshot to every case. Explicit
+`--config` files retain their original partial-override semantics against the
+frozen legacy base, so historical profiles reproduce their old settings:
 
 ```bash
-.venv/bin/python examples/reach_sim.py \
-  --config experiments/configuration_study/profiles/n32_dt10ms_sqp5_margins_terminal10.json
-.venv/bin/python experiments/random100/run.py \
+.venv/bin/python experiments/random100/run.py --dry-run \
   --config experiments/configuration_study/profiles/n32_dt10ms_sqp5_margins_terminal10.json
 ```
 
-This profile uses stronger ADMM enforcement, conservative speed/torque bounds,
-10 ms control/knots and terminal weight 800. N32 then gives 0.31 s preview,
-instead of the original 0.93 s. See `experiments/configuration_study/README.md`
-for parameter provenance, retained failures and the comparison report.
+To reproduce the original 30 ms/terminal80 example, pass an explicit JSON file
+containing `{}`. To customize the new defaults, copy `configs/reaching.json`
+and edit that complete file. The historical configuration-study profiles and
+upstream GATO remain unchanged.
 
 Simulation uses fixed pacing: computation time does not advance the plant.
 Recorded solve times are diagnostic, not benchmark results. Collision checking
