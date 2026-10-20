@@ -1,0 +1,30 @@
+{
+  "source_repository": "GATO",
+  "source_head": "fcc9621bdb642f9bb3f97ff752f5449c22cb495a",
+  "port_date": "2026-10-20",
+  "notes": "Collision URDF, meshes, review blacklist and alpha-wrap receipt copied byte for byte. Historical paths in source receipts are provenance only. Runtime resolves meshes to this checkout. Full original URDF in models/tiago_pro is unchanged.",
+  "sha256": {
+    "tiago_src/gato_tiago/safety_monitor.py": "20c33c9ad1986e90daaa92c0adc6027d831ad6ee790bb0e8bef85be447067539",
+    "tiago_configs/comfortable_pose_collision_blacklist.json": "af70b26bd0ab6936a1d928b8e580d805097d914129f349dd351cb8d77b663e75",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/alpha_wrap_results.json": "a9ba92bbd9e78fdd513f3de41b7394e9f400ffb6261a318a812f3e35840225cf",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/arm_1_link_collision.stl": "fac97e4422c8b5035cddaafbc5016849b702c5cd6ebdecd181ba3e3e40c5aaa9",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/arm_2_link_collision.stl": "1d701b53ed5cee6c2a634f53d318baffe488b61bd2be6082abff8b92bcb7929e",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/arm_3_link_collision.stl": "c8ba9d1cc381e739029f51f93dabab9798bed2497aefab7191f0f8c43fe50b39",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/arm_4_link_collision.stl": "9583305582846870eefbb961a4564468c90376a18fc1633c3437b3fc9e53dd00",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/arm_5_link_collision.stl": "bb0c0a79eb5d3f5b686cf935206793c47c1b77207262b53b6dd412d2253a8199",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/arm_6_link_collision.stl": "a8533ae8a4a8befd9a14212235074146384bafeadf3279809ac0c4f706a21890",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/base_dock_link.stl": "293092d0a0be6c9156fb1aa9642ea5c20286e706ee9faa161f45a4eec17d9bf5",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/base_link_tc.stl": "0c975e09d276b4e05126e16d1148ebfaaef3189728c275f40e189503064a17e0",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/fingertip.stl": "86d32c521ceebf0e7829e6aa67fbb7332b79f3236057be35335e70d0777120b9",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/head_1_link_collision.stl": "0759e0403abfdeae381f4377593e46881ff7295b16c1f6a08fb91365eba5e35f",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/head_2_link_collision.stl": "11597e4eff73042411fa28beb10e7af92a90b2ed508f21fc00d09069e9b7dd04",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/inner_finger.stl": "5bc1e37e954e6f893624f9ee4396552e0acefbfa71987f0adb7850c512df4f58",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/laptop_tray_collision.stl": "749d75d19834dd0ee2ddd1c8d9aeb9710458b954d2539c99169a31c2037deafb",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/outer_finger.stl": "77a22c23c99137704be333dce2bbc29985a3d5855c99fc29d294053a47612c02",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/suspension_front_link.stl": "ccc0d71e6c4fd693315ee2596d3108b4b6a6f5a3eb98dabd2ecffa7c01272f19",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/suspension_rear_link.stl": "ea585fcd2120ad09a70f1408ad82d21a1435204240486c33702816b52b5333eb",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/torso_fixed_collision.stl": "0f95d2c770eded42543f0bde0e007807c29d3a54f1bc440b1f1f9a723111bbb3",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/meshes/torso_lift_link_collision.stl": "7b66a644317cb0a0f015129ecd21c213b5d44dfa5be42fd00c96b697b9a53689",
+    "tiago_configs/collision_alpha_wrap_a3_o25_cap001/tiago_pro_collision_alpha_wrap_a3_o25_cap001.urdf": "98d18490cdf1ec9e9f3f749f43d96d0203d598344f47425e0287d1029b3894fd"
+  }
+}

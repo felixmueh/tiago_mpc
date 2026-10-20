@@ -3,8 +3,9 @@
 Use the existing upstream `gato.MPCController` unchanged for the first ROS 2
 integration. Put ROS transport, command lifetime, task references and scheduling
 in this repository. A copy of the old TIAGo solver/controller class is unnecessary.
-This is a proposal for the control runner; the adapter port is implemented
-separately in `tiago_mpc/ros2.py`. No hardware control run is qualified here.
+The control runner is now implemented in `examples/ros2_mpc.py`, with a separate
+MPC worker and the ported safety worker. See [usage and verification](ROS2_RUNNER.md).
+The adapter is in `tiago_mpc/ros2.py`. No hardware control run is qualified here.
 
 The assessment is against the pinned GATO commit
 `aeacf16e7733df1a17dfd6627f3b5d15c2ba4387`, rather than an uninspected newer release.
@@ -165,13 +166,12 @@ current demonstrated GATO application remains the seven-joint right arm.
 
 ## Reviewable next implementation
 
-Implement a small process-based runner using the ownership above, reusing this
-adapter and the existing `MPCController`. First exercise it with recorded ROS
-state/command timing or internal simulation with paid solve time, then a ROS
-simulator. Relevant checks are joint/sign mapping, fresh-state handling,
-reference phase, stale result rejection and controller handback. Keep physical
-execution as a separate manually reviewed script with explicit motion
-confirmation and the existing reset/collision checks.
+The small process-based runner is implemented using this ownership, reusing the
+adapter and existing `MPCController`. CPU fault/process-boundary tests and a
+three-request real spawned GPU/native-simulation smoke pass. End-to-end ROS
+simulation, paid-time task validation and physical deployment remain pending.
+The entry point checks state/safety by default; execution requires explicit
+motion confirmation, the complete safety gate and existing reset/path checks.
 
 No upstream changes are necessary for this first runner. Keep the current shift
 for these tested frequencies; revisit an elapsed-time hook if a new workload

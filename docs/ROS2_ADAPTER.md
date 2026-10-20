@@ -111,6 +111,11 @@ perform bounded zero-effort/handback on exit/error, and report unconfirmed
 restoration. A publisher crash has no proven robot-side command timeout.
 No physical execution is authorized or qualified by this port.
 
+`active_arm_controller()` exposes the validated inventory read. An optional
+`service_progress` callback lets the runner service state/safety/expiry checks
+between bounded discovery, RPC and subscription wait slices. This uses the same
+executor owner and does not cancel an already-dispatched RPC on interruption.
+
 ## Verification and safe inspection
 
 From the repository root, with a sourced, compatible ROS environment:
@@ -135,4 +140,4 @@ latency, joint limit/collision safety or hardware restoration. Real ROS/PAL
 simulation and supervised hardware validation remain pending. No GPU solver
 change or benchmark comparison is part of this local adapter port. See
 [the MPC integration proposal](ROS2_MPC_PROPOSAL.md) for how the unchanged
-upstream `MPCController` can be used by a future supervised ROS application.
+upstream `MPCController` is used by the implemented [supervised runner](ROS2_RUNNER.md).

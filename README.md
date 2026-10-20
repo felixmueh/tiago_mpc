@@ -150,17 +150,25 @@ for this new repository.
 effort transport, optional SEA feedback, and explicit exclusive controller
 handover. ROS imports are optional; the simulation example remains independent.
 The adapter services a bounded burst of ready state callbacks and supports
-explicit fresh-state reads. It contains no live MPC loop or safety supervisor.
+explicit fresh-state reads. The process-based application is implemented in
+`examples/ros2_mpc.py`, with separate MPC and ported collision-safety workers.
 
 [Adapter usage and validation limits](docs/ROS2_ADAPTER.md) and
 [the upstream MPCController integration proposal](docs/ROS2_MPC_PROPOSAL.md)
-describe the native joint/sign convention and proposed separate I/O process.
+describe the native joint/sign convention and separate I/O process.
+See [runner usage and verification](docs/ROS2_RUNNER.md) for the implementation.
+The default runner invocation performs state/safety checks without commands:
+
+```bash
+python examples/ros2_mpc.py
+```
+
 The read-only inspection example publishes no commands or controller requests:
 
 ```bash
 # Source the compatible PAL ROS overlay/network settings first.
 python examples/ros2_read_state.py --samples 5
-# ROS-free boundary tests (requires pytest and NumPy):
+# ROS-free checks (requires pytest and installed simulation dependencies):
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_ros2_*.py
 ```
 

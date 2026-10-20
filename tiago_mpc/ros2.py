@@ -17,7 +17,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 
@@ -297,6 +297,8 @@ class TiagoRightArmClient:
         self._state_seq = 0
         self._state_callback_count = 0
         self._last_joint_stamp_sec: float | None = None
+        # Optional synchronous supervisor; it may raise to abort our wait.
+        self.service_progress: Callable[[], None] | None = None
 
         self.node = self.rclpy.create_node(node_name)
         state_qos = 10
@@ -594,6 +596,10 @@ class TiagoRightArmClient:
         )
         self._configure_controller(self.effort_controller, timeout_sec)
 
+    def active_arm_controller(self, timeout_sec: float = 5.0) -> str | None:
+        """Read the unique verified arm owner without changing controller mode."""
+        return self._active_arm_controller(self._list_controllers(timeout_sec))
+
     def switch_to_effort_control(self, timeout_sec: float = 5.0) -> None:
         self._switch_arm_mode(self.effort_controller, timeout_sec)
         self._wait_for_topic_subscription(self.effort_command_topic, timeout_sec)
@@ -669,6 +675,11 @@ class TiagoRightArmClient:
         if actual != destination:
             raise RuntimeError(f"controller switch not established: wanted {destination}, got {actual}")
 
+    def _service_progress_tick(self) -> None:
+        callback = getattr(self, "service_progress", None)
+        if callback is not None:
+            callback()
+
     def _service_call(
         self,
         service_name: str,
@@ -676,18 +687,41 @@ class TiagoRightArmClient:
         request: Any,
         timeout_sec: float,
     ) -> Any:
+        """Wait in <=10 ms slices, allowing a synchronous supervisor between them.
+
+        ``service_progress`` runs before dispatch and between blocking chunks,
+        including after a chunk completes the future. It may poll state and
+        raise on expiry/safety failure. It must not recursively issue services.
+        A running ROS callback or guard can overrun a slice; no hard deadline is
+        implied. Aborting this wait does NOT cancel an already dispatched RPC.
+        Discovery and response retain separate timeout budgets, as before.
+        """
+        if not np.isfinite(timeout_sec) or timeout_sec < 0:
+            raise ValueError("timeout_sec must be finite and non-negative")
         client = self.node.create_client(service_type, service_name)
         try:
-            if not client.wait_for_service(timeout_sec=timeout_sec):
-                raise TimeoutError(f"service not available: {service_name}")
+            self._service_progress_tick()
+            discovery_deadline = time.monotonic() + timeout_sec
+            while True:
+                remaining = max(0.0, discovery_deadline - time.monotonic())
+                available = client.wait_for_service(timeout_sec=min(0.01, remaining))
+                self._service_progress_tick()
+                if available:
+                    break
+                if time.monotonic() >= discovery_deadline:
+                    raise TimeoutError(f"service not available: {service_name}")
+
+            response_deadline = time.monotonic() + timeout_sec
             future = client.call_async(request)
-            self.rclpy.spin_until_future_complete(
-                self.node,
-                future,
-                timeout_sec=timeout_sec,
-            )
-            if not future.done():
-                raise TimeoutError(f"service call timed out: {service_name}")
+            self._service_progress_tick()
+            while not future.done():
+                remaining = response_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"service call timed out: {service_name}")
+                self.rclpy.spin_until_future_complete(
+                    self.node, future, timeout_sec=min(0.01, remaining),
+                )
+                self._service_progress_tick()
             result = future.result()
             if result is None:
                 raise RuntimeError(f"service call returned no result: {service_name}")
@@ -803,9 +837,15 @@ class TiagoRightArmClient:
         return bool(self.node.get_subscriptions_info_by_topic(topic_name))
 
     def _wait_for_topic_subscription(self, topic_name: str, timeout_sec: float) -> None:
+        if not np.isfinite(timeout_sec) or timeout_sec < 0:
+            raise ValueError("timeout_sec must be finite and non-negative")
         deadline = time.monotonic() + timeout_sec
-        while time.monotonic() < deadline:
-            self.spin_once(timeout_sec=0.05)
+        self._service_progress_tick()
+        while True:
             if self._topic_has_subscription(topic_name):
                 return
-        raise TimeoutError(f"no subscriber appeared on {topic_name}")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"no subscriber appeared on {topic_name}")
+            self.spin_once(timeout_sec=min(0.01, remaining))
+            self._service_progress_tick()
