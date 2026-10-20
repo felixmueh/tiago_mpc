@@ -131,10 +131,14 @@ def main():
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         p.error("--timeout must be finite and positive")
     settings = json.loads(args.config.read_text()) if args.config else {}
-    unknown = set(settings)-{"solver_params", "controller", "limit_bounds", "save_plan_steps", "description"}
+    unknown = set(settings)-{"solver_params", "controller", "limit_bounds", "save_plan_steps", "description", "N", "dt_s"}
     if unknown:
         p.error(f"Unknown configuration fields: {sorted(unknown)}")
     params = PARAMS.replace(**settings.get("solver_params", {}))
+    n_points = int(settings.get("N", N))
+    knot_dt = float(settings.get("dt_s", DT_S))
+    if n_points < 2 or not np.isfinite(knot_dt) or knot_dt <= 0:
+        p.error("N must be >=2 and dt_s finite and positive")
     controller_options = settings.get("controller", {})
     if set(controller_options)-{"limits_kw", "admm_linsys", "reset_rho_each_step", "warm_start"}:
         p.error("Unknown controller configuration")
@@ -152,7 +156,8 @@ def main():
                   gato_status=git("status", "--short", cwd=ROOT / "external/gato"),
                   versions={k: importlib.metadata.version(k) for k in
                             ("gato-mpc", "grid-rbd", "pin", "numpy")},
-                  N=N, dt_s=DT_S, sim_dt_s=SIM_DT_S, timeout_s=args.timeout,
+                  N=n_points, dt_s=knot_dt, prediction_horizon_s=(n_points-1)*knot_dt,
+                  sim_dt_s=SIM_DT_S, timeout_s=args.timeout,
                   position_tol_m=POSITION_TOL_M, speed_l1_tol_rad_s=SPEED_L1_TOL_RAD_S,
                   solver_params=params.asdict(), configuration=settings, limits="admm", linsys="pcg",
                   timing="fixed simulation time; solve latency does not advance plant",
@@ -185,11 +190,15 @@ def main():
                 x_start = saved["initial_state"].copy()
                 q_goal = saved["source_goal_q"].copy()
                 target = saved["target_xyz"].copy()
-                reference = saved["reference"].astype(np.float32).reshape(N, 6)
+                reference = saved["reference"].astype(np.float32).reshape(-1, 6)
                 historical_seed = saved["first_seed"]
-                expected_seed = np.tile(np.r_[x_start, np.zeros(7)], N)[:-7]
+                expected_seed = np.tile(np.r_[x_start, np.zeros(7)], len(reference))[:-7]
                 if not np.allclose(historical_seed.ravel(), expected_seed, atol=1e-6):
                     raise ValueError("Frozen task seed differs from state-hold/zero-control policy")
+                if len(reference) != n_points:
+                    if not np.allclose(reference, reference[:1], atol=1e-6):
+                        raise ValueError("Only constant goals can use a different knot count")
+                    reference = np.repeat(reference[:1], n_points, axis=0)
             if (x_start.shape != (14,) or q_goal.shape != (7,) or target.shape != (3,)
                     or not all(np.isfinite(a).all() for a in (x_start, q_goal, target, reference))):
                 raise ValueError("Invalid frozen input")
@@ -201,7 +210,7 @@ def main():
         witness_target = ee_position(model, data, q_goal, fid)
         if reference is None:
             target = witness_target
-            reference = np.zeros((N, 6), dtype=np.float32)
+            reference = np.zeros((n_points, 6), dtype=np.float32)
             reference[:, :3] = target
         elif not np.allclose(target, witness_target, atol=1e-5, rtol=1e-4):
             raise ValueError("Frozen target frame differs from the native TIAGo model")
@@ -211,8 +220,8 @@ def main():
         print(f"Target displacement: {result['initial_distance_m']*1000:.1f} mm", flush=True)
         result["status"] = "building_model"
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
-        gato.register_robot(PLANT, gpu_path, N=[N], ee_frame=EE_FRAME, jobs=1)
-        solver = gato.BSQP(str(gpu_path), batch_size=1, N=N, dt=DT_S,
+        gato.register_robot(PLANT, gpu_path, N=[n_points], ee_frame=EE_FRAME, jobs=1)
+        solver = gato.BSQP(str(gpu_path), batch_size=1, N=n_points, dt=knot_dt,
                            plant_type=PLANT, params=params)
         result["status"] = "checking_model"
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
@@ -275,7 +284,7 @@ def main():
                 np.savez_compressed(out / "failure_solve.npz", state=x, reference=reference,
                                     torque_nm=u, xu=step.solve.xu)
                 raise FloatingPointError("Nonfinite torque or predicted trajectory")
-            interval_end = min(t + DT_S, args.timeout)
+            interval_end = min(t + knot_dt, args.timeout)
             while t < interval_end - 1e-12:
                 h = min(SIM_DT_S, interval_end-t)
                 q, v = rk4(model, data, x[:7], x[7:], u, h)

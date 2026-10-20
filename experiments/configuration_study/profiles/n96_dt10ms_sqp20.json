@@ -1,0 +1,16 @@
+{
+  "description": "10ms knots/control with N96 (0.95s preview versus0.93s); otherwise SQP20, scaled/tight ADMM100, original bounds.",
+  "controller": {
+    "limits_kw": {
+      "iters": 100,
+      "rho_u": 0.0005,
+      "eps_rel": 0.001
+    }
+  },
+  "save_plan_steps": 5,
+  "solver_params": {
+    "max_sqp_iters": 20
+  },
+  "N": 96,
+  "dt_s": 0.01
+}
