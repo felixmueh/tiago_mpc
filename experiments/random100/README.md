@@ -49,3 +49,19 @@ the original seeds match state-hold/zero-control initialization. Initial
 Cartesian distances range 0.139–1.382 m. Existing same-module convention and
 small-reaching evidence is reused; the first assigned random task is counted,
 not discarded as a warmup. GATO/GRiD sources and build are unchanged.
+
+Analyze the completed saved cohort without a GPU:
+
+```bash
+.venv/bin/python experiments/random100/analyze.py <output-directory>
+```
+
+This checks the recorded initial states and independently recomputes joint,
+speed and torque excesses from all retained plant samples, then produces a
+case table, arrival/error plot and compact report beside the raw recordings.
+
+The completed 20 October 2026 cohort is at
+`../experiment_data/tiago_mpc/random100-admm-sqp5-20261020/` relative to the
+repository root. Its `REPORT.md` / self-contained `REPORT.pdf`, `analysis.json`
+and full per-task histories contain the observed results; generated results
+remain outside Git.

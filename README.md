@@ -73,6 +73,22 @@ identities, effective settings, arrival and independent simulated limit checks.
 Exit status is nonzero on timeout, execution error or a simulated limit violation.
 Failed outputs are retained; the script does not retry.
 
+## Frozen random100 experiment
+
+`experiments/random100/` includes the exact 100 random initial states and goal
+inputs recovered from the historical experiment branch, with hashes and order.
+These are random-posture starts, distinct from the comfortable-start cone
+dataset. Run them with the current modern GATO/ADMM configuration:
+
+```bash
+.venv/bin/python experiments/random100/run.py --dry-run
+.venv/bin/python experiments/random100/run.py
+```
+
+See `experiments/random100/README.md` for the explicit differences from the old
+solver experiment. New outputs live under `../experiment_data/tiago_mpc/`.
+Arrival and physical-limit compliance are reported separately.
+
 Simulation uses fixed pacing: computation time does not advance the plant.
 Recorded solve times are diagnostic, not benchmark results. Collision checking
 and hardware deployment are outside this example; planner constraint rows do
