@@ -70,8 +70,8 @@ def main():
                   driver_sha256=digest(ROOT / "examples/reach_sim.py"),
                   configuration_overrides=json.loads(args.config.read_text()) if args.config else {},
                   configuration_sha256=digest(args.config) if args.config else None,
-                  cohort="upstream-admm-sqp5-position-only-fixed-clock-8s",
-                  differences_from_historical="Modern GATO/GRiD, ADMM limit rows, SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained), upstream soft costs/bounds; same native starts/position goals/order.")
+                  cohort=(args.config.stem if args.config else "upstream-admm-sqp5")+"-position-only-fixed-clock-8s",
+                  differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, public runtime overrides recorded in configuration_overrides and per-case effective settings. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/position goals/order; no original goal posture is used as a trajectory seed.")
     if args.dry_run:
         print(json.dumps(config, indent=2)); return 0
     out = (args.output or ROOT.parent / "experiment_data/tiago_mpc" /

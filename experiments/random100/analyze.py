@@ -83,7 +83,8 @@ def main():
     setting_line = (f"N{first['N']}, B1, {1000*first['dt_s']:g} ms feedback/knots, "
                     f"{1000*first['sim_dt_s']:g} ms Pinocchio RK4, "
                     f"SQP{first['solver_params']['max_sqp_iters']}/PCG{first['solver_params']['max_pcg_iters']}, "
-                    f"{(first['N']-1)*first['dt_s']:.3g} s preview, {first['timeout_s']:g} simulated seconds.")
+                    f"{(first['N']-1)*first['dt_s']:.3g} s preview, "
+                    f"terminal weight {first['solver_params']['N_cost']:g}, {first['timeout_s']:g} simulated seconds.")
     admm_settings = first.get("admm_effective", first["admm_defaults"])
     bound_settings = first.get("configuration", {}).get("limit_bounds", {})
     result = dict(counts=saved["counts"], raw_audit_cases=len(audits),
