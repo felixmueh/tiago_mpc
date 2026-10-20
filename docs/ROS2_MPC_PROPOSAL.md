@@ -114,13 +114,38 @@ an externally shifted seed, but also resets duals and controller history; it is
 not an equivalent per-tick replacement. Do not access `_XU` from the ROS runner.
 
 Felix requested a measurement before deciding whether that extension is worth
-making. The separate `experiment/elapsed-warm-start` worktree compares the
-existing shift against experimental elapsed-time resampling under identical
-nominal and jittered application schedules. Judge tracking, physical limits and
-solver work at sensible update frequencies. A source-level timing mismatch
-alone is insufficient reason to change upstream. The experimental harness may
-access private warm-start state to isolate this comparison; the proposed ROS
-runner must not depend on that experiment-only access.
+making. The separate `experiment/elapsed-warm-start` worktree completed eight
+24 s figure-eight episodes, comparing the existing shift against experimental
+elapsed-time resampling with identical application schedules in each pair:
+
+| Knot/update cadence | Schedule | Current shift RMS, mm | Elapsed shift RMS, mm |
+|---|---|---:|---:|
+| 10 ms / 100 Hz | Nominal | 6.628 | 6.628 |
+| 10 ms / 100 Hz | Jitter/overruns | 6.686 | 6.691 |
+| 30 ms / 33.3 Hz | Nominal | 9.468 | 9.468 |
+| 30 ms / 33.3 Hz | Jitter/overruns | 9.494 | 9.492 |
+
+Nominal pairs have identical saved states, plans and torques. Jittered schedules
+use a deterministic pattern with 80% nominal intervals, 10% at 1.5 times nominal,
+and 10% at the greater of nominal and 34 ms. This is a synthetic sensitivity
+study informed by the retained reaching latency, not measured ROS timing.
+The physical simulation advances throughout each interval under the applied
+torque, and the reference follows accumulated simulated time. Actual solve wall
+time is recorded separately and does not alter the paired schedule.
+
+All eight episodes passed sampled raw joint limits. Jittered tracking differences
+were below 0.005 mm RMS. SQP work was unchanged; elapsed resampling did not offer
+a useful PCG/ADMM work reduction. Torques and plans do differ under jitter, so
+the experiment exercises the changed seed rather than merely calling an unused
+argument. These cases provide no practical reason to change upstream now.
+
+The experimental harness accesses private primal warm-start state to isolate
+resampling while retaining duals and controller history. It is not a supported
+integration API, and the ROS runner must not depend on it. Evidence and the
+full protocol are retained in
+`/workspace/tiago_mpc-elapsed-shift/_expr_data/elapsed-shift-20261020/batch1/REPORT.md`.
+This bounded no-loss tracking study does not settle faster or more disturbed
+tasks, large timing gaps, or hypothesis-batch behavior.
 
 **A solve budget is advisory.** `budget_s` can stop at SQP iteration boundaries,
 but at least one iteration runs. It cannot cancel a long GPU iteration or bound
@@ -148,7 +173,8 @@ reference phase, stale result rejection and controller handback. Keep physical
 execution as a separate manually reviewed script with explicit motion
 confirmation and the existing reset/collision checks.
 
-No upstream changes are necessary for this first runner. Consider an elapsed-time
-warm-start hook only if the paired timing experiment shows a useful effect.
+No upstream changes are necessary for this first runner. Keep the current shift
+for these tested frequencies; revisit an elapsed-time hook if a new workload
+shows a useful effect.
 GIL release would be useful for a threaded
 alternative, but is unnecessary for the proposed process separation.
