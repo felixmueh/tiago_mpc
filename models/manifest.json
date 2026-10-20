@@ -1,142 +1,154 @@
 {
   "tiago_pro/meshes/arm_1_link.stl": {
-    "sha256": "8f3672dbbb71d5ff9a158f687eb4438de0455b8aa73c92e9bb64f6aa50cfcd38",
-    "bytes": 336134
+    "bytes": 336134,
+    "sha256": "8f3672dbbb71d5ff9a158f687eb4438de0455b8aa73c92e9bb64f6aa50cfcd38"
   },
   "tiago_pro/meshes/arm_1_link_collision.stl": {
-    "sha256": "f911e6d2a6f9383c30183183962648c7e3872116bc29225f1bf10c8cd0491487",
-    "bytes": 72184
+    "bytes": 72184,
+    "sha256": "f911e6d2a6f9383c30183183962648c7e3872116bc29225f1bf10c8cd0491487"
   },
   "tiago_pro/meshes/arm_2_link.stl": {
-    "sha256": "96ce7ed57708af6d2b3586dc4ec07d175a7d6025e9848f75539ef80d99b59375",
-    "bytes": 284284
+    "bytes": 284284,
+    "sha256": "96ce7ed57708af6d2b3586dc4ec07d175a7d6025e9848f75539ef80d99b59375"
   },
   "tiago_pro/meshes/arm_2_link_collision.stl": {
-    "sha256": "5dd1d5f0843169ef66d4a05ff34e664e161bbb832917a80f939cd2766430e9f4",
-    "bytes": 109484
+    "bytes": 109484,
+    "sha256": "5dd1d5f0843169ef66d4a05ff34e664e161bbb832917a80f939cd2766430e9f4"
   },
   "tiago_pro/meshes/arm_3_link.stl": {
-    "sha256": "30ece623c4d71cba0eae5ebb4e96c56fd85552eca388cd46cfe1fe5263f6a4d5",
-    "bytes": 266284
+    "bytes": 266284,
+    "sha256": "30ece623c4d71cba0eae5ebb4e96c56fd85552eca388cd46cfe1fe5263f6a4d5"
   },
   "tiago_pro/meshes/arm_3_link_collision.stl": {
-    "sha256": "4d9d8428b84d4511e95ac362c541a951c83efcfe47b0db958e35e231e944f9ff",
-    "bytes": 72184
+    "bytes": 72184,
+    "sha256": "4d9d8428b84d4511e95ac362c541a951c83efcfe47b0db958e35e231e944f9ff"
   },
   "tiago_pro/meshes/arm_4_link.stl": {
-    "sha256": "3b37e8c6d1ee5498e22f34491dc83fa08f0cfb0f1309cd4e00eff79365f167a9",
-    "bytes": 284284
+    "bytes": 284284,
+    "sha256": "3b37e8c6d1ee5498e22f34491dc83fa08f0cfb0f1309cd4e00eff79365f167a9"
   },
   "tiago_pro/meshes/arm_4_link_collision.stl": {
-    "sha256": "8f86c50cda3e2c351c7b76c7f049fa28352e08ceabcae9b5eceaf58f204ff6c3",
-    "bytes": 109484
+    "bytes": 109484,
+    "sha256": "8f86c50cda3e2c351c7b76c7f049fa28352e08ceabcae9b5eceaf58f204ff6c3"
   },
   "tiago_pro/meshes/arm_5_link.stl": {
-    "sha256": "8695a8df814a4e375a13201a24dd5f6cd1b640f7e568defd164637e77ed41a5a",
-    "bytes": 214534
+    "bytes": 214534,
+    "sha256": "8695a8df814a4e375a13201a24dd5f6cd1b640f7e568defd164637e77ed41a5a"
   },
   "tiago_pro/meshes/arm_5_link_collision.stl": {
-    "sha256": "8d12d72d6114b807b2e7a20910672f06d64be64e1a760b3c6ec1ed774a59c6be",
-    "bytes": 24984
+    "bytes": 24984,
+    "sha256": "8d12d72d6114b807b2e7a20910672f06d64be64e1a760b3c6ec1ed774a59c6be"
   },
   "tiago_pro/meshes/arm_6_link.stl": {
-    "sha256": "b17826b37b80a57831ff11da67adbb539b5144d8213a43bf8dac34749a4b878a",
-    "bytes": 183384
+    "bytes": 183384,
+    "sha256": "b17826b37b80a57831ff11da67adbb539b5144d8213a43bf8dac34749a4b878a"
   },
   "tiago_pro/meshes/arm_6_link_collision.stl": {
-    "sha256": "b50fe52fd99bf91ed25de5988156ce3fa846fb68357c745afed0663d5242596a",
-    "bytes": 120084
+    "bytes": 120084,
+    "sha256": "b50fe52fd99bf91ed25de5988156ce3fa846fb68357c745afed0663d5242596a"
   },
   "tiago_pro/meshes/arm_7_link.stl": {
-    "sha256": "5c4ce3f61cc50d55f2d10ba78443c2453b6c9e5c0caba587f4d80a2ef26a6fe5",
-    "bytes": 348734
+    "bytes": 348734,
+    "sha256": "5c4ce3f61cc50d55f2d10ba78443c2453b6c9e5c0caba587f4d80a2ef26a6fe5"
+  },
+  "tiago_pro/meshes/base_antena_link.stl": {
+    "bytes": 75084,
+    "sha256": "736b08ffb56bb2d461209bce857b9a0ad0411e49447329ff8d0d8fa7310b92be"
   },
   "tiago_pro/meshes/base_dock_link.stl": {
-    "sha256": "d13ab33c5a39f9daa7f34a1b728c6b8afa2b105671846af29eb9f2d8c617cd0c",
-    "bytes": 73084
+    "bytes": 73084,
+    "sha256": "d13ab33c5a39f9daa7f34a1b728c6b8afa2b105671846af29eb9f2d8c617cd0c"
   },
   "tiago_pro/meshes/base_link.stl": {
-    "sha256": "35cb915a06d5c78f4e80c41ac24a5b2376a7072502f9b1e144873db1dfe0cd48",
-    "bytes": 643384
+    "bytes": 643384,
+    "sha256": "35cb915a06d5c78f4e80c41ac24a5b2376a7072502f9b1e144873db1dfe0cd48"
   },
   "tiago_pro/meshes/base_link_tc.stl": {
-    "sha256": "e438c3363a7ad819b5ee44520f2b8e6a6e9636a0cc44afefacd98ae3f8a0ab2e",
-    "bytes": 168684
+    "bytes": 168684,
+    "sha256": "e438c3363a7ad819b5ee44520f2b8e6a6e9636a0cc44afefacd98ae3f8a0ab2e"
   },
   "tiago_pro/meshes/d435_simplified.stl": {
-    "sha256": "842ec2e119a00040dda80ad11f66ca15c8d6ab046fd36f072423a0df9bcfec7c",
-    "bytes": 23184
+    "bytes": 23184,
+    "sha256": "842ec2e119a00040dda80ad11f66ca15c8d6ab046fd36f072423a0df9bcfec7c"
   },
   "tiago_pro/meshes/fingertip.stl": {
-    "sha256": "aef403084be21aa0fbc5ad411e4bf22c796a044a70b906834539453a5637df83",
-    "bytes": 538684
+    "bytes": 538684,
+    "sha256": "aef403084be21aa0fbc5ad411e4bf22c796a044a70b906834539453a5637df83"
   },
   "tiago_pro/meshes/head_1_link.stl": {
-    "sha256": "8912a5c065cddb61267801db4c49f35c32213e1d3f3be9c1a48c13f3bfcca5fb",
-    "bytes": 190834
+    "bytes": 190834,
+    "sha256": "8912a5c065cddb61267801db4c49f35c32213e1d3f3be9c1a48c13f3bfcca5fb"
   },
   "tiago_pro/meshes/head_1_link_collision.stl": {
-    "sha256": "bf984aed7be282270a78b2ed0f751e9910e6db9500f769956b95bd0c3522983e",
-    "bytes": 33084
+    "bytes": 33084,
+    "sha256": "bf984aed7be282270a78b2ed0f751e9910e6db9500f769956b95bd0c3522983e"
   },
   "tiago_pro/meshes/head_2_link.stl": {
-    "sha256": "934da0461c8a633a119ed6362ab34d9b02dc0fc0c8a246e2a563bf5b2cd3736a",
-    "bytes": 496034
+    "bytes": 496034,
+    "sha256": "934da0461c8a633a119ed6362ab34d9b02dc0fc0c8a246e2a563bf5b2cd3736a"
   },
   "tiago_pro/meshes/head_2_link_collision.stl": {
-    "sha256": "bdc70cb83ec4c699b70edcef550a635b66e3e2ad426ef517ba8d2b9a46abb098",
-    "bytes": 170884
+    "bytes": 170884,
+    "sha256": "bdc70cb83ec4c699b70edcef550a635b66e3e2ad426ef517ba8d2b9a46abb098"
   },
   "tiago_pro/meshes/inner_finger.stl": {
-    "sha256": "ac2ec34c8b0cefe1d4637122553a8c9409a2ed6d389a90050962eed5a41cc5a3",
-    "bytes": 259284
+    "bytes": 259284,
+    "sha256": "ac2ec34c8b0cefe1d4637122553a8c9409a2ed6d389a90050962eed5a41cc5a3"
   },
   "tiago_pro/meshes/laptop_tray_collision.stl": {
-    "sha256": "849b78bbe967caf550ba918b02e274770f9652094fdf6aaff23c5c24358230a2",
-    "bytes": 14084
+    "bytes": 14084,
+    "sha256": "849b78bbe967caf550ba918b02e274770f9652094fdf6aaff23c5c24358230a2"
   },
   "tiago_pro/meshes/outer_finger.stl": {
-    "sha256": "f6b296645c242878eaba955b30bd9b932aae88491bb9a627383f4a41e79f3dcc",
-    "bytes": 117384
+    "bytes": 117384,
+    "sha256": "f6b296645c242878eaba955b30bd9b932aae88491bb9a627383f4a41e79f3dcc"
   },
   "tiago_pro/meshes/realsense-d435_cover_link.stl": {
-    "sha256": "610e506d141ce723c2bd76eea5d5657f6bfb07d7873bdfc41b021e0143327e70",
-    "bytes": 282934
+    "bytes": 282934,
+    "sha256": "610e506d141ce723c2bd76eea5d5657f6bfb07d7873bdfc41b021e0143327e70"
+  },
+  "tiago_pro/meshes/sick_tim551.stl": {
+    "bytes": 100084,
+    "sha256": "9e0184e01a67754bce3a008fb1f52b292dbda69857ed9092909d211817915cf2"
   },
   "tiago_pro/meshes/suspension_front_link.stl": {
-    "sha256": "9a2f26924de595e4c6e2b0ef7465c7af1d09ee3070e9f7173523113b545119d5",
-    "bytes": 52984
+    "bytes": 52984,
+    "sha256": "9a2f26924de595e4c6e2b0ef7465c7af1d09ee3070e9f7173523113b545119d5"
   },
   "tiago_pro/meshes/suspension_rear_link.stl": {
-    "sha256": "382922eaf317749b749ff3dd84c04e9f4dc206a2e7227a7a62c79f097f665c4c",
-    "bytes": 52984
+    "bytes": 52984,
+    "sha256": "382922eaf317749b749ff3dd84c04e9f4dc206a2e7227a7a62c79f097f665c4c"
   },
   "tiago_pro/meshes/torso_fixed.stl": {
-    "sha256": "1f2adfb0ff0fd6d705cee85ff4b95a6f988f39fcfff3dfa9f95baf4477fa3553",
-    "bytes": 269484
+    "bytes": 269484,
+    "sha256": "1f2adfb0ff0fd6d705cee85ff4b95a6f988f39fcfff3dfa9f95baf4477fa3553"
   },
   "tiago_pro/meshes/torso_fixed_collision.stl": {
-    "sha256": "56a8f0732fdbb1f4145a61269d59f3ed07be1bb9c060e7caf44d8dd37cd06d80",
-    "bytes": 56684
+    "bytes": 56684,
+    "sha256": "56a8f0732fdbb1f4145a61269d59f3ed07be1bb9c060e7caf44d8dd37cd06d80"
   },
   "tiago_pro/meshes/torso_lift_link.stl": {
-    "sha256": "98922a8c4c2b4e2ba57e9109faef69fa2a8288fd403912935da67ddf07df759c",
-    "bytes": 917384
+    "bytes": 917384,
+    "sha256": "98922a8c4c2b4e2ba57e9109faef69fa2a8288fd403912935da67ddf07df759c"
   },
   "tiago_pro/meshes/torso_lift_link_collision.stl": {
-    "sha256": "6c45a1e2778576ad7ef2d6ced8ffbbf6a4aaf2a2de8aecb59f7b44329b758d0b",
-    "bytes": 82984
+    "bytes": 82984,
+    "sha256": "6c45a1e2778576ad7ef2d6ced8ffbbf6a4aaf2a2de8aecb59f7b44329b758d0b"
   },
   "tiago_pro/meshes/wheel_link.stl": {
-    "sha256": "00e72531f701fe9571fc7f27fff061b212ef5b6390ffb4bddd9a519c3e931b4e",
-    "bytes": 359934
+    "bytes": 359934,
+    "sha256": "00e72531f701fe9571fc7f27fff061b212ef5b6390ffb4bddd9a519c3e931b4e"
   },
   "tiago_pro/tiago_pro.urdf": {
-    "sha256": "7fcdfa01e2a67c550ae9624061126b87f8887ab251803bc3bd5b93fc2f022ae6",
-    "bytes": 83047
+    "bytes": 107969,
+    "sha256": "771458ccd310ad679a2ccb9de277fe32ec0545ebdd9aa55bba7e66158cfbb89c"
+  },
+  "tiago_pro/tiago_pro_sim_source.urdf": {
+    "bytes": 106848,
+    "sha256": "c8d51a1e8cf363740a394ea272b9961a122a7bcfc418a6186088552cd907d3e6"
   },
   "tiago_right/tiago_right_arm.urdf": {
-    "sha256": "8e1fd973a1d1c3fbddd55039e6eb17b355ebb29f46e1bd8c774b7879c2cdc5bb",
-    "bytes": 10910
+    "bytes": 12024,
+    "sha256": "6cc8671bfda6a74b88a0126cb354c8fd0755690239c13f8e7fa43c553c274827"
   }
 }
