@@ -143,3 +143,25 @@ URDFs and code are ordinary Git files. Binary meshes use Git LFS, configured
 by `.gitattributes`; clones must fetch the LFS objects. Generated headers,
 binaries, environment and run results are ignored. No remote is configured
 for this new repository.
+
+## Optional ROS 2 adapter
+
+`tiago_mpc/ros2.py` provides the ported PAL right-arm state, trajectory and
+effort transport, optional SEA feedback, and explicit exclusive controller
+handover. ROS imports are optional; the simulation example remains independent.
+The adapter services a bounded burst of ready state callbacks and supports
+explicit fresh-state reads. It contains no live MPC loop or safety supervisor.
+
+[Adapter usage and validation limits](docs/ROS2_ADAPTER.md) and
+[the upstream MPCController integration proposal](docs/ROS2_MPC_PROPOSAL.md)
+describe the native joint/sign convention and proposed separate I/O process.
+The read-only inspection example publishes no commands or controller requests:
+
+```bash
+# Source the compatible PAL ROS overlay/network settings first.
+python examples/ros2_read_state.py --samples 5
+# ROS-free boundary tests (requires pytest and NumPy):
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_ros2_*.py
+```
+
+No ROS/PAL simulation or hardware execution has been performed for this port.
