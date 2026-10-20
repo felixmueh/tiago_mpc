@@ -43,8 +43,15 @@ sources are unmodified. There is no dependency on the historical GATO fork.
   timeout 8 simulated seconds, no dwell or final-approach stage.
 - Position only: the tool orientation is unconstrained.
 
-The source URDFs remain unchanged. A generated copy resolves mesh filenames to
-absolute local paths; joint axes, transforms, limits and inertias are retained.
+The source URDFs remain unchanged. A generated simulation copy resolves mesh
+filenames to absolute local paths. A second, equivalent GPU model normalizes
+joint 6's negative Z axis to positive Z and reflects its position limits.
+The adapter converts that joint's position, velocity and torque signs at the
+GPU boundary; the simulated plant and saved histories use native TIAGo
+coordinates. Transforms, tool frame and inertias are retained. This is the
+same coordinate convention used by the historical TIAGo wrapper: upstream's
+fixed-arm adapter assumes zero topology-helper storage, whereas a directly
+registered signed-axis model needs nonzero helper storage and traps on launch.
 Startup checks compare end-effector FK and one GPU/Pinocchio dynamics step at
 both task poses before starting the MPC loop. Both models use rigid-body
 dynamics without passive joint damping/friction; the source URDF dynamics tags

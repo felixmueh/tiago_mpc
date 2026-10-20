@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import traceback
 import xml.etree.ElementTree as ET
@@ -50,7 +51,7 @@ def git(*args, cwd=ROOT):
 
 
 def runtime_urdf():
-    """Resolve mesh URIs in a generated copy; preserve all source-model values."""
+    """Resolve meshes; normalize signed axes only in the GPU coordinate model."""
     manifest = json.loads((ROOT / "models/manifest.json").read_text())
     for relative, info in manifest.items():
         p = ROOT / "models" / relative
@@ -67,7 +68,28 @@ def runtime_urdf():
     payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
     if not out.exists() or out.read_bytes() != payload:
         out.write_bytes(payload)
-    return out
+    signs = []
+    for joint in tree.iter("joint"):
+        if joint.get("type") == "fixed":
+            continue
+        axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
+        if not (np.array_equal(axis, [0, 0, 1]) or np.array_equal(axis, [0, 0, -1])):
+            raise ValueError(f"Unsupported arm axis: {axis}")
+        sign = float(axis[2]); signs.append(sign)
+        if sign < 0:
+            joint.find("axis").set("xyz", "0 0 1")
+            limit = joint.find("limit")
+            lo, hi = float(limit.get("lower")), float(limit.get("upper"))
+            limit.set("lower", repr(-hi)); limit.set("upper", repr(-lo))
+            safety = joint.find("safety_controller")
+            if safety is not None:
+                lo, hi = float(safety.get("soft_lower_limit")), float(safety.get("soft_upper_limit"))
+                safety.set("soft_lower_limit", repr(-hi)); safety.set("soft_upper_limit", repr(-lo))
+    gpu_path = out.with_name("tiago_right_grid.urdf")
+    payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
+    if not gpu_path.exists() or gpu_path.read_bytes() != payload:
+        gpu_path.write_bytes(payload)
+    return out, gpu_path, np.asarray(signs)
 
 
 def ee_position(model, data, q, fid):
@@ -76,17 +98,18 @@ def ee_position(model, data, q, fid):
     return data.oMf[fid].translation.copy()
 
 
-def check_model(solver, model, data, fid, q_goal):
+def check_model(solver, model, data, fid, q_goal, signs):
     """Bounded convention check at both task poses, including the signed axis."""
     errors = []
     for q in (Q_START_RAD, q_goal):
         expected = ee_position(model, data, q, fid)
-        if not np.allclose(solver.ee_pos(q), expected, atol=1e-5, rtol=1e-4):
+        if not np.allclose(solver.ee_pos(q*signs), expected, atol=1e-5, rtol=1e-4):
             raise ValueError("GATO/Pinocchio end-effector frames disagree")
         v = np.array([0.10, -0.08, 0.06, -0.04, 0.02, -0.07, 0.03])
         u = pin.rnea(model, data, q, v, np.zeros(7)) + np.linspace(-0.3, 0.3, 7)
         x = np.r_[q, v]
-        gpu = np.asarray(solver.sim_forward(x[None], u[None], SIM_DT_S))[0]
+        gpu = np.asarray(solver.sim_forward((x*np.tile(signs, 2))[None],
+                                            (u*signs)[None], SIM_DT_S))[0]*np.tile(signs, 2)
         q_next, v_next = rk4(model, data, q, v, u, SIM_DT_S)
         error = float(np.max(np.abs(gpu - np.r_[q_next, v_next])))
         errors.append(error)
@@ -108,6 +131,7 @@ def main():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     out = args.output or ROOT / "results" / stamp
     out.mkdir(parents=True, exist_ok=False)
+    shutil.copyfile(__file__, out / "reach_sim.py")
     result = dict(status="started", mode="hold" if args.hold else "reach",
                   repository_commit=git("rev-parse", "HEAD") if (ROOT / ".git").exists()
                   and git("rev-list", "--all", "--count") != "0" else None,
@@ -125,7 +149,10 @@ def main():
     times, states, controls, errors, solve_us, wall_s, row_viol = [], [], [], [], [], [], []
     exit_code = 1
     try:
-        path = runtime_urdf()
+        path, gpu_path, signs = runtime_urdf()
+        state_signs = np.tile(signs, 2)
+        result["gpu_joint_coordinate_signs"] = signs.tolist()
+        result["gpu_urdf_sha256"] = hashlib.sha256(gpu_path.read_bytes()).hexdigest()
         model = pin.buildModelFromUrdf(str(path))
         data = model.createData()
         if (model.nq, model.nv) != (7, 7):
@@ -143,25 +170,29 @@ def main():
         result.update(q_start_rad=Q_START_RAD.tolist(), q_goal_witness_rad=q_goal.tolist(),
                       target_m=target.tolist(), initial_distance_m=float(np.linalg.norm(target-initial)))
         print(f"Target displacement: {result['initial_distance_m']*1000:.1f} mm", flush=True)
-        gato.register_robot(PLANT, path, N=[N], ee_frame=EE_FRAME, jobs=1)
-        solver = gato.BSQP(str(path), batch_size=1, N=N, dt=DT_S,
+        result["status"] = "building_model"
+        (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
+        gato.register_robot(PLANT, gpu_path, N=[N], ee_frame=EE_FRAME, jobs=1)
+        solver = gato.BSQP(str(gpu_path), batch_size=1, N=N, dt=DT_S,
                            plant_type=PLANT, params=PARAMS)
-        result["model_step_max_abs_errors"] = check_model(solver, model, data, fid, q_goal)
+        result["status"] = "checking_model"
+        (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
+        result["model_step_max_abs_errors"] = check_model(solver, model, data, fid, q_goal, signs)
         print("GATO/Pinocchio model checks passed", flush=True)
         if args.build_only:
             result["status"] = "model_checked"
             return 0
         controller = gato.MPCController(solver, limits="admm", linsys="pcg")
         x = np.r_[Q_START_RAD, np.zeros(7)]
-        controller.reset(x)
+        controller.reset(x*state_signs)
         reference = np.zeros((N, 6), dtype=np.float32)
         reference[:, :3] = target
         times.append(0.0); states.append(x.copy()); errors.append(float(np.linalg.norm(initial-target)))
         t, reached = 0.0, False
         # Hold mode runs the full interval to check stability. Reach stops at arrival.
         while t < args.timeout - 1e-12:
-            step = controller.step(x, reference.ravel())
-            u = np.asarray(step.u, dtype=float)
+            step = controller.step(x*state_signs, reference.ravel())
+            u = np.asarray(step.u, dtype=float)*signs
             if not np.isfinite(u).all() or not np.isfinite(step.solve.xu).all():
                 raise FloatingPointError("Nonfinite torque or predicted trajectory")
             solve_us.append(float(step.solve.solve_time_us)); wall_s.append(float(step.wall_s))

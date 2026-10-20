@@ -22,6 +22,9 @@ The full original has `package://meshes/...` references; use
 `models/tiago_pro` as the package search root in a compatible viewer. The
 reduced URDF preserves its original PAL package URIs; the example resolves
 those filenames against the same mesh directory in a generated runtime copy.
+A separate generated GPU-coordinate URDF reflects joint 6's axis/limits;
+the adapter maps position, velocity and torque signs at the solver boundary.
+Neither checked-in URDF is altered by this conversion.
 
 Robot-description and mesh rights remain with their original owners. Copying
 them here does not relicense them. No original asset license file was present
