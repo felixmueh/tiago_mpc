@@ -1,0 +1,14 @@
+{
+  "description": "Only increase outer SQP cap to20 over scaled/tight ADMM100.",
+  "controller": {
+    "limits_kw": {
+      "iters": 100,
+      "rho_u": 0.0005,
+      "eps_rel": 0.001
+    }
+  },
+  "save_plan_steps": 5,
+  "solver_params": {
+    "max_sqp_iters": 20
+  }
+}
