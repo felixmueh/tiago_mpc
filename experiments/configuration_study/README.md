@@ -13,7 +13,7 @@ rate. Each named configuration gets one episode per assigned ID, with its own
 fresh directory. Initial states, position goals, eight-second observation,
 arrival criteria and raw physical-limit definitions stay frozen. No retry or
 filtering changes the old cohort. Results and all intermediate attempts live
-under `../experiment_data/tiago_mpc/configuration-study-20261020/`.
+under `_expr_data/configuration-study-20261020/`.
 
 The profiles document the adaptive sequence: ADMM cap100; then torque-row rho
 scaled50x to match the effort cost's50x change versus upstream's tuning;
@@ -36,7 +36,7 @@ configuration assessment, not an isolated integrator or backend ablation.
   --config experiments/configuration_study/profiles/admm100.json \
   --pairs 8990 1124 309 6536 8306 3546 8048
 .venv/bin/python experiments/configuration_study/summarize.py \
-  ../experiment_data/tiago_mpc/configuration-study-20261020
+  _expr_data/configuration-study-20261020
 ```
 
 Selected configurations must be assessed on the complete frozen100 before any
@@ -95,17 +95,17 @@ the selected N32 profile rather than resuming the held N96 configuration.
 
 Full comparison, paired changes, independently audited raw trajectories,
 all intermediate cohorts and PDF/plot exports are retained at:
-`/workspace/experiment_data/tiago_mpc/configuration-study-20261020/`.
+`/workspace/tiago_mpc/_expr_data/configuration-study-20261020/`.
 `REPORT.md` / `REPORT.pdf` describe results and limitations;
 `build_comparison.py` regenerates the saved-data comparison. The original
 cohort remains separately at
-`/workspace/experiment_data/tiago_mpc/random100-admm-sqp5-20261020/`.
+`/workspace/tiago_mpc/_expr_data/random100-admm-sqp5-20261020/`.
 Separate verified archives are in the adjacent `backups/` directory.
 
 ## 10 ms horizon extension pilot
 
 The follow-up at N64 and N128 is retained at
-`/workspace/experiment_data/tiago_mpc/horizon-study-20261020/`
+`/workspace/tiago_mpc/_expr_data/horizon-study-20261020/`
 (`REPORT.md`, self-contained `REPORT.pdf`, independent raw audit and module
 receipts). On the same seven selected cases, explicit ADMM inner PCG gave
 N64: 4 arrivals/7 whole-run physical passes; N128: 3 arrivals/7 physical

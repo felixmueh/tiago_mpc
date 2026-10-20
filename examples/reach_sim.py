@@ -143,7 +143,7 @@ def main():
     if set(controller_options)-{"limits_kw", "admm_linsys", "reset_rho_each_step", "warm_start"}:
         p.error("Unknown controller configuration")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    out = args.output or ROOT / "results" / stamp
+    out = args.output or ROOT / "_expr_data" / "reaching" / stamp
     out.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(__file__, out / "reach_sim.py")
     if args.config:

@@ -63,11 +63,11 @@ are retained, and no physical-model validation is implied.
 # Check holding the initial tool position for two simulated seconds:
 .venv/bin/python examples/reach_sim.py --hold --timeout 2
 # A fresh directory is required when naming an output explicitly:
-.venv/bin/python examples/reach_sim.py --output results/my-first-reach
+.venv/bin/python examples/reach_sim.py --output _expr_data/reaching/my-first-reach
 ```
 
 Runs save `summary.json`, `trajectory.npz` and `reach.png` in fresh timestamped
-directories under `results/`. Histories contain all 3 ms plant states/applied
+directories under `_expr_data/reaching/`. Histories contain all 3 ms plant states/applied
 torques and per-solve timing/constraint violations. The summary records source
 identities, effective settings, arrival and independent simulated limit checks.
 Exit status is nonzero on timeout, execution error or a simulated limit violation.
@@ -86,7 +86,7 @@ dataset. Run them with the current modern GATO/ADMM configuration:
 ```
 
 See `experiments/random100/README.md` for the explicit differences from the old
-solver experiment. New outputs live under `../experiment_data/tiago_mpc/`.
+solver experiment. New outputs live under `_expr_data/`.
 Arrival and physical-limit compliance are reported separately.
 
 The configuration study selected an explicit alternative for these random

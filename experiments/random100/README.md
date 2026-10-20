@@ -14,7 +14,7 @@ seeds or posture targets. No task is filtered or resampled.
 
 The second command runs all 100 sequentially in separate processes, once each.
 Default outputs are a fresh timestamped directory under
-`../experiment_data/tiago_mpc/`. The runner acquires the shared GPU locks;
+`_expr_data/`. The runner acquires the shared GPU locks;
 individual timeouts, limit violations and numerical failures retain their
 outputs and independent cases continue. Shared setup failures hold the rest.
 A 180 s process watchdog is distinct from the 8 s simulated observation.
@@ -61,7 +61,7 @@ speed and torque excesses from all retained plant samples, then produces a
 case table, arrival/error plot and compact report beside the raw recordings.
 
 The completed 20 October 2026 cohort is at
-`../experiment_data/tiago_mpc/random100-admm-sqp5-20261020/` relative to the
+`_expr_data/random100-admm-sqp5-20261020/` relative to the
 repository root. Its `REPORT.md` / self-contained `REPORT.pdf`, `analysis.json`
 and full per-task histories contain the observed results; generated results
 remain outside Git.
