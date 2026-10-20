@@ -110,7 +110,8 @@ PYTHONPATH=external/gato/python PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest -q tests
 ```
 
-On 20 October 2026, 128 tests and 27 subtests passed. Coverage includes I/O/worker
+After the canonical simulator-model correction, 142 tests and 118 subtests
+passed on 20 October 2026. Coverage includes I/O/worker
 doubles, real collision geometry, spawned safety-worker timeout/death, service
 progress, failed handback, stale/expired/mismatched results, worker start/death,
 slow logging across expiry, source-velocity arrival and already-met goals that
@@ -123,7 +124,12 @@ native torques stayed finite/in raw bounds, original 100 ms leases were met,
 and the worker exited zero. No ROS or hardware was involved. This is an
 integration smoke, not task qualification or a timing benchmark. Its first plan
 has a small retained planning-bound violation: ADMM remains approximate.
+The arm already used the simulator kinematics/inertias; the correction changes
+only its passive metadata. A fresh default reaching smoke at `d86e041` also
+passed in 0.25 simulated seconds with zero sampled physical-limit excess.
 
 CPU logs: `_expr_data/ros2-runner-20261020/checks/cpu-tests.log`.
+Post-correction combined CPU log:
+`_expr_data/canonical-model-correction-20261020/ros-integration-cpu.log`.
 GPU inputs/replies/config/source/history/logs:
 `_expr_data/ros2-runner-20261020/gpu-worker-smoke/20261020T215730.176115Z/`.

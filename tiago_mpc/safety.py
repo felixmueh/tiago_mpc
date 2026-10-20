@@ -501,10 +501,9 @@ def _resolved_collision_urdf(
 ) -> Path:
     """Resolve mesh paths in an ignored checkout-local cache, without editing assets.
 
-    The archived alpha-wrap URDF mixes relative simplified meshes and
-    ``package://meshes`` references to original geometry. Pinocchio does not
-    consistently resolve relative filenames from an arbitrary working directory.
-    Resolve both explicitly and fail before model creation when a mesh is absent.
+    The canonical overlay mixes relative simplified meshes and PAL package/file
+    references to original geometry. Resolve those against included local assets;
+    no installed PAL package or historical absolute source path is required.
     """
     source = source.resolve(strict=True)
     tree = ET.parse(source)
@@ -515,6 +514,11 @@ def _resolved_collision_urdf(
         filename = mesh.get("filename", "")
         relative = filename.removeprefix("package://").removeprefix("file://")
         candidates = [root / relative for root in roots]
+        if (source in (DEFAULT_COLLISION_URDF_PATH.resolve(), DEFAULT_URDF_PATH.resolve())
+                and filename.startswith(("package://", "file://"))):
+            # Canonical PAL URIs are preserved in checked-in sources. The
+            # existing packaged assets use a flat, unique mesh basename layout.
+            candidates = [DEFAULT_URDF_PATH.parent / "meshes" / Path(relative).name]
         resolved = next((path.resolve() for path in candidates if path.is_file()), None)
         if resolved is None:
             raise FileNotFoundError(f"collision URDF mesh not found: {filename} ({source})")

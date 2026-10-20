@@ -4,9 +4,13 @@ The synthetic posture is intentionally NOT a physical qualification. Its default
 4 cm rejection is retained. A separate dummy checker exercises healthy transport.
 """
 from dataclasses import replace
+import hashlib
+import json
 from pathlib import Path
 import os
 import signal
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -20,6 +24,18 @@ from tiago_mpc import safety as s
 
 
 HIGH_CLEARANCE_ARM = [-.39, -1.73, -.38, -2.35, 0., -1.21, .04]
+REVIEWED_SOURCE = s.DEFAULT_COLLISION_URDF_PATH.with_name(
+    s.DEFAULT_COLLISION_URDF_PATH.stem + '_reviewed_source.urdf')
+
+
+def xml_tree(path):
+    return ET.parse(path, parser=ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))).getroot()
+
+
+def structure(node, *, ignore_collisions=False):
+    return (node.tag, node.attrib, (node.text or '').strip(), [
+        structure(child, ignore_collisions=ignore_collisions) for child in node
+        if not (ignore_collisions and child.tag == 'collision')])
 
 
 def make_state(model, seq=1):
@@ -95,8 +111,8 @@ class CollisionPortTests(unittest.TestCase):
     def test_reduced_state_boundary_and_monitored_geometry(self):
         m = self.model
         self.assertEqual(m.model.nq, 17)
-        self.assertEqual(len(m.geometry_model.geometryObjects), 47)
-        self.assertEqual(len(m.geometry_model.collisionPairs), 513)
+        self.assertEqual(len(m.geometry_model.geometryObjects), 51)
+        self.assertEqual(len(m.geometry_model.collisionPairs), 569)
         self.assertFalse(set(s.TIAGO_RUNTIME_STATE_FIXED_JOINT_NAMES)
                          & set(m.state_updated_joint_names))
         self.assertIn('arm_left_1_joint', m.state_updated_joint_names)
@@ -107,6 +123,76 @@ class CollisionPortTests(unittest.TestCase):
         for pair in m.geometry_model.collisionPairs:
             self.assertTrue(pair.first in monitored or pair.second in monitored)
         self.assertTrue(np.all(m.geometry_radii_m > 0))
+
+    def test_active_model_preserves_all_canonical_noncollision_metadata(self):
+        active, canonical = xml_tree(s.DEFAULT_COLLISION_URDF_PATH), xml_tree(s.DEFAULT_URDF_PATH)
+        self.assertEqual(len(active.findall('link')), 70)
+        self.assertEqual(len(active.findall('joint')), 69)
+        self.assertEqual(len(active.findall('joint/mimic')), 10)
+        # Includes all joint origins/axes/limits/dynamics/mimics, link inertias,
+        # native sensor frames, visuals, plugins, and right-arm provenance comments.
+        self.assertEqual(structure(active, ignore_collisions=True),
+                         structure(canonical, ignore_collisions=True))
+        for index in range(1, 8):
+            joint = active.find(f"joint[@name='arm_right_{index}_joint']")
+            comments = ' '.join(child.text or '' for child in joint if child.tag is ET.Comment)
+            self.assertIn('TIAGO_MPC dynamics:', comments)
+            if index >= 5:
+                self.assertIn('ASSUMED', comments)
+
+    def test_collision_overlay_and_reviewed_source_are_retained_exactly(self):
+        provenance = json.loads((s.REPO_ROOT / 'models/safety/provenance.json').read_text())
+        expected = provenance['sha256'][
+            'tiago_configs/collision_alpha_wrap_a3_o25_cap001/tiago_pro_collision_alpha_wrap_a3_o25_cap001.urdf']
+        self.assertEqual(hashlib.sha256(REVIEWED_SOURCE.read_bytes()).hexdigest(), expected)
+        active = {link.get('name'): link for link in xml_tree(s.DEFAULT_COLLISION_URDF_PATH).findall('link')}
+        reviewed = {link.get('name'): link for link in xml_tree(REVIEWED_SOURCE).findall('link')}
+        canonical = {link.get('name'): link for link in xml_tree(s.DEFAULT_URDF_PATH).findall('link')}
+        for name, link in active.items():
+            expected_link = reviewed.get(name, canonical[name])
+            self.assertEqual([structure(c) for c in link.findall('collision')],
+                             [structure(c) for c in expected_link.findall('collision')], name)
+        # Original blacklist content and generation receipt are historical evidence.
+        for filename in ('comfortable_pose_collision_blacklist.json',
+                         'collision_alpha_wrap_a3_o25_cap001/alpha_wrap_results.json'):
+            self.assertEqual(hashlib.sha256((s.REPO_ROOT / 'models/safety' / filename).read_bytes()).hexdigest(),
+                             provenance['sha256']['tiago_configs/' + filename])
+
+    def test_new_fixed_sensor_obstacles_are_present_and_paired_with_arm(self):
+        expected = {'base_antenna_left_link_0', 'base_antenna_right_link_0',
+                    'base_front_laser_link_0', 'base_rear_laser_link_0'}
+        geometry = self.model.geometry_model
+        indices = {index for index, obj in enumerate(geometry.geometryObjects) if obj.name in expected}
+        self.assertEqual(len(indices), 4)
+        monitored = set(self.model.monitored_geometry_indices)
+        for index in indices:
+            pairs = [pair for pair in geometry.collisionPairs if index in (pair.first, pair.second)]
+            self.assertEqual(len(pairs), len(monitored))
+            self.assertTrue(all(pair.first in monitored or pair.second in monitored for pair in pairs))
+        canonical = xml_tree(s.DEFAULT_URDF_PATH)
+        new_links = {name.removesuffix('_0') for name in expected}
+        joints = [joint for joint in canonical.findall('joint')
+                  if joint.find('child').get('link') in new_links]
+        self.assertEqual(len(joints), 4)
+        self.assertTrue(all(joint.get('type') == 'fixed' for joint in joints))
+
+    def test_current_and_reviewed_mesh_geometry_is_finite(self):
+        import hppfcl
+        loader = hppfcl.MeshLoader()
+        meshes = [*sorted(s.DEFAULT_URDF_PATH.parent.glob('meshes/*.stl')),
+                  *sorted(s.DEFAULT_COLLISION_URDF_PATH.parent.glob('meshes/*.stl'))]
+        self.assertEqual(len(meshes), 53)
+        for path in meshes:
+            with self.subTest(mesh=str(path.relative_to(s.REPO_ROOT))):
+                mesh = loader.load(str(path))
+                self.assertGreater(mesh.num_vertices, 0)
+                self.assertGreater(mesh.num_tris, 0)
+                self.assertTrue(np.isfinite(mesh.vertices()).all())
+
+    def test_generator_is_deterministic_and_current(self):
+        result = subprocess.run([sys.executable, str(s.REPO_ROOT / 'scripts/prepare_safety_model.py'), '--check'],
+                                cwd=s.REPO_ROOT, check=True, capture_output=True, text=True)
+        self.assertIn('are current', result.stdout)
 
     def test_all_named_positions_and_velocities_required_and_finite(self):
         for field in ('position', 'velocity'):
