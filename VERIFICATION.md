@@ -1,4 +1,46 @@
-# Reaching default promotion — 20 October 2026
+# Canonical model correction — 20 October 2026
+
+The current robot description is `/workspace/GATO/tiago_tools/sim_tiago_urdf.xml`.
+Its exact bytes are retained as `models/tiago_pro/tiago_pro_sim_source.urdf`
+(SHA-256 `c8d51a1e8cf363740a394ea272b9961a122a7bcfc418a6186088552cd907d3e6`).
+The active full URDF now uses that description with seven explicit right-arm
+friction/damping tags and identification/assumption comments. The previously
+included full model was outdated. The reduced arm already matched the simulator
+source; only dynamics metadata changed, without altering arm transforms,
+limits, inertias or its gripper lump. Left-arm dynamics remain canonical.
+
+CPU structural checks establish that the active full model differs from the
+preserved source only in the seven dynamics tags/comments, and all retained
+reduced links/joints match the canonical source. A three-state Pinocchio check
+compares full-model reduction against the standalone arm's torso-relative tool
+FK, mass matrix and gravity at atol/rtol 1e-8. Coefficients, known-versus-assumed
+comments, exact raw bytes and repeatable preparation are checked separately.
+Current runtime Pinocchio ABA / standard GRiD codegen ignore these passive tags;
+no friction force or codegen option was enabled. No GPU experiment was run, and
+the historical 84/100 cohort retains its original source/configuration identity.
+
+Commands and retained CPU output:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python scripts/prepare_models.py --check
+```
+
+Fourteen CPU tests pass, including all canonical mesh references, finite vertices
+in all 35 STL assets, and full visual/collision geometry loading (51 objects
+each; 70 links, 69 joints and 10 mimic followers). The initial
+mesh-completeness failure is retained; the two missing original asset names were
+subsequently supplied from pinned official PAL repositories (`omni_base_robot`
+`1a66854` and `pal_urdf_utils` `e8600a3`) with their upstream licenses. Their
+source URLs are recorded in `models/tiago_pro/mesh_sources.json`; no equivalence
+to an unavailable installed PAL package is claimed. CPU evidence and download
+receipts stay in `_expr_data/canonical-model-correction-20261020/`.
+No placeholder geometry, source-URI rewrite, archive migration or GPU rerun
+was performed.
+
+The verification below is historical and retains its original model identities.
+
+## Reaching default promotion — 20 October 2026
 
 `configs/reaching.json` now supplies the default for `examples/reach_sim.py`
 and `experiments/random100/run.py`. It pins the effective configuration already

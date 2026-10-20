@@ -1,0 +1,16 @@
+{
+  "base_antena_link.stl": {
+    "canonical_uri": "package://omni_base_description/meshes/base/base_antena_link.stl",
+    "asset_url": "https://raw.githubusercontent.com/pal-robotics/omni_base_robot/1a66854ef525c4bf33cac52b186e23e87b1aae85/omni_base_description/meshes/base/base_antena_link.stl",
+    "asset_commit": "1a66854ef525c4bf33cac52b186e23e87b1aae85",
+    "license_file": "../licenses/omni_base_robot-LICENSE",
+    "license_url": "https://raw.githubusercontent.com/pal-robotics/omni_base_robot/49ecf709e3f42ba0613ccaeb8a07105be24a6c36/LICENSE"
+  },
+  "sick_tim551.stl": {
+    "canonical_uri": "package://pal_urdf_utils/meshes/laser/sick_tim551.stl",
+    "asset_url": "https://raw.githubusercontent.com/pal-robotics/pal_urdf_utils/e8600a339a3a9b7ffe67d1030190b97b67fb577b/meshes/laser/sick_tim551.stl",
+    "asset_commit": "e8600a339a3a9b7ffe67d1030190b97b67fb577b",
+    "license_file": "../licenses/pal_urdf_utils-LICENSE",
+    "license_url": "https://raw.githubusercontent.com/pal-robotics/pal_urdf_utils/e8600a339a3a9b7ffe67d1030190b97b67fb577b/LICENSE"
+  }
+}

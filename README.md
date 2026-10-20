@@ -48,8 +48,10 @@ sources are unmodified. There is no dependency on the historical GATO fork.
   timeout 8 simulated seconds, no dwell or final-approach stage.
 - Position only: the tool orientation is unconstrained.
 
-The source URDFs remain unchanged. A generated simulation copy resolves mesh
-filenames to absolute local paths. A second, equivalent GPU model normalizes
+The canonical full model is the current simulator robot description; its
+original bytes are retained separately. The full and reduced models carry
+explicit right-arm friction/damping metadata. A generated simulation copy
+resolves mesh filenames to absolute local paths. A second, equivalent GPU model normalizes
 joint 6's negative Z axis to positive Z and reflects its position limits.
 The adapter converts that joint's position, velocity and torque signs at the
 GPU boundary; the simulated plant and saved histories use native TIAGo
@@ -58,9 +60,10 @@ same coordinate convention used by the historical TIAGo wrapper: upstream's
 fixed-arm adapter assumes zero topology-helper storage, whereas a directly
 registered signed-axis model needs nonzero helper storage and traps on launch.
 Startup checks compare end-effector FK and one GPU/Pinocchio dynamics step at
-both task poses before starting the MPC loop. Both models use rigid-body
-dynamics without passive joint damping/friction; the source URDF dynamics tags
-are retained, and no physical-model validation is implied.
+both task poses before starting the MPC loop. Both runtime models use rigid-body
+dynamics without passive joint damping/friction; the updated URDF coefficients
+remain metadata because passive dynamics are not enabled. No physical-model
+validation is implied.
 
 ```bash
 # Build/codegen and check model conventions, without a reaching episode:
@@ -133,11 +136,20 @@ not certify physical safety.
 
 ## Models and storage
 
-`models/tiago_pro/tiago_pro.urdf` is the original full supplied URDF, unchanged.
-`models/tiago_pro/meshes/` includes all 33 referenced STL files. The reduced
-`models/tiago_right/tiago_right_arm.urdf` is the existing seven-joint arm model,
-also unchanged, with its gripper mass/inertia already lumped at the tool.
-See `models/README.md` for provenance and hashes.
+`models/tiago_pro/tiago_pro_sim_source.urdf` preserves the exact canonical
+simulator description from `/workspace/GATO/tiago_tools/sim_tiago_urdf.xml`.
+The active `models/tiago_pro/tiago_pro.urdf` replaces the outdated supplied full
+model and applies explicit right-arm friction/damping metadata. The existing
+reduced arm already matched the simulator's kinematics/inertias and retained
+gripper lump; only its seven dynamics tags/comments changed. Left-arm values
+are unchanged. Current reaching still ignores passive forces, so the 84/100
+historical no-friction evidence remains identified by its original source.
+
+All 35 canonical full-model mesh references are supplied, including two assets
+from pinned official PAL repositories. The full visual/collision geometry loads
+and all mesh vertices are finite. See `models/README.md` for the exact source,
+asset licenses, coefficient ranges and wrist assumptions, and the reproducible
+metadata preparation command.
 
 URDFs and code are ordinary Git files. Binary meshes use Git LFS, configured
 by `.gitattributes`; clones must fetch the LFS objects. Generated headers,
