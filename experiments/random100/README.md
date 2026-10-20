@@ -19,12 +19,24 @@ individual timeouts, limit violations and numerical failures retain their
 outputs and independent cases continue. Shared setup failures hold the rest.
 A 180 s process watchdog is distinct from the 8 s simulated observation.
 
-The application settings are those of `examples/reach_sim.py`: B1/N32,
-30 ms control/knots, 3 ms Pinocchio RK4, fixed simulation pacing, SQP5/PCG120,
+The application defaults are `configs/reaching.json`: B1/N32,
+10 ms control/knots, at most 3 ms Pinocchio RK4, fixed simulation pacing, SQP5/PCG120,
 5 cm position plus speed-L1<=1 rad/s, no dwell, orientation or final approach.
 Joint 6's native/GPU coordinate conversion is unchanged. The historical
 reference's orientation slots are preserved as inputs but upstream ignores
 them. The first actual cold solve supplies the first applied torque.
+The default has terminal position weight800, zero soft limit costs, ADMM100 /
+eps_rel .001, q/qd/u penalties1/.3/.0005, and planning bounds .1 rad /80%/85%.
+It is the already tested 84-arrival/100-limit-pass configuration, promoted from
+`c3f226b`; the retained soft+ADMM cohort had69 arrivals and100 limit passes.
+Evidence stays at `/workspace/tiago_mpc-admm-only/_expr_data/admm-only-reaching-20261020/`.
+Selection used an overlapping pilot; this is not holdout or robot evidence.
+
+`--dry-run` reports complete effective settings and the selected JSON hash.
+The selected JSON is copied to the cohort and passed explicitly to each case.
+Explicit `--config` profiles continue to override the frozen legacy base,
+including its30 ms interval and soft costs when those fields are absent.
+Copy and edit the complete `configs/reaching.json` to vary the new defaults.
 
 This is a separately identified successor using modern GATO and ADMM limit
 rows. Historical settings in `historical_protocol.json` are context, not the

@@ -1,4 +1,45 @@
-# Initial simulation verification — 20 October 2026
+# Reaching default promotion — 20 October 2026
+
+`configs/reaching.json` now supplies the default for `examples/reach_sim.py`
+and `experiments/random100/run.py`. It pins the effective configuration already
+tested as `zero_soft_state_rho10.json` at `c3f226b`, based on application
+`e45c441`; upstream GATO stays at `aeacf16e7733df1a17dfd6627f3b5d15c2ba4387`.
+No solver, model, tracking or experiment-input changes were made.
+
+The frozen100 comparison produced84 arrivals,100 sampled physical-limit passes,
+16 timeouts and no execution errors, versus69/100 arrivals and100/100 limit
+passes with retained soft+ADMM. There were16 gained and one lost arrival.
+The candidate was selected using seven cases also in the100; this is not
+independent holdout evidence. Finite-budget returned plans can violate the
+conservative planning bounds; sampled executed-limit passes do not establish
+hard feasibility, collision safety or physical robot qualification. Fixed
+simulation pacing does not charge solve time to the plant.
+
+Original report, configurations, raw data, timings, failures and source receipts
+remain at `/workspace/tiago_mpc-admm-only/_expr_data/admm-only-reaching-20261020/`.
+This promotion reuses that qualified configuration without another GPU cohort
+or performance claim. No retained results were moved or relabeled.
+
+Focused CPU verification:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python experiments/random100/run.py --dry-run
+```
+
+Five tests pass: the complete selected defaults, every explicit historical
+study profile, an explicit empty config reproducing the original example,
+full default dry-run output, and copied default config propagation to a mocked
+case process. No CUDA solver is constructed. CPU logs and both default/retained-profile
+dry-run receipts are in `_expr_data/reaching-default-promotion-20261020/`.
+Explicit historical profiles
+retain their old base; unspecified speed/effort fractions are recorded as null
+with the compiled absolute .1 rad/s / .1 Nm offsets. No-config runs select and
+record the new complete JSON.
+
+The evidence below describes the initial30 ms configuration, before promotion.
+
+## Initial simulation verification — 20 October 2026
 
 Application source: `638022f1757533257974237c45c206d2b4bd344b`.
 GATO: unchanged upstream `aeacf16e7733df1a17dfd6627f3b5d15c2ba4387`.

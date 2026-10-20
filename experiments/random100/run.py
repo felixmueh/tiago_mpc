@@ -16,6 +16,8 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT / "examples"))
+from reaching_config import load_configuration
 
 
 def digest(p):
@@ -43,9 +45,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output", type=Path)
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--config", type=Path, help="Explicit application configuration JSON")
+    p.add_argument("--config", type=Path, help="JSON overrides against the historical base; default configs/reaching.json")
     p.add_argument("--pairs", type=int, nargs="+", help="Declared diagnostic subset; default all100")
     args = p.parse_args()
+    config_path, settings, effective = load_configuration(args.config)
     manifest = json.loads((HERE / "manifest.json").read_text())
     ids = manifest["task_ids"]
     if len(ids) != 100 or len(set(ids)) != 100:
@@ -68,9 +71,12 @@ def main():
                   input_manifest_sha256=digest(HERE / "manifest.json"),
                   application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                   driver_sha256=digest(ROOT / "examples/reach_sim.py"),
-                  configuration_overrides=json.loads(args.config.read_text()) if args.config else {},
-                  configuration_sha256=digest(args.config) if args.config else None,
-                  cohort=(args.config.stem if args.config else "upstream-admm-sqp5")+"-position-only-fixed-clock-8s",
+                  configuration_overrides=settings,
+                  effective_configuration=effective,
+                  configuration_file=str(config_path.resolve()),
+                  configuration_sha256=digest(config_path),
+                  config_resolver_sha256=digest(ROOT / "examples/reaching_config.py"),
+                  cohort=config_path.stem+"-position-only-fixed-clock-8s",
                   differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, public runtime overrides recorded in configuration_overrides and per-case effective settings. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/position goals/order; no original goal posture is used as a trajectory seed.")
     if args.dry_run:
         print(json.dumps(config, indent=2)); return 0
@@ -88,16 +94,15 @@ def main():
     (out / "configuration.json").write_text(json.dumps(config, indent=2)+"\n")
     shutil.copyfile(__file__, out / "run.py")
     shutil.copyfile(HERE / "manifest.json", out / "input_manifest.json")
-    if args.config:
-        shutil.copyfile(args.config, out / "config.json")
+    shutil.copyfile(config_path, out / "config.json")
+    shutil.copyfile(ROOT / "examples/reaching_config.py", out / "reaching_config.py")
     shutil.copytree(HERE / "inputs", out / "inputs")
     rows = []
     for index, task in enumerate(ids):
         case = out / f"pair_{task:05d}"
         cmd = [sys.executable, str(ROOT / "examples/reach_sim.py"), "--input",
                str(out / "inputs" / f"random_{task:05d}.npz"), "--output", str(case)]
-        if args.config:
-            cmd.extend(["--config", str(out / "config.json")])
+        cmd.extend(["--config", str(out / "config.json")])
         start = time.perf_counter()
         with (out / f"pair_{task:05d}.log").open("w") as log:
             try:
