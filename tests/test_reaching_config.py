@@ -21,12 +21,12 @@ LEGACY_ADMM = dict(rho=.01, iters=10, eps_rel=.01, rho_q=.1, rho_qd=.03, rho_u=.
 
 
 class ReachingConfigurationTests(unittest.TestCase):
-    def test_selected_defaults_match_qualified_profile(self):
+    def test_selected_defaults_keep_separate_historical_resolution(self):
         path, settings, effective = load_configuration()
         self.assertEqual(path, DEFAULT_CONFIG)
         self.assertEqual(set(settings['solver_params']), set(LEGACY_SOLVER))
         self.assertEqual(effective['solver_params'], {
-            **LEGACY_SOLVER, 'N_cost': 800., 'q_lim_cost': 0.,
+            **LEGACY_SOLVER, 'N_cost': 8., 'q_lim_cost': 0.,
             'vel_lim_cost': 0., 'ctrl_lim_cost': 0.})
         self.assertEqual((effective['N'], effective['dt_s']), (32, .01))
         self.assertEqual(effective['controller'], dict(

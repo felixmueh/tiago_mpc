@@ -1,3 +1,9 @@
+> Current selection (2026-10-21): Felix selected running/terminal XYZ weights
+> **4/8** for both reaching and tracking. Reaching's terminal weight is now 8;
+> the historical 4/800 reaching results below retain their original configuration
+> and do not qualify this changed default. A bounded new sanity check is pending.
+> Tracking also uses a new GATO smooth-friction pin; see README.md.
+
 # Canonical model correction — 20 October 2026
 
 The current robot description is `/workspace/GATO/tiago_tools/sim_tiago_urdf.xml`.

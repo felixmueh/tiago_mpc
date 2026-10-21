@@ -38,6 +38,21 @@ and retain the recorded hard-Coulomb startup failures. A metadata patch is not
 a claim that matched friction MPC is qualified. Preserve historical models,
 cohorts and outcomes rather than relabeling or silently regenerating them.
 
+## Reaching and tracking defaults — Felix, 2026-10-21
+
+Felix selected running end-effector XYZ cost **4** and terminal XYZ cost **8**.
+`configs/tracking.json` owns tracking settings: qd_cost=.01, u_cost=1e-6,
+all three soft-limit costs zero (ADMM-only limits), actual right-arm losses,
+tanh predictor width .03 rad/s, hard-sign plant, N32/2 ms and .1 ms RK4 plant.
+This is a newly selected configuration awaiting its separately recorded task
+check; old 8/1600 results are not qualification of 4/8. Keep armature inactive
+in both models. Preserve historical protocols and raw cohorts unchanged.
+Reaching also uses running/terminal XYZ weights 4/8 in `configs/reaching.json`;
+only its terminal weight changes from the preceding 4/800 profile. Other reaching
+settings remain task-specific and unchanged. The historical 84/100 cohort used
+4/800 and does not qualify this new terminal weight; a bounded sanity check is
+pending. Do not rerun or relabel the frozen historical cohort.
+
 ## Experiment storage and presentation — Felix, 2026-10-21
 
 ALL new experiment data belongs in this checkout/worktree's `_expr_data/`,

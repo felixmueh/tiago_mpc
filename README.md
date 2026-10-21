@@ -1,7 +1,7 @@
 # TIAGo MPC
 
-One right-arm position reach in internal simulation, using modern upstream
-GATO for torque MPC and Pinocchio RK4 as the simulated plant. No ROS is used.
+Right-arm reaching and figure-eight tracking in internal simulation, using
+modern GATO for torque MPC and Pinocchio RK4 as the simulated plant. No ROS is used.
 
 ## Setup
 
@@ -25,10 +25,11 @@ cd /workspace/tiago_mpc
 ```
 
 GATO is a Git submodule in `external/gato`, pinned to upstream commit
-`aeacf16e7733df1a17dfd6627f3b5d15c2ba4387`. Its own dependencies pin
+`7918a83418dfcc220d40794f2dbd0ddff027a998`, the local smooth-joint-friction
+contribution based on upstream `aeacf16e`. Its own dependencies pin
 `grid-rbd==0.5.1`. The first run generates TIAGo dynamics and compiles just the
-N32 CUDA module (several minutes); later runs reuse `.cache/gato`. Upstream
-sources are unmodified. There is no dependency on the historical GATO fork.
+N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The contribution adds opt-in passive prediction; default-off reaching retains
+the existing rigid-body model. There is no dependency on the historical GATO fork.
 
 ## The example
 
@@ -39,7 +40,7 @@ sources are unmodified. There is no dependency on the historical GATO fork.
 - One reachable position goal, computed by FK from a nearby joint pose.
 - Batch 1, N32, 10 ms prediction/control interval and RK4 plant steps at most 3 ms.
 - SQP cap 5, PCG cap 120/tolerance .001; running position/velocity/effort costs
-  4/.05/.0001, terminal position cost 800, mu 10 and regularization rho .01.
+  4/.05/.0001, terminal position cost 8, mu 10 and regularization rho .01.
 - Zero soft position/velocity/effort limit costs; upstream ADMM limit rows with
   100 iterations, relative tolerance .001 and q/qd/u penalties 1/.3/.0005.
 - PCG for both SQP and ADMM; shifted warm starts and rho reset each feedback.
@@ -98,20 +99,24 @@ See `experiments/random100/README.md` for the explicit differences from the old
 solver experiment. New outputs live under `_expr_data/`.
 Arrival and physical-limit compliance are reported separately.
 
-The current defaults are the tested ADMM-only configuration: **84/100 arrivals
-and 100/100 sampled physical-limit passes**, compared with 69/100 arrivals and
-100/100 limit passes for the retained soft+ADMM profile. The same frozen inputs
+The historical promoted ADMM-only configuration used running/terminal position
+weights 4/800: **84/100 arrivals and 100/100 sampled physical-limit passes**,
+compared with 69/100 arrivals and 100/100 limit passes for the retained soft+ADMM
+profile. Felix has since selected **4/8** for both reaching and tracking; that
+new reaching terminal weight awaits a separately recorded sanity check. The
+historical 100-case outcome does not qualify the changed default. The same frozen inputs
 ran once in original order for each cohort. There were 16 gained arrivals and
 one lost arrival; the selected diagnostic pilot overlaps the 100, so these
-counts are not independent holdout evidence. No GPU rerun was needed to promote
-the already tested configuration.
+counts are not independent holdout evidence. The historical cohort is retained
+without rerunning or relabeling it.
 
 The winning profile is `zero_soft_state_rho10.json` at application commit
 `c3f226b`, based on `e45c441`, in `/workspace/tiago_mpc-admm-only/`.
 Its report, raw cohorts and per-case effective settings remain in that checkout's
-`_expr_data/admm-only-reaching-20261020/`. The complete default pins its effective
-N32/10 ms settings, including the .1 rad planning margin and native N32 ADMM PCG
-policy. Preview is .31 s. See `VERIFICATION.md` for scope and verification.
+`_expr_data/admm-only-reaching-20261020/`. Current reaching retains its N32/10 ms
+settings, .1 rad planning margin and native N32 ADMM PCG policy, with terminal
+position weight changed from 800 to 8. Preview is .31 s. See `VERIFICATION.md`
+for historical scope and verification.
 
 Both commands above select `configs/reaching.json` when `--config` is omitted.
 The runner's dry-run prints full effective solver, controller and bound settings;
@@ -126,8 +131,7 @@ frozen legacy base, so historical profiles reproduce their old settings:
 
 To reproduce the original 30 ms/terminal80 example, pass an explicit JSON file
 containing `{}`. To customize the new defaults, copy `configs/reaching.json`
-and edit that complete file. The historical configuration-study profiles and
-upstream GATO remain unchanged.
+and edit that complete file. The historical configuration-study profiles retain their original settings.
 
 Simulation uses fixed pacing: computation time does not advance the plant.
 Recorded solve times are diagnostic, not benchmark results. Collision checking
@@ -158,3 +162,42 @@ URDFs and code are ordinary Git files. Binary meshes use Git LFS, configured
 by `.gitattributes`; clones must fetch the LFS objects. Generated headers,
 binaries, environment and run results are ignored. No remote is configured
 for this new repository.
+
+
+## Figure-eight tracking
+
+`examples/track_figure8.py` uses `configs/tracking.json`. Felix selected running
+end-effector XYZ weight **4** and terminal XYZ weight **8**. Joint-velocity
+regularization remains **0.01** and actuator-torque regularization **1e-6**.
+Orientation and joint-posture objectives are inactive. All three soft-limit
+weights are zero; ADMM joint-position, velocity and actuator-effort constraints
+remain enabled. This selection awaits its separately recorded task check; older
+8/1600 results do not qualify the new 4/8 weights.
+
+The plant uses the supplied actual right-arm Coulomb/damping coefficients with
+hard-sign friction; GATO uses tanh friction with **0.03 rad/s** smoothing plus
+viscous damping. Armature is metadata only and remains inactive in both models.
+N32, 2 ms prediction/control and 0.1 ms RK4 plant substeps track a 24 s horizontal
+figure eight, 0.28 m wide and 0.18 m high. This uses exact state and fixed simulation
+time: computation latency does not advance the plant. It is not a real-time or
+physical-robot qualification. Collisions are not checked.
+
+```bash
+.venv/bin/python examples/track_figure8.py --output _expr_data/tracking/my-run --stop-on-raw-limit
+# Only generate/build and check predictor values/Jacobians:
+.venv/bin/python examples/track_figure8.py --output _expr_data/tracking/model-check --build-only
+```
+
+Use a fresh output directory and coordinate sequential GPU use. Saved native
+joint states, task reference, actuator torques, predictions and effective settings
+remain in that output. `--losses plant-only` retains plant losses and disables
+predictor losses; `--losses neither` disables both for an explicit comparison.
+Hard-sign prediction from the old compatibility adapter is not offered: its
+reviewed historical implementation requires a different GATO pin. Explicit
+`--config` files retain their own coefficients and settings.
+
+Use `experiments/tools.py:save_replay` for the shared interactive viewer handoff;
+see `../tiago_mpc_visualizer/docs/replay-format.md`. Historical study protocols,
+raw cohorts and rendering helpers remain on their experiment branches. Reaching
+also uses running/terminal XYZ weights 4/8; its other task-specific settings and
+the frozen random100 cohorts are unchanged.

@@ -43,7 +43,7 @@ def git(*args, cwd=ROOT):
     return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
 
 
-def runtime_urdf():
+def runtime_urdf(joint_dynamics=None):
     """Resolve meshes; normalize signed axes only in the GPU coordinate model."""
     manifest = json.loads((ROOT / "models/manifest.json").read_text())
     for relative, info in manifest.items():
@@ -56,7 +56,11 @@ def runtime_urdf():
         if not path.is_file():
             raise FileNotFoundError(path)
         mesh.set("filename", str(path))
-    out = ROOT / ".cache/models/tiago_right_arm.urdf"
+    if joint_dynamics is not None:
+        from joint_dynamics import configure_urdf
+        configure_urdf(tree, joint_dynamics)
+    suffix = "_dissipative" if joint_dynamics is not None else ""
+    out = ROOT / f".cache/models/tiago_right_arm{suffix}.urdf"
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
     if not out.exists() or out.read_bytes() != payload:
@@ -78,7 +82,7 @@ def runtime_urdf():
             if safety is not None:
                 lo, hi = float(safety.get("soft_lower_limit")), float(safety.get("soft_upper_limit"))
                 safety.set("soft_lower_limit", repr(-hi)); safety.set("soft_upper_limit", repr(-lo))
-    gpu_path = out.with_name("tiago_right_grid.urdf")
+    gpu_path = out.with_name(f"tiago_right_grid{suffix}.urdf")
     payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
     if not gpu_path.exists() or gpu_path.read_bytes() != payload:
         gpu_path.write_bytes(payload)
