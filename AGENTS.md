@@ -68,7 +68,14 @@ the archives. Main's current code/defaults, the separate ROS2 work and the upstr
 axes PR remain. After creating the friction issue, Felix also authorized removal
 of `/workspace/GATO-smooth-friction` and `feature/smooth-joint-friction`, including
 its drafts and benchmark data. Smooth friction remains available through main's
-pinned GATO commit `7918a83418dfcc220d40794f2dbd0ddff027a998`.
+pinned GATO commit `37a6768d575c4a09e2ec90e51a7c4029568e3fec`
+(upstream 0.1.2 plus the friction patch, using grid-rbd 0.5.3; supersedes the
+preceding 7918a83 pin).
+The 0.1.2 update preserves all task configs, costs, ADMM settings and model
+files. Fifteen CPU checks and one fresh default tracking/reaching pair passed;
+new raw validation is retained in
+`/workspace/tiago_mpc-gato012/_expr_data/gato012/`. Zero-weight soft-limit
+expressions are still evaluated by GRiD; there is no public skip switch.
 The native-axes PR is not yet adopted by main: its
 joint-6 GPU boundary conversion remains required at the current pin.
 

@@ -25,12 +25,32 @@ cd /workspace/tiago_mpc
 ```
 
 GATO is a Git submodule in `external/gato`, pinned to commit
-`7918a83418dfcc220d40794f2dbd0ddff027a998`, the local smooth-joint-friction
-contribution based on upstream `aeacf16e`. Its own dependencies pin
-`grid-rbd==0.5.1`. The first run generates TIAGo dynamics and compiles just the
+`37a6768d575c4a09e2ec90e51a7c4029568e3fec`, upstream **GATO 0.1.2**
+(`bd60b24`) plus our opt-in smooth-joint-friction contribution. Its dependencies
+pin `grid-rbd==0.5.3`. The first run generates TIAGo dynamics and compiles just the
 N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The
 contribution adds opt-in passive prediction; default-off reaching retains
 the existing rigid-body model. There is no dependency on the historical GATO fork.
+
+## Updating from the previous GATO pin
+
+After updating this repository, run `git submodule update --init --recursive`
+and `.venv/bin/python -m pip install -r requirements.txt`. GATO 0.1.2 requires
+GRiD 0.5.3; updating only the submodule leaves the old Python dependency installed.
+Registered modules rebuild in this checkout's cache when their source/dependency
+identity changes. Do not copy old `.so` files into the new installation.
+
+This update preserves the reaching/tracking costs, ADMM settings, bounds,
+warm-start policy and timing. The joint-6 GPU-boundary coordinate conversion
+remains required: the separate native-axes PR is not included in this pin.
+GRiD 0.5.3 handles rotated inertial origins; our current reduced arm already has
+zero inertial RPY, so no inertia normalization or URDF change is needed.
+Zero soft-limit weights remain explicit in both default configurations. GRiD
+0.5.3 still evaluates their barrier expressions; it provides no public switch to
+skip that work. This update leaves those calculations and ADMM unchanged.
+The 0.1.2 validation repeated one full default tracking cycle (26.536 mm RMS)
+and one default reach (.270 s to the existing 5 cm arrival gate); sampled raw
+limits passed, including all returned tracking plans. See `VERIFICATION.md`.
 
 ## The example
 

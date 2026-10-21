@@ -8,6 +8,41 @@
 > 40.570 mm peak, 31.392 mm endpoint; sampled executed and predicted raw limits
 > passed. These fixed-clock results are not real-time qualification; see README.md.
 
+## GATO 0.1.2 update — 21 October 2026
+
+GATO `37a6768` is upstream release `bd60b24` plus the existing smooth-friction
+patch, using GRiD 0.5.3 and Pinocchio 3.9.0. Application configs, example code,
+models, ADMM settings and the joint-6 conversion are unchanged. Fifteen app CPU
+checks and both CLI imports pass; five upstream friction host cases and the
+rotated-inertial normalization CPU/codegen test pass.
+
+Exactly one default 24 s figure-eight and one default reach ran sequentially:
+
+| Check | Result |
+| --- | --- |
+| Tracking, 12,000 solves | 26.536 mm RMS, 40.570 mm peak error; 17.756 Nm peak actuator torque |
+| Tracking model step / A-block FD | Maximum errors 5.96e-7 / 1.70e-5, including the zero-velocity check |
+| Tracking raw limits | All recorded states/controls and all 12,000 returned plans pass; zero sampled excess |
+| Reaching, 27 solves | Arrived at .270 s, 49.830 mm error, .624 rad/s speed L1; zero sampled raw-limit excess |
+| Reaching model steps | Maximum absolute state errors 3.11e-5 / 2.71e-5 |
+
+Commands were `.venv/bin/python examples/track_figure8.py --output <run>/tracking`
+and `.venv/bin/python examples/reach_sim.py --output <run>/reaching`, with no
+configuration overrides. Raw histories, logs, configuration/source snapshots,
+environment versions, case commands and the all-plan limit check are retained in
+`/workspace/tiago_mpc-gato012/_expr_data/gato012/gpu-20261021T133147.514641Z/`;
+CPU logs are in that upgrade checkout's `_expr_data/gato012/`. These match the preceding pin's recorded aggregate metrics;
+the deleted older raw runs are unavailable for a pointwise comparison.
+Fixed-clock simulation ignores compute latency; this is bounded functional
+validation, not a timing benchmark, settling or physical-robot qualification.
+
+Portable replays are in shared ingest at
+`validation/gato-0.1.2-20261021/{tracking,reaching}_default_ee4_terminal8.npz`.
+The viewer catalog marks both ready and both scene endpoints return HTTP 200.
+Tracking display samples use every twentieth plant state plus the final state;
+reaching retains all states. Native velocities and exact held actuator commands
+are included; predictions are omitted. Full raw samples remain in the run above.
+
 ## Integrated 4/8 defaults — 21 October 2026
 
 Integration code source `4dde1f8` uses GATO contribution `7918a83` with first-order
