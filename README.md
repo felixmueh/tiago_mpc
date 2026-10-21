@@ -1,7 +1,11 @@
-# TIAGo MPC
+# gato_tiago
 
 Right-arm reaching and figure-eight tracking in internal simulation, using
-modern GATO for torque MPC and Pinocchio RK4 as the simulated plant. No ROS is used.
+modern GATO for torque MPC and Pinocchio RK4 as the simulated plant. ROS 2 is
+optional. This is the new application repository, separate from the historical
+`felix-devel` implementation. The ROS runner has outstanding safety-review
+findings listed in [its guide](docs/ROS2_RUNNER.md#outstanding-review-findings);
+it is not qualified for physical execution.
 
 ## Setup
 
@@ -11,7 +15,7 @@ Setup installs CMake 3.31.10 into the virtual environment.
 
 ```bash
 git lfs install
-git clone --recurse-submodules <this-repository> tiago_mpc
+git clone --recurse-submodules https://github.com/felixmueh/gato_tiago.git tiago_mpc
 cd tiago_mpc
 ./scripts/setup.sh
 .venv/bin/python examples/reach_sim.py
@@ -30,11 +34,14 @@ GATO is a Git submodule in `external/gato`, pinned to commit
 pin `grid-rbd==0.5.3`. The first run generates TIAGo dynamics and compiles just the
 N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The
 contribution adds opt-in passive prediction; default-off reaching retains
-the existing rigid-body model. There is no dependency on the historical GATO fork.
+the existing rigid-body model. The submodule uses the published
+`integration/tiago-friction-0.1.2` branch on `felixmueh/GATO`; its commit remains
+pinned above. That branch is based on upstream 0.1.2, not historical `felix-devel`.
 
 ## Updating from the previous GATO pin
 
-After updating this repository, run `git submodule update --init --recursive`
+After updating this repository, run `git submodule sync --recursive`, then
+`git submodule update --init --recursive`
 and `.venv/bin/python -m pip install -r requirements.txt`. GATO 0.1.2 requires
 GRiD 0.5.3; updating only the submodule leaves the old Python dependency installed.
 Registered modules rebuild in this checkout's cache when their source/dependency
@@ -187,8 +194,8 @@ metadata preparation command.
 
 URDFs and code are ordinary Git files. Binary meshes use Git LFS, configured
 by `.gitattributes`; clones must fetch the LFS objects. Generated headers,
-binaries, environment and run results are ignored. No remote is configured
-for this new repository.
+binaries, environment and run results are ignored. The application remote is
+[`felixmueh/gato_tiago`](https://github.com/felixmueh/gato_tiago).
 
 
 ## Figure-eight tracking

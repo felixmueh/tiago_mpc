@@ -6,6 +6,20 @@ integrated on `main`. ROS 2 is optional: simulation examples and package imports
 do not require ROS packages or initialize ROS. Source a compatible ROS/PAL
 environment only when constructing a ROS client.
 
+## Outstanding review findings
+
+The 21 October review found issues not covered by the passing tests below.
+They remain unfixed in this published snapshot:
+
+- Reused effort controllers need validation of their exact configured joint order.
+- Late successful collision checks can clear their timeout before it is enforced.
+- SEA body-only feedback changes can reuse a safety sequence and skip checks.
+- Missing gripper mimic followers can give incorrect stationary finger geometry.
+- Task and worker settings need one immutable configuration snapshot.
+
+The first four have CPU reproductions in the local
+`_expr_data/ros2-code-review-20261021/` notes. Physical execution is not qualified.
+
 ```mermaid
 flowchart LR
     Robot[ROS 2 robot] -->|named state| IO[Caller: ROS I/O and watchdogs]
@@ -143,7 +157,7 @@ faults, actual geometry and process/handback/expiry gates have separate CPU
 coverage. No live ROS connection or robot commands were made.
 
 Current raw logs, requests/replies, configurations and native histories:
-`/workspace/tiago_mpc-ros2/_expr_data/ros2-main-integration/`, with GPU runs in
+`/workspace/tiago_mpc/_expr_data/ros2-worktree/ros2-main-integration/`, with GPU runs in
 `gpu-20261021T152122Z/`. `scripts/prepare_models.py --check` and
 `scripts/prepare_safety_model.py --check` pass; the active safety overlay retains
 canonical actual-value metadata, unchanged reviewed geometry and blacklist.
@@ -172,3 +186,7 @@ Post-correction combined CPU log:
 `_expr_data/canonical-model-correction-20261020/ros-integration-cpu.log`.
 GPU inputs/replies/config/source/history/logs:
 `_expr_data/ros2-runner-20261020/gpu-worker-smoke/20261020T215730.176115Z/`.
+
+After removing the merged ROS2 worktree, these historical relative validation
+paths resolve beneath main's `_expr_data/ros2-worktree/`. Original path strings
+inside raw records remain unchanged.

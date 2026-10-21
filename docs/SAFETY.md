@@ -140,3 +140,7 @@ qualify the current model. That earlier development includes a failed test-only
 zero-margin fixture assumption; the final transport test isolates the checker
 instead. No posture search, new blacklist decisions, solver changes or robot
 experiments were performed.
+
+The merged ROS2 worktree was subsequently removed at Felix's request. Its
+retained validation directories now live under main's `_expr_data/ros2-worktree/`;
+original paths inside receipts remain historical.

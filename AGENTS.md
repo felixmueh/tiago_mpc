@@ -27,8 +27,20 @@ Integration checks: 147 CPU tests plus 118 subtests pass without ROS installed;
 real spawned N32 GPU workers pass three requests each for reaching/tracking,
 with native Pinocchio simulation, finite/raw-bounded torques, preserved 100 ms
 leases and clean exit. Raw checks remain in
-`/workspace/tiago_mpc-ros2/_expr_data/ros2-main-integration/`. These are bounded
+`/workspace/tiago_mpc/_expr_data/ros2-worktree/ros2-main-integration/`. These are bounded
 integration checks, not a physical or complete ROS task qualification.
+
+Felix authorized removal of the merged `integration/ros2-adapter` branch and
+`/workspace/tiago_mpc-ros2` worktree after integration. Its ignored validation
+files were retained under main's `_expr_data/ros2-worktree/`; embedded original
+paths remain historical. Current review notes are in
+`_expr_data/ros2-code-review-20261021/`; the confirmed findings are summarized in
+`docs/ROS2_RUNNER.md`. Publishing the repository does not resolve those findings.
+
+The application remote is `https://github.com/felixmueh/gato_tiago.git`. Its GATO
+submodule points to `felixmueh/GATO` so the pinned smooth-friction commit is
+fetchable on `integration/tiago-friction-0.1.2`. This is separate from historical
+`felix-devel`; do not push or update that old branch as part of application work.
 
 ## Nominal grasp-center frame — Felix, 2026-10-21
 
