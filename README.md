@@ -29,14 +29,14 @@ cd /workspace/tiago_mpc
 ```
 
 GATO is a Git submodule in `external/gato`, pinned to commit
-`37a6768d575c4a09e2ec90e51a7c4029568e3fec`, upstream **GATO 0.1.2**
-(`bd60b24`) plus our opt-in smooth-joint-friction contribution. Its dependencies
+`f7be8b75dae562400f84816883e7bb848b9874fa`, upstream **GATO 0.1.2**
+(`bd60b24`) plus our opt-in smooth-joint-friction and runtime-width contributions. Its dependencies
 pin `grid-rbd==0.5.3`. The first run generates TIAGo dynamics and compiles just the
 N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The
 contribution adds opt-in passive prediction; default-off reaching retains
 the existing rigid-body model. The submodule uses the published
-`integration/tiago-friction-0.1.2` branch on `felixmueh/GATO`; its commit remains
-pinned above. That branch is based on upstream 0.1.2, not historical `felix-devel`.
+`felixmueh/GATO` fork; its exact commit is pinned above. These contributions are
+based on upstream 0.1.2, not historical `felix-devel`.
 
 ## Updating from the previous GATO pin
 
@@ -46,6 +46,11 @@ and `.venv/bin/python -m pip install -r requirements.txt`. GATO 0.1.2 requires
 GRiD 0.5.3; updating only the submodule leaves the old Python dependency installed.
 Registered modules rebuild in this checkout's cache when their source/dependency
 identity changes. Do not copy old `.so` files into the new installation.
+The runtime-width pin changes the native friction ABI and requires one rebuild
+of existing smooth-friction modules. Normal registration and module loading
+handle cache invalidation; restart existing workers after updating the package.
+Numeric smoothing-width changes then reuse the generated model and binary;
+coefficients and friction enablement still require their own compiled identity.
 
 This update preserves the reaching/tracking costs, ADMM settings, bounds,
 warm-start policy and timing. The joint-6 GPU-boundary coordinate conversion
@@ -246,6 +251,15 @@ Raw validation is in `/workspace/tiago_mpc-grasp-frame/_expr_data/grasp-center/`
 The plant uses the supplied actual right-arm Coulomb/damping coefficients with
 hard-sign friction; GATO uses tanh friction with **0.03 rad/s** smoothing plus
 viscous damping. Armature is metadata only and remains inactive in both models.
+Registration supplies the configured scalar or seven-joint smoothing widths to
+each new solver automatically. The public
+`solver.set_joint_friction_smoothing(widths)` method changes only that instance
+between solves without rebuilding or resetting warm starts. The standard task
+runners retain their configured width throughout a run. Controller setup details
+(including ROS worker summaries) and tracking's `model_receipt.json` record the
+effective seven float32 widths as `joint_friction_smoothing_rad_s`; it is `null`
+when predictor friction is disabled. Record a new receipt after any deliberate
+runtime change: the module hash alone no longer identifies the smoothing law.
 N32, 2 ms prediction/control and 0.1 ms RK4 plant substeps track a 24 s horizontal
 figure eight, 0.28 m wide and 0.18 m high. This uses exact state and fixed simulation
 time: computation latency does not advance the plant. It is not a real-time or

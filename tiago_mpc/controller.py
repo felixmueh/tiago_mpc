@@ -74,6 +74,8 @@ def build_controller(effective, *, cache_dir, ee_frame=EE_FRAME):
         reference_frame=reference_frame, ee_frame=ee_frame, end_effector_frame=ee_frame,
         joint_names=list(names), gpu_joint_coordinate_signs=signs.tolist(),
         prediction_joint_dynamics=losses, generator_adapter=adapter,
+        joint_friction_smoothing_rad_s=(None if solver.joint_friction_smoothing is None
+                                       else solver.joint_friction_smoothing.tolist()),
         q_lower=model.lowerPositionLimit.tolist(), q_upper=model.upperPositionLimit.tolist(),
         velocity_limits=model.velocityLimit.tolist(), effort_limits=model.effortLimit.tolist(),
         model_step_max_abs_errors=errors, plant_name=plant, cache_dir=str(cache_dir))

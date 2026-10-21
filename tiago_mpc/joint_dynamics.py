@@ -90,12 +90,14 @@ def register_robot(name, urdf_path, *, n_points, ee_frame, config):
 
 
 def model_receipt(solver, name, gpu_path):
-    """Exact generated-header and loaded binary identity for a saved cohort."""
+    """Model identity and effective runtime widths for a saved cohort."""
     from gato import _cache
     entry, plant_root = _cache.resolve(name)
     directory = plant_root/name
     binary = Path(solver.lib.__file__)
     return dict(plant_name=name, codegen_key=entry["codegen_key"],
+        joint_friction_smoothing_rad_s=(None if solver.joint_friction_smoothing is None
+                                       else solver.joint_friction_smoothing.tolist()),
         prediction_urdf_sha256=hashlib.sha256(Path(gpu_path).read_bytes()).hexdigest(),
         header_path=str(directory/"grid.cuh"),
         header_sha256=hashlib.sha256((directory/"grid.cuh").read_bytes()).hexdigest(),
