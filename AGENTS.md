@@ -38,12 +38,19 @@ and retain the recorded hard-Coulomb startup failures. A metadata patch is not
 a claim that matched friction MPC is qualified. Preserve historical models,
 cohorts and outcomes rather than relabeling or silently regenerating them.
 
-## Experiment storage — Felix, 2026-10-20
+## Experiment storage and presentation — Felix, 2026-10-21
 
 ALL new experiment data belongs in this checkout/worktree's `_expr_data/`,
 including raw results, logs, intermediate analysis, archives/backups, and final
-reports/figures. Keep `_expr_data/` ignored by Git. Do not write new data to
-`/workspace/experiment_data/`, any shared sibling data directory, or GATO's
+reports/figures. Keep `_expr_data/` ignored by Git. The explicit exception is
+portable replay handoffs: use **`impl/_expr_data/ingest/` on the host** and
+**`/workspace/_expr_data/ingest/` in the container** (the same mounted directory).
+This replaces the proposed shared `_expr_results` name. Use study/cohort
+subfolders and descriptive, distinct `.npz` filenames; do not put full raw
+archives or logs in the ingest directory. Preserve existing historical paths
+and recordings instead of moving or rewriting them.
+
+Do not write new data to `/workspace/experiment_data/` or GATO's
 `thesis_results/` for this non-thesis work.
 
 `/workspace/experiment_data_ma_frozen_archive/` is the frozen MASTER THESIS
@@ -52,5 +59,35 @@ and provenance; do not recreate the old directory or a compatibility alias.
 Existing old path strings in raw records are historical, resolved using the
 storage relocation manifest. This policy overrides older output instructions.
 
+Unless Felix explicitly requests a particular plot, make the default handoff:
+
+- Export recorded motion with `experiments/tools.py:save_replay` into the shared
+  ingest directory. Use native joints, actual timestamps and the task reference;
+  include saved predictions and recorded velocity/actuator torque/limits when
+  available. These telemetry fields are optional. Do not invent motion or rerun retained
+  experiments just to make a replay. The visualizer's export cookbook is
+  `../tiago_mpc_visualizer/docs/replay-format.md` from the main checkout.
+- Give the viewer URL (normally `http://192.168.178.82:8090`) and exact library
+  path(s), such as `reaching/study/run_017`, so Felix can inspect them immediately.
+- State the short finding, relevant recorded metrics/outcomes and material
+  limitations. Preserve failures and original labels; selected replays do not
+  replace aggregate cohort outcomes. Clearly identify simulation versus robot
+  data, predicted versus executed motion, and the time basis.
+- Link the raw source run and effective configuration/protocol; retain model
+  and source identities. Explicitly label display-only subsampling/conversion
+  and keep the complete raw measurements in their original owning checkout.
+
+For timing/memory or other studies without recorded motion, use a compact
+metrics table plus raw-output links. Produce the specific requested plot when
+Felix asks for one; otherwise keep the replay/summary handoff concise.
+
 Use agents liberally for useful bounded tasks; root coordinates interpretation,
 shared edits and sequential GPU use. Preserve scientific protocols and failures.
+
+## Worktree cleanup — Felix, 2026-10-21
+
+Queue worktree cleanup after merging branches. At the end of the work session,
+inspect loose changes/results and propose the exact paths and branches to
+remove, stating where useful work is retained. Do not remove worktrees or delete
+branches automatically; wait for approval. Do not interrupt ongoing tasks with
+cleanup proposals.
