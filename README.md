@@ -111,13 +111,12 @@ qualify the changed default, and this short check does not establish broad
 reaching reliability or precise settling. The same frozen inputs
 ran once in original order for each cohort. There were 16 gained arrivals and
 one lost arrival; the selected diagnostic pilot overlaps the 100, so these
-counts are not independent holdout evidence. The historical cohort is retained
-without rerunning or relabeling it.
+counts are not independent holdout evidence. Its raw results were deleted at
+Felix's request during cleanup on 2026-10-21; these are historical summaries.
 
-The winning profile is `zero_soft_state_rho10.json` at application commit
-`c3f226b`, based on `e45c441`, in `/workspace/tiago_mpc-admm-only/`.
-Its report, raw cohorts and per-case effective settings remain in that checkout's
-`_expr_data/admm-only-reaching-20261020/`. Current reaching retains its N32/10 ms
+The selected historical profile was `zero_soft_state_rho10.json` at application
+commit `c3f226b`, based on `e45c441`. That experiment checkout and branch were
+removed after its decisions were integrated. Current reaching retains its N32/10 ms
 settings, .1 rad planning margin and native N32 ADMM PCG policy, with terminal
 position weight changed from 800 to 8. Preview is .31 s. See `VERIFICATION.md`
 for historical scope and verification.
@@ -203,26 +202,21 @@ reviewed historical implementation requires a different GATO pin. Explicit
 `--config` files retain their own coefficients and settings.
 
 Use `experiments/tools.py:save_replay` for the shared interactive viewer handoff;
-see `../tiago_mpc_visualizer/docs/replay-format.md`. Historical study protocols,
-raw cohorts and rendering helpers remain on their experiment branches. Reaching
-also uses running/terminal XYZ weights 4/8; its other task-specific settings and
-the frozen random100 cohorts are unchanged.
+see `../tiago_mpc_visualizer/docs/replay-format.md`. The completed experiment
+branches and their raw results were removed at Felix's request after
+the decisions were integrated or discarded. Reaching also uses running/terminal
+XYZ weights 4/8; its other task-specific settings are unchanged.
 
-The 4/8 tracking replay is in the viewer at
-`tracking/default-weights-20261021/default_xyz4_terminal8_torque1e-6`
-(normally <http://192.168.178.82:8090>). The recorded episode used application
-source `b582309`; its final study branch is `199c899`. The retained raw run and
-report are in the main checkout's
-`_expr_data/session-20261021/tiago_mpc-larger-fig8/_expr_data/default-tracking-weights-20261021/`.
+The historical 4/8 tracking episode used application source `b582309` and final
+study commit `199c899`. Its raw run, report and viewer replay were deleted at
+Felix's request during cleanup on 2026-10-21.
 The integration's effective tracking parameters match that episode; only the
 configuration description and removal of the unused historical hard-predictor
 adapter differ.
 
-The one 4/8 reaching sanity replay is
-`reaching/default-weights-20261021/default_xyz4_terminal8`: all 109 recorded states
-and five retained initial predictions. It stops on the existing 5 cm arrival
+The one 4/8 reaching sanity episode stopped on the existing 5 cm arrival
 gate (49.830 mm final error, speed L1 .624 rad/s), not after settling. Reaching
 continues to use rigid-body plant and predictor dynamics with passive forces
-inactive. The raw sanity run used integration source `4dde1f8` and is retained at
-`_expr_data/session-20261021/tiago_mpc-tracking-defaults/_expr_data/checks/reaching-4-8/`
-in the main checkout.
+inactive. It used integration source `4dde1f8`; its raw run and viewer replay
+were also deleted during the authorized cleanup. Run a fresh episode and export
+it with `experiments/tools.py:save_replay` to inspect the current defaults.

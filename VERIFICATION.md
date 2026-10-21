@@ -31,14 +31,10 @@ and effort excesses were zero. This first-arrival stop is not precise settling,
 and one short reach does not qualify the historical random100 cohort. Reaching
 retains rigid-body dynamics without passive losses.
 
-Full logs, generated model receipts and reproducible bounded check/export scripts
-are retained in the main checkout under
-`_expr_data/session-20261021/tiago_mpc-tracking-defaults/_expr_data/checks/`.
-The replay library path is
-`reaching/default-weights-20261021/default_xyz4_terminal8`; it contains all 109
-recorded states, native velocities/applied torques and the five saved initial
-predictions. No episode was rerun for export. The separately recorded 24 s
-tracking result and its replay/raw paths are documented in README.md.
+Felix explicitly requested deletion of these completed experiments' raw data,
+logs, check/export scripts, archive copies and viewer replays during cleanup on
+2026-10-21. The measurements above remain historical summaries; the underlying
+records are no longer retained. Current code and defaults remain on main.
 
 The existing upstream contribution default-off baseline/final benchmarks remain
 at `/workspace/GATO-smooth-friction/_expr_data/smooth-friction-20261020/BENCHMARK.md`.
@@ -113,10 +109,11 @@ conservative planning bounds; sampled executed-limit passes do not establish
 hard feasibility, collision safety or physical robot qualification. Fixed
 simulation pacing does not charge solve time to the plant.
 
-Original report, configurations, raw data, timings, failures and source receipts
-remain at `/workspace/tiago_mpc-admm-only/_expr_data/admm-only-reaching-20261020/`.
-This promotion reuses that qualified configuration without another 100-case
-cohort or performance claim. No retained results were moved or relabeled.
+The original report, raw data, timings, failures and source receipts were deleted
+at Felix's request during cleanup on 2026-10-21, together with that experiment's
+worktree and branch. The counts above are historical summaries. The promotion
+originally reused that configuration without another 100-case cohort or
+performance claim.
 
 Focused CPU verification:
 

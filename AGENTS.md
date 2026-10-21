@@ -56,6 +56,18 @@ passed the existing 5 cm arrival gate at .270 s with sampled raw limits passing;
 this is not broad reaching or settling qualification. Do not rerun or relabel
 the frozen historical cohort.
 
+## Completed experiment cleanup — Felix, 2026-10-21
+
+Felix authorized removal of the ten completed app experiment/integration
+worktrees and branches (ADMM-only, friction/damping, loss diagnosis, native-axis
+spike, smooth friction, smooth reaching, zero control cost, paired reach render,
+larger figure eight and tracking defaults), including their raw results, session
+archive copies and associated viewer replays. Their decisions are integrated or
+discarded. Do not describe those deleted records as still available or recreate
+the archives. Main's current code/defaults, the separate ROS2 work and the upstream
+axes/friction PRs remain. The native-axes PR is not yet adopted by main: its
+joint-6 GPU boundary conversion remains required at the current pin.
+
 ## Experiment storage and presentation — Felix, 2026-10-21
 
 ALL new experiment data belongs in this checkout/worktree's `_expr_data/`,
