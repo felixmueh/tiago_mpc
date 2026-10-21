@@ -12,13 +12,15 @@ Completed with main's GATO 0.1.2 + friction patch / GRiD 0.5.3 environment:
 - `python -m unittest discover -s tests -q`: 16 checks pass, including full
   simulator pad-midpoint FK and unchanged mass/gravity at three arm states.
 - `python examples/reach_sim.py --output _expr_data/grasp-center/reach`:
-  native/Pinocchio FK and dynamics checks pass; coarse 5 cm arrival at .090 s
+  frame/sign mapping and native GPU/Pinocchio dynamics checks pass; coarse
+  5 cm arrival at .090 s
   from 63.308 mm displacement; sampled executed raw limits pass. This short
   sanity check does not qualify settling or broad reaching.
 - `python examples/track_figure8.py --output _expr_data/grasp-center/tracking`:
   24 s completed, 20.806 mm RMS, 31.216 mm peak; sampled executed raw limits
-  and all 12,000 saved raw plans pass. Native/Pinocchio EE difference at the
-  checked pose is zero to stored precision. The Cartesian task changes with
+  and all 12,000 saved raw plans pass. GATO's Pinocchio-backed EE helper agrees
+  at the checked pose; this is not an independent CUDA FK check. The full
+  tracking loop exercises the device cost. The Cartesian task changes with
   the TCP, so no isolated tracking-improvement claim follows.
 
 Commands used `/workspace/tiago_mpc/.venv/bin/python`, with
@@ -27,6 +29,9 @@ Raw validation and source snapshots:
 `/workspace/tiago_mpc-grasp-frame/_expr_data/grasp-center/`.
 The matching viewer preserves legacy flange replays and derives the new TCP
 from the reduced model; its 51 CPU checks pass.
+The viewer's N16/32/64/128 modules were rebuilt for the new frame. Two-pose
+viewer/reduced-model FK agrees within 1.2e-16 m. Cache/build/FK receipts are in
+`/workspace/tiago_mpc_visualizer/_expr_data/grasp-center/`.
 
 > Current selection (2026-10-21): Felix selected running/terminal XYZ weights
 > **4/8** for both reaching and tracking. Reaching's terminal weight is now 8;

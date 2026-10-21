@@ -12,7 +12,8 @@ Keep full simulator URDF bytes and the flange frame unchanged. Viewers must
 derive the extra frame from the reduced model. Save `end_effector_frame` in
 summaries/replay exports. Missing historical metadata means flange; do not
 reinterpret old XYZ references or qualification results at the new point.
-The grasp-center default passed 16 application CPU checks, native/Pinocchio FK,
+The grasp-center default passed 16 application CPU checks, frame/sign mapping,
+native GPU/Pinocchio dynamics,
 one coarse reach and one full 24 s tracking check (20.806 mm RMS; executed
 samples and all 12,000 saved plans inside raw limits). Raw data remains in
 `/workspace/tiago_mpc-grasp-frame/_expr_data/grasp-center/`. Existing 26.536 mm
