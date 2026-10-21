@@ -196,7 +196,8 @@ def test_optional_ros_import_does_not_require_gpu_or_legacy_gato():
     import subprocess
     from pathlib import Path
     result = subprocess.run([sys.executable, '-c',
-        'import sys; import tiago_mpc.ros2; '
-        'assert "rclpy" not in sys.modules; assert "gato" not in sys.modules'],
+        'import sys; import tiago_mpc.ros2, tiago_mpc.runner, tiago_mpc.mpc_worker; '
+        'assert "rclpy" not in sys.modules; assert "gato" not in sys.modules; '
+        'assert "pinocchio" not in sys.modules'],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

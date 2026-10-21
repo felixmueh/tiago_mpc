@@ -1,3 +1,117 @@
+## Nominal grasp-center frame — 2026-10-21
+
+The reduced model adds a massless fixed TCP at flange-local `(0, 0,
+.139288457525)` m, the nominal contact-pad midpoint at zero gripper posture.
+Full simulator URDFs, old flange, rigid inertias, joint coordinate mapping,
+costs, limits, ADMM, and passive-force settings are unchanged. New reaching and
+tracking select `arm_right_grasp_joint`; frozen random100 explicitly keeps its
+historical flange and XYZ goals. No GRiD/GATO source change is involved.
+
+Completed with main's GATO 0.1.2 + friction patch / GRiD 0.5.3 environment:
+
+- `python -m unittest discover -s tests -q`: 16 checks pass, including full
+  simulator pad-midpoint FK and unchanged mass/gravity at three arm states.
+- `python examples/reach_sim.py --output _expr_data/grasp-center/reach`:
+  frame/sign mapping and native GPU/Pinocchio dynamics checks pass; coarse
+  5 cm arrival at .090 s
+  from 63.308 mm displacement; sampled executed raw limits pass. This short
+  sanity check does not qualify settling or broad reaching.
+- `python examples/track_figure8.py --output _expr_data/grasp-center/tracking`:
+  24 s completed, 20.806 mm RMS, 31.216 mm peak; sampled executed raw limits
+  and all 12,000 saved raw plans pass. GATO's Pinocchio-backed EE helper agrees
+  at the checked pose; this is not an independent CUDA FK check. The full
+  tracking loop exercises the device cost. The Cartesian task changes with
+  the TCP, so no isolated tracking-improvement claim follows.
+
+Commands used `/workspace/tiago_mpc/.venv/bin/python`, with
+`PYTHONPATH=external/gato/python` from the owning isolated application checkout.
+Raw validation and source snapshots:
+`/workspace/tiago_mpc-grasp-frame/_expr_data/grasp-center/`.
+The matching viewer preserves legacy flange replays and derives the new TCP
+from the reduced model; its 51 CPU checks pass.
+The viewer's N16/32/64/128 modules were rebuilt for the new frame. Two-pose
+viewer/reduced-model FK agrees within 1.2e-16 m. Cache/build/FK receipts are in
+`/workspace/tiago_mpc_visualizer/_expr_data/grasp-center/`.
+
+> Current selection (2026-10-21): Felix selected running/terminal XYZ weights
+> **4/8** for both reaching and tracking. Reaching's terminal weight is now 8;
+> the historical 4/800 reaching results below retain their original configuration
+> and do not qualify this changed default. One new bounded sanity reach passed
+> the existing 5 cm arrival gate at .270 s with sampled raw limits passing.
+> Tracking also uses a new GATO smooth-friction pin. Its separately recorded
+> 24 s 4/8 episode completed at source b582309: 26.536 mm full-cycle RMS,
+> 40.570 mm peak, 31.392 mm endpoint; sampled executed and predicted raw limits
+> passed. These fixed-clock results are not real-time qualification; see README.md.
+
+## GATO 0.1.2 update — 21 October 2026
+
+GATO `37a6768` is upstream release `bd60b24` plus the existing smooth-friction
+patch, using GRiD 0.5.3 and Pinocchio 3.9.0. Application configs, example code,
+models, ADMM settings and the joint-6 conversion are unchanged. Fifteen app CPU
+checks and both CLI imports pass; five upstream friction host cases and the
+rotated-inertial normalization CPU/codegen test pass.
+
+Exactly one default 24 s figure-eight and one default reach ran sequentially:
+
+| Check | Result |
+| --- | --- |
+| Tracking, 12,000 solves | 26.536 mm RMS, 40.570 mm peak error; 17.756 Nm peak actuator torque |
+| Tracking model step / A-block FD | Maximum errors 5.96e-7 / 1.70e-5, including the zero-velocity check |
+| Tracking raw limits | All recorded states/controls and all 12,000 returned plans pass; zero sampled excess |
+| Reaching, 27 solves | Arrived at .270 s, 49.830 mm error, .624 rad/s speed L1; zero sampled raw-limit excess |
+| Reaching model steps | Maximum absolute state errors 3.11e-5 / 2.71e-5 |
+
+Commands were `.venv/bin/python examples/track_figure8.py --output <run>/tracking`
+and `.venv/bin/python examples/reach_sim.py --output <run>/reaching`, with no
+configuration overrides. Raw histories, logs, configuration/source snapshots,
+environment versions, case commands and the all-plan limit check are retained in
+`/workspace/tiago_mpc-gato012/_expr_data/gato012/gpu-20261021T133147.514641Z/`;
+CPU logs are in that upgrade checkout's `_expr_data/gato012/`. These match the preceding pin's recorded aggregate metrics;
+the deleted older raw runs are unavailable for a pointwise comparison.
+Fixed-clock simulation ignores compute latency; this is bounded functional
+validation, not a timing benchmark, settling or physical-robot qualification.
+
+Portable replays are in shared ingest at
+`validation/gato-0.1.2-20261021/{tracking,reaching}_default_ee4_terminal8.npz`.
+The viewer catalog marks both ready and both scene endpoints return HTTP 200.
+Tracking display samples use every twentieth plant state plus the final state;
+reaching retains all states. Native velocities and exact held actuator commands
+are included; predictions are omitted. Full raw samples remain in the run above.
+
+## Integrated 4/8 defaults — 21 October 2026
+
+Integration code source `4dde1f8` uses GATO contribution `7918a83` with first-order
+fixed-arm dynamics. Existing 15 CPU checks pass, as do both CLI/import checks,
+py_compile and the actual-value passive-law CPU check. The latter checks sign
+and tanh dissipation, native/GPU sign covariance and public registration behavior;
+no-loss RK4 matches upstream exactly. Historical profile resolution tests retain
+their original baselines.
+
+A fresh sm61 N32 smooth module passes the tracking value/A-block checks,
+including zero velocity (step error 5.90e-7; A/finite-difference error 1.70e-5).
+The separate default-off reaching module passes its two model-step checks
+(max errors 3.11e-5 and 2.71e-5). GPU checks ran sequentially under the three
+shared locks. No performance benchmark or real-time claim is made.
+
+Exactly one 4/8 reaching sanity episode ran: comfortable start, 71.891 mm initial
+position error, 27 solves and .270 s simulated duration. It passed the existing
+5 cm/1 rad/s speed-L1 arrival gate at 49.830 mm error and .624 rad/s speed-L1.
+Maximum actuator torque was 10.608 Nm; sampled executed raw position, velocity
+and effort excesses were zero. This first-arrival stop is not precise settling,
+and one short reach does not qualify the historical random100 cohort. Reaching
+retains rigid-body dynamics without passive losses.
+
+Felix explicitly requested deletion of these completed experiments' raw data,
+logs, check/export scripts, archive copies and viewer replays during cleanup on
+2026-10-21. The measurements above remain historical summaries; the underlying
+records are no longer retained. Current code and defaults remain on main.
+
+The upstream contribution's default-off baseline/final benchmarks were completed
+separately; no new benchmark was run for this application integration. After
+creating the friction issue, Felix requested removal of its worktree and branch;
+the benchmark files and local drafts were removed with it. Main still pins the
+smooth-friction implementation at GATO commit `7918a83`.
+
 # Canonical model correction — 20 October 2026
 
 The current robot description is `/workspace/GATO/tiago_tools/sim_tiago_urdf.xml`.
@@ -66,10 +180,11 @@ conservative planning bounds; sampled executed-limit passes do not establish
 hard feasibility, collision safety or physical robot qualification. Fixed
 simulation pacing does not charge solve time to the plant.
 
-Original report, configurations, raw data, timings, failures and source receipts
-remain at `/workspace/tiago_mpc-admm-only/_expr_data/admm-only-reaching-20261020/`.
-This promotion reuses that qualified configuration without another 100-case
-cohort or performance claim. No retained results were moved or relabeled.
+The original report, raw data, timings, failures and source receipts were deleted
+at Felix's request during cleanup on 2026-10-21, together with that experiment's
+worktree and branch. The counts above are historical summaries. The promotion
+originally reused that configuration without another 100-case cohort or
+performance claim.
 
 Focused CPU verification:
 

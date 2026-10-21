@@ -1,5 +1,5 @@
 {
-  "description": "Default TIAGo position reaching: ADMM-only N32/10ms profile tested on the frozen random100 (84 arrivals, 100 sampled physical-limit passes). Promoted from c3f226b zero_soft_state_rho10.",
+  "description": "Selected TIAGo reaching default: running XYZ weight 4 and terminal XYZ weight 8, ADMM-only N32/10ms. Other settings retain the promoted c3f226b profile; the historical 84/100 cohort used terminal weight 800 and does not qualify this newly selected terminal weight.",
   "N": 32,
   "dt_s": 0.01,
   "solver_params": {
@@ -14,7 +14,7 @@
     "q_cost": 4.0,
     "qd_cost": 0.05,
     "u_cost": 0.0001,
-    "N_cost": 800.0,
+    "N_cost": 8.0,
     "q_lim_cost": 0.0,
     "vel_lim_cost": 0.0,
     "ctrl_lim_cost": 0.0,

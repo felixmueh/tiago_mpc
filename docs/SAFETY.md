@@ -44,8 +44,8 @@ Timeout status is `stale`; other check faults use status `fault`.
 
 The active `models/safety/collision_alpha_wrap_a3_o25_cap001/tiago_pro_collision_alpha_wrap_a3_o25_cap001.urdf`
 is generated from the current canonical simulator model,
-`models/tiago_pro/tiago_pro.urdf`, with the explicit right-arm Coulomb/viscous
-metadata patch. It retains all 70 current links, 69 joints, native frames,
+`models/tiago_pro/tiago_pro.urdf`, with both arms' supplied actual Coulomb/viscous
+and armature metadata. It retains all 70 current links, 69 joints, native frames,
 inertias, limits, ten mimic followers, visuals, plugins and metadata provenance
 comments. URDF loss tags are metadata here; collision checking does not enable
 passive-force dynamics or establish friction-model qualification.
@@ -71,7 +71,7 @@ python scripts/prepare_safety_model.py --check
 `models/safety/provenance.json` records the historical source hashes separately
 from the canonical input, retained overlay source, generator and active output
 hashes. The generator preserves the canonical copyright/license header and
-right-arm loss-assumption comments. The existing `.gitattributes` tracks all STL
+actual-value provenance comments. The existing `.gitattributes` tracks all STL
 files with Git LFS; materialize them before running safety. Historical paths in
 the copied generation/review receipts remain provenance, never runtime inputs.
 

@@ -5,14 +5,15 @@ The canonical current robot description is Felix's simulator URDF,
 
 - `tiago_pro/tiago_pro_sim_source.urdf` preserves its exact original bytes,
   including copyright, comments, package references and original dynamics tags.
-- `tiago_pro/tiago_pro.urdf` is that canonical full model with only the seven
-  right-arm friction/damping tags and accompanying provenance comments patched.
+- `tiago_pro/tiago_pro.urdf` is that canonical full model with both arms'
+  supplied friction/damping, effort and custom armature metadata patched.
   The previous full model from `/workspace/GATO/TiagoProURDF/tiago_pro.urdf`
   was outdated and has been superseded; its original remains in Git history.
 - `tiago_right/tiago_right_arm.urdf` was already extracted from this simulator
   model. Its torso-relative kinematics, limits, inertias and zero-posture
-  gripper inertia lump remain unchanged. Only its seven dynamics tags and
-  explanatory comments are patched. The original reduced source came from
+  gripper inertia lump remain unchanged. Its seven joint parameter fields and
+  explanatory comments are patched, and a massless nominal grasp frame is added.
+  The original reduced source came from
   `/workspace/GATO/gato/dynamics/tiago_right/tiago_right_arm.urdf` at `fcc9621`.
 - `tiago_pro/meshes/*.stl` retains the 33 original mesh assets copied from
   `/workspace/GATO/TiagoProURDF/meshes/`. The two additional canonical full-model
@@ -31,28 +32,58 @@ model references against the included directory in a generated runtime copy.
 A separate generated GPU-coordinate URDF reflects joint 6's axis/limits;
 the adapter maps position, velocity and torque signs at the solver boundary.
 
-## Right-arm dynamics metadata
+## End-effector point
 
-`friction` is the Coulomb coefficient c in Nm; `damping` is the viscous
-coefficient b in Nm s/rad. Values came from Felix's identification notes and
-the explicit illustrative wrist choices retained by the friction study:
+New reaching/tracking use `arm_right_grasp_joint`, a fixed, massless frame
+parented to `arm_right_tool_link` at local XYZ `(0, 0, 0.139288457525)` m,
+with the flange's orientation. The old `arm_right_tool_joint` remains the flange.
+GATO selects the new point via its existing `ee_frame` argument; Pinocchio uses
+the same named frame. No GRiD or upstream GATO change is needed.
 
-| Right joint | c (Nm) | b (Nm s/rad) | Evidence / assumptions |
-| --- | ---: | ---: | --- |
-| 1 | 2.1 | 3.35 | User c estimate; b midpoint of 1.8–4.9, 2 runs |
-| 2 | 2.6 | 4.15 | Midpoints c 2.3–2.9 / b 2.7–5.6, 8 runs |
-| 3 | 2.0 | 2.45 | Midpoints c 1.8–2.2 / b 1.3–3.6, 8 runs |
-| 4 | 1.95 | 2.25 | Midpoints c 1.8–2.1 / b 1.1–3.4, 8 runs |
-| 5 | 0.8 | 0.5 | Assumed c above user's >0.7 lower bound; b assumed, unmeasured |
-| 6 | 1.1 | 0.3 | User c approximately 1.1, one run; b assumed, unmeasured |
-| 7 | 0.3 | 0.15 | Both assumed, unmeasured |
+This nominal TCP is the midpoint between the two inward fingertip-pad centers
+at zero gripper posture, matching the posture used for inertia aggregation.
+In `fingertip.stl`, the flat contact face is at local x=-11.5 mm, y=7…47 mm,
+z=±10 mm, giving pad center `(-11.5, 27, 0)` mm. Transforming both centers
+through the canonical simulator URDF gives the offset above (idealizing the
+tiny symmetry error from rounded URDF rotations). It is a geometric convention,
+not a calibrated hardware TCP or a midpoint recomputed as the gripper opens.
 
-These are nominal metadata, not complete physical calibration or a stiction
-model. Left-arm values are preserved exactly from the simulator source; no
-symmetry assumption is applied. The current reaching application uses ordinary
-Pinocchio ABA and the standard GATO/GRiD generator with `USE_JOINT_DYNAMICS=False`;
-it does not apply these passive torques. This patch does not enable the earlier
-experimental hard-Coulomb model or change the recorded 84/100 no-friction cohort.
+The full simulator models retain their existing frames and exact bytes from
+before this change. The viewer derives the additional TCP from the reduced URDF
+when needed. Replay exports identify `end_effector_frame`; missing metadata
+means the historical flange. Old absolute XYZ goals must not be relabeled as
+grasp-center goals. The frozen-input reach check rejects a changed target frame;
+the historical random100 runner explicitly passes `--ee-frame arm_right_tool_joint`
+to preserve its frozen goals. New tasks use the grasp center by default.
+
+## Actual arm joint parameters — Felix, 2026-10-21
+
+These supplied actual values replace the previous range midpoints and guessed
+wrist coefficients. Standard `friction` is Coulomb c in Nm, `damping` is viscous
+b in Nm s/rad, and `limit effort` is actuator torque in Nm.
+
+| Joint | Left c | Left b | Left armature | Right c | Right b | Right armature | Effort (both) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2.47 | 7.42 | 0.511 | 1.66 | 4.7 | 0.746 | 43 |
+| 2 | 3.52 | 8.71 | 1.19 | 1.15 | 9.69 | 0.882 | 43 |
+| 3 | 1.04 | 4.75 | 0.472 | 1.16 | 5.3 | 0.211 | 26 |
+| 4 | 1.35 | 3.65 | 0.296 | 0.912 | 4.2 | 0.648 | 26 |
+| 5 | 0.779 | 3.65 | 0.424 | 1.25 | 3.66 | 0.326 | 26 |
+| 6 | 0.773 | 2.82 | 0.151 | 0.473 | 2.95 | 0.343 | 26 |
+| 7 | 0.945 | 1.79 | 0.14 | 0.56 | 2.95 | 0.27 | 26 |
+
+Armature is in kg m^2 and stored in a custom joint child,
+`<tiago_mpc armature="..."/>`. This is metadata only: the current Pinocchio and
+GRiD URDF loaders do not activate it, and the application does not read it.
+It is not folded into link inertias. Supplied kp/kd are deliberately omitted:
+they belong to a different controller.
+
+URDF friction/damping fields also require explicit runtime enablement. Ordinary
+reaching still ignores passive joint torques. Existing friction-study protocols
+explicitly supply their own historical coefficients and override generated copies;
+updating these canonical files does not change old protocols, raw runs or figures.
+Use a new identified protocol/output when testing the actual values. Existing
+no-friction qualification is not a qualification of the newly supplied losses.
 
 Prepare the active full model and reapply the retained arm's metadata with:
 
@@ -61,12 +92,14 @@ Prepare the active full model and reapply the retained arm's metadata with:
 .venv/bin/python scripts/prepare_models.py --check
 ```
 
-The script uses the preserved canonical source, modifies no other joints and
-does not repeat the already verified gripper reduction. It is idempotent and
+The script uses the preserved canonical source, patches the fourteen arm
+joints, adds/checks the reduced arm's grasp frame, and does not repeat the
+already verified gripper reduction. It is idempotent and
 updates the ordinary `manifest.json` identities for the three URDFs and included
 meshes. The example verifies those assets before codegen. Run CPU model checks
-with `.venv/bin/python -m unittest discover -s tests -v`. Fourteen checks pass,
-including mesh completeness, finite STL vertices and full geometry loading.
+with `.venv/bin/python -m unittest discover -s tests -v`. CPU checks cover
+coefficient values, metadata behavior, unchanged kinematics/inertias,
+mesh completeness, finite STL vertices and full geometry loading.
 
 The canonical simulator source retains its PAL Robotics Apache-2.0 copyright
 and license notice. Mesh rights remain with their original owners; copying does

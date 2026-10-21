@@ -7,8 +7,11 @@ The control runner is now implemented in `examples/ros2_mpc.py`, with a separate
 MPC worker and the ported safety worker. See [usage and verification](ROS2_RUNNER.md).
 The adapter is in `tiago_mpc/ros2.py`. No hardware control run is qualified here.
 
-The assessment is against the pinned GATO commit
-`aeacf16e7733df1a17dfd6627f3b5d15c2ba4387`, rather than an uninspected newer release.
+The original assessment and elapsed-shift study used GATO commit
+`aeacf16e7733df1a17dfd6627f3b5d15c2ba4387`. The integration now uses main's
+GATO 0.1.2 plus smooth-friction patch (`37a6768`), GRiD 0.5.3, current task
+configurations and nominal grasp frame. Historical results below keep their
+original scope; current validation is in [the runner guide](ROS2_RUNNER.md).
 
 ## Proposed ownership
 
@@ -35,7 +38,7 @@ coordinates, command publishers, PAL interface validation and exclusive arm-mode
 handover. The I/O runner still owns stale-state handling, command expiry,
 controller restoration and the existing full-body collision/reset checks.
 Closing the generic adapter only releases its ROS resources; it does not perform
-a controller handback. The future runner must own that explicitly.
+a controller handback. The implemented runner owns that explicitly.
 
 ## What upstream already supplies
 
@@ -89,9 +92,11 @@ whole plan. Trajectory playback or prediction through communication delay can
 be added later, with an explicit plan epoch and replay semantics. Neither is
 provided automatically by `MPCController`.
 
-The new reaching defaults are the ADMM-only N32/10 ms configuration that achieved
+The historical ADMM-only N32/10 ms reaching configuration achieved
 84/100 arrivals and 100/100 sampled physical-limit passes in internal simulation.
-Use the committed default configuration as the source of parameters. That study
+Its terminal weight was 800 and its target point was the flange; current
+reaching uses 4/8 position weights and the grasp center. Use the committed
+default configuration as the source of parameters. That historical study
 used an unpaid simulation clock, no passive joint losses, unconstrained
 orientation and no collision checks. It does not establish a 100 Hz physical
 controller. Its descriptive GTX1070 call latency was median 4.55 ms and p95
@@ -143,8 +148,8 @@ argument. These cases provide no practical reason to change upstream now.
 The experimental harness accesses private primal warm-start state to isolate
 resampling while retaining duals and controller history. It is not a supported
 integration API, and the ROS runner must not depend on it. Evidence and the
-full protocol are retained in
-`/workspace/tiago_mpc-elapsed-shift/_expr_data/elapsed-shift-20261020/batch1/REPORT.md`.
+full protocol were retained in the elapsed-shift worktree, subsequently removed
+with its results at Felix's request. The table above is a historical summary.
 This bounded no-loss tracking study does not settle faster or more disturbed
 tasks, large timing gaps, or hypothesis-batch behavior.
 
@@ -161,8 +166,9 @@ return or zero-PCG shortcut into a physical-feasibility certificate or add a KKT
 acceptance gate.
 
 **Model features are a separate boundary.** ROS integration does not add native
-full-robot MPC, passive friction modeling or orientation cost support. The
-current demonstrated GATO application remains the seven-joint right arm.
+full-robot MPC or orientation cost support. The application remains the
+seven-joint right arm. Current tracking explicitly selects the existing
+smooth-friction/damping predictor; reaching retains its own loss-free default.
 
 ## Reviewable next implementation
 

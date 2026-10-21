@@ -30,6 +30,11 @@ def load_configuration(path=None):
     """
     selected = Path(path) if path is not None else DEFAULT_CONFIG
     settings = json.loads(selected.read_text())
+    return selected, settings, resolve_configuration(settings)
+
+
+def resolve_configuration(settings):
+    """Resolve the shared solver/controller fields without changing legacy defaults."""
     unknown = set(settings)-{"solver_params", "controller", "limit_bounds", "save_plan_steps", "description", "N", "dt_s"}
     if unknown:
         raise ValueError(f"Unknown configuration fields: {sorted(unknown)}")
@@ -62,4 +67,4 @@ def load_configuration(path=None):
                                    **controller.get("limits_kw", {})}),
         limit_bounds=effective_bounds,
         save_plan_steps=int(settings.get("save_plan_steps", 0)))
-    return selected, settings, effective
+    return effective

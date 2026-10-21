@@ -2,7 +2,9 @@
 
 `examples/ros2_mpc.py` implements the separate I/O, MPC and safety processes.
 Upstream `gato.MPCController` and solver sources remain unchanged. The code is
-on `integration/ros2-adapter`, separate from the main simulation checkout.
+integrated on `main`. ROS 2 is optional: simulation examples and package imports
+do not require ROS packages or initialize ROS. Source a compatible ROS/PAL
+environment only when constructing a ROS client.
 
 ```mermaid
 flowchart LR
@@ -48,8 +50,10 @@ angles do not qualify a complete physical posture.
 python examples/ros2_mpc.py --execute --target X_M Y_M Z_M
 ```
 
-Replace the placeholders with a reviewed reachable target in `torso_lift_link`,
-in metres. Effective settings/units are printed; the operator must type
+Replace the placeholders with a reviewed reachable **grasp-center** target in
+`torso_lift_link`, in metres. The tracked frame is `arm_right_grasp_joint`,
+139.3 mm along the flange's local +Z at the nominal zero gripper posture.
+Effective settings/units are printed; the operator must type
 `EXECUTE` before the ROS client is constructed. This command has not been run
 against a robot during implementation.
 
@@ -63,10 +67,19 @@ must stay near their initial measured values. Observed wheel/gripper movement
 is rejected; unobserved locked joints remain a limitation. Keep the mobile base
 and grippers stationary.
 
-`--task figure8` uses the target as the figure-eight start (24 cm x span, 8 cm y
-amplitude, 24 s period). Execution requires an explicit tracking `--config`;
-use `--duration 24` for a cycle. Reference phase has CPU coverage; no ROS tracking
-qualification is claimed. Orientation remains unconstrained.
+`--task figure8 --config configs/tracking.json` uses the target as the reference
+anchor, with the selected 2 cm +X edge clearance, 28 cm x span, 9 cm y amplitude
+and 24 s period. Use `--duration 24` for a cycle. The selected configuration
+provides 4/8 XYZ costs, ADMM-only limits and the smooth friction/damping
+predictor (width .03 rad/s). Physical feedback is measured; no simulated plant
+or passive torque is applied in the ROS I/O process. Reaching retains its own
+loss-free predictor default. No ROS tracking qualification is claimed.
+Orientation remains unconstrained.
+The I/O loop still uses its explicit 10 ms default, independently of the
+tracking predictor's 2 ms knots; this does not promise a 2 ms ROS update rate.
+References follow measured ROS timestamps and the existing one-knot warm-start
+shift remains unchanged. The worker smoke below does not qualify this complete
+ROS timing loop.
 
 ## Leases, safety and handback
 
@@ -106,11 +119,37 @@ Unobserved nonfinite metadata is logged as JSON null; controlled feedback and
 torque must still be finite. Runtime models/caches also stay in this checkout.
 
 ```bash
+python -m pip install -r requirements-dev.txt
 PYTHONPATH=external/gato/python PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest -q tests
 ```
 
-After the canonical simulator-model correction, 142 tests and 118 subtests
+Current main integration (21 October 2026): **147 tests and 118 subtests pass**
+using GATO 0.1.2 plus the existing smooth-friction patch, GRiD 0.5.3 and the new
+grasp frame. ROS is not installed in the test environment. Package, I/O runner
+and worker imports leave ROS, GATO and Pinocchio unloaded; importing the CLI's
+collision settings requires the existing Pinocchio dependency, never ROS/CUDA.
+Simulation and ROS CLI `--help` both work without ROS.
+
+Two real spawned N32 GPU workers passed three requests each: current reaching
+at 10 ms, and current tracking at 2 ms with smooth friction/damping and the
+configured reference shape. The parent advanced an independent native Pinocchio
+plant between replies (hard-sign/viscous losses for tracking). Both workers
+reported the grasp frame and 4/8 weights, retained ADMM-only limits, returned
+finite torques within raw effort bounds, preserved and met the original 100 ms
+leases, and exited zero. This is a worker/transport/configuration smoke, not a
+real ROS update-rate, full-task or hardware qualification. Collision-worker
+faults, actual geometry and process/handback/expiry gates have separate CPU
+coverage. No live ROS connection or robot commands were made.
+
+Current raw logs, requests/replies, configurations and native histories:
+`/workspace/tiago_mpc-ros2/_expr_data/ros2-main-integration/`, with GPU runs in
+`gpu-20261021T152122Z/`. `scripts/prepare_models.py --check` and
+`scripts/prepare_safety_model.py --check` pass; the active safety overlay retains
+canonical actual-value metadata, unchanged reviewed geometry and blacklist.
+
+Historical verification below retains its original scope. After the canonical
+simulator-model correction, 142 tests and 118 subtests
 passed on 20 October 2026. Coverage includes I/O/worker
 doubles, real collision geometry, spawned safety-worker timeout/death, service
 progress, failed handback, stale/expired/mismatched results, worker start/death,

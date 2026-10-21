@@ -19,6 +19,7 @@ class TaskReference:
     x_span_m: float = 0.24
     y_amplitude_m: float = 0.08
     period_s: float = 24.0
+    edge_clearance_m: float = 0.0
 
     def __post_init__(self):
         if self.kind not in {"reach", "figure8"}:
@@ -28,8 +29,10 @@ class TaskReference:
             raise ValueError("target_xyz_m must contain three finite coordinates")
         if self.generation < 1:
             raise ValueError("task generation must be positive")
-        if (not all(math.isfinite(v) for v in (self.x_span_m, self.y_amplitude_m, self.period_s))
-                or self.x_span_m < 0 or self.y_amplitude_m < 0 or self.period_s <= 0):
+        if (not all(math.isfinite(v) for v in (self.x_span_m, self.y_amplitude_m, self.period_s,
+                                             self.edge_clearance_m))
+                or min(self.x_span_m, self.y_amplitude_m, self.edge_clearance_m) < 0
+                or self.period_s <= 0):
             raise ValueError("invalid figure-eight dimensions or period")
 
     def horizon(self, elapsed_s: float, n: int, dt_s: float) -> np.ndarray:
@@ -39,7 +42,7 @@ class TaskReference:
         out[:, :3] = self.target_xyz_m
         if self.kind == "figure8":
             phase = 2 * np.pi * (elapsed_s + np.arange(n) * dt_s) / self.period_s
-            out[:, 0] += 0.5 * self.x_span_m * (1 - np.cos(phase))
+            out[:, 0] += self.edge_clearance_m + 0.5 * self.x_span_m * (1 - np.cos(phase))
             out[:, 1] += self.y_amplitude_m * np.sin(2 * phase)
         return out
 

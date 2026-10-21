@@ -13,13 +13,13 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-EE_FRAME = "arm_right_tool_joint"
+EE_FRAME = "arm_right_grasp_joint"
 PLANT = "tiago_mpc_right"
 Q_CHECK = np.array([-0.39, -1.73, -0.38, -2.35, 0.0, -1.21, 0.04])
 Q_DELTA_CHECK = np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
 
 
-def runtime_urdf(cache_dir):
+def runtime_urdf(cache_dir, joint_dynamics=None):
     """Adapt examples/reach_sim.py's manifest check and signed-axis conversion."""
     manifest = json.loads((ROOT / "models/manifest.json").read_text())
     for relative, info in manifest.items():
@@ -27,6 +27,9 @@ def runtime_urdf(cache_dir):
         if hashlib.sha256(path.read_bytes()).hexdigest() != info["sha256"]:
             raise ValueError(f"Model asset differs from manifest (or is an LFS pointer): {path}")
     tree = ET.parse(ROOT / "models/tiago_right/tiago_right_arm.urdf")
+    if joint_dynamics is not None:
+        from .mpc_worker import _example_module
+        _example_module("joint_dynamics").configure_urdf(tree, joint_dynamics)
     for mesh in tree.iter("mesh"):
         path = ROOT / "models/tiago_pro/meshes" / Path(mesh.attrib["filename"]).name
         if not path.is_file():
@@ -73,10 +76,15 @@ def ee_position(model, data, q, frame_id):
     return data.oMf[frame_id].translation.copy()
 
 
-def check_model(solver, model, data, frame_id, signs):
+def check_model(solver, model, data, frame_id, signs, prediction_losses=None):
     """Same two-pose FK/dynamics check as the existing reaching simulation."""
     import pinocchio as pin
     from gato.common import rk4
+
+    if prediction_losses is not None:
+        from .mpc_worker import _example_module
+        return _example_module("track_figure8").model_checks(
+            solver, model, data, signs, prediction_losses)
 
     errors = []
     for q in (Q_CHECK, Q_CHECK + Q_DELTA_CHECK):

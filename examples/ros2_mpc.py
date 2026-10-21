@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "external/gato/python"))
 
 from tiago_mpc.mpc_worker import WorkerConfig
+from tiago_mpc.model_runtime import EE_FRAME
 from tiago_mpc.protocol import TaskReference
 from tiago_mpc.ros2 import TiagoRightArmClient
 from tiago_mpc.runner import RosMpcRunner, RunnerConfig
@@ -27,7 +28,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="request effort execution after checks and typed confirmation")
     parser.add_argument("--target", nargs=3, type=float, metavar=("X_M", "Y_M", "Z_M"),
-                        help=f"position target or figure-eight start, metres in {REFERENCE_FRAME}")
+                        help=f"grasp-center target or figure-eight anchor before edge clearance, metres in {REFERENCE_FRAME}")
     parser.add_argument("--task", choices=("reach", "figure8"), default="reach")
     parser.add_argument("--duration", type=float, default=DEFAULT_RUNNER.duration_sec, help="maximum run wall time, seconds")
     parser.add_argument("--config", type=Path, help="explicit MPC configuration; defaults to configs/reaching.json")
@@ -42,11 +43,16 @@ def main(argv=None):
         parser.error("figure-eight execution requires an explicit tracking --config")
     try:
         config = replace(DEFAULT_RUNNER, duration_sec=args.duration)
-        task = TaskReference(tuple(args.target or (0., 0., 0.)), kind=args.task)
+        shape = {}
+        if args.task == "figure8" and args.config is not None:
+            shape = json.loads(args.config.read_text()).get("figure8", {})
+            if set(shape) - {"x_span_m", "y_amplitude_m", "period_s", "edge_clearance_m"}:
+                raise ValueError("Unknown figure-eight shape fields")
+        task = TaskReference(tuple(args.target or (0., 0., 0.)), kind=args.task, **shape)
         worker = WorkerConfig(None if args.config is None else str(args.config.resolve()),
                               None if args.budget_ms is None else args.budget_ms / 1000.,
                               str(ROOT / "_expr_data/runtime/mpc-cache"))
-    except ValueError as exc:
+    except (ValueError, OSError, TypeError) as exc:
         parser.error(str(exc))
     from tiago_mpc.safety import CollisionSafetySettings
     safety = CollisionSafetySettings()
@@ -55,6 +61,8 @@ def main(argv=None):
     if not output.resolve().is_relative_to((ROOT / "_expr_data").resolve()):
         parser.error("--output must be inside this checkout's _expr_data")
     print(json.dumps(dict(execute=args.execute, reference_frame=REFERENCE_FRAME,
+                         end_effector_frame=EE_FRAME,
+                         target_semantics="grasp-center target; figure8 uses anchor plus edge_clearance_m on +X",
                          runner=asdict(config), task=asdict(task), worker=asdict(worker),
                          safety=asdict(safety), output=str(output)), default=str, indent=2))
     if args.execute:

@@ -21,12 +21,12 @@ LEGACY_ADMM = dict(rho=.01, iters=10, eps_rel=.01, rho_q=.1, rho_qd=.03, rho_u=.
 
 
 class ReachingConfigurationTests(unittest.TestCase):
-    def test_selected_defaults_match_qualified_profile(self):
+    def test_selected_defaults_keep_separate_historical_resolution(self):
         path, settings, effective = load_configuration()
         self.assertEqual(path, DEFAULT_CONFIG)
         self.assertEqual(set(settings['solver_params']), set(LEGACY_SOLVER))
         self.assertEqual(effective['solver_params'], {
-            **LEGACY_SOLVER, 'N_cost': 800., 'q_lim_cost': 0.,
+            **LEGACY_SOLVER, 'N_cost': 8., 'q_lim_cost': 0.,
             'vel_lim_cost': 0., 'ctrl_lim_cost': 0.})
         self.assertEqual((effective['N'], effective['dt_s']), (32, .01))
         self.assertEqual(effective['controller'], dict(
@@ -84,6 +84,7 @@ class ReachingConfigurationTests(unittest.TestCase):
         self.assertEqual(config['configuration_file'], str(DEFAULT_CONFIG))
         self.assertEqual(config['effective_configuration'], load_configuration()[2])
         self.assertEqual(len(config['task_ids']), 100)
+        self.assertEqual(config['end_effector_frame'], 'arm_right_tool_joint')
         self.assertTrue(config['configuration_sha256'])
 
     def test_random100_copies_default_and_passes_snapshot_to_child(self):
@@ -95,6 +96,7 @@ class ReachingConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=data) as tmp:
             out = Path(tmp) / 'cohort'
             def fake_episode(cmd, **kwargs):
+                self.assertEqual(cmd[cmd.index('--ee-frame')+1], 'arm_right_tool_joint')
                 copied = Path(cmd[cmd.index('--config')+1])
                 self.assertEqual(copied, out.resolve() / 'config.json')
                 self.assertEqual(copied.read_bytes(), DEFAULT_CONFIG.read_bytes())

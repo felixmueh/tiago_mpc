@@ -1,0 +1,64 @@
+{
+  "description": "Selected figure-eight default: running XYZ weight 4, terminal XYZ weight 8, actual joint losses, tanh width 0.03 rad/s, ADMM-only limits and u_cost=1e-6; one separately recorded 24 s fixed-clock sanity episode completed at N32/2 ms with 0.1 ms plant substeps.",
+  "N": 32,
+  "dt_s": 0.002,
+  "sim_dt_s": 0.0001,
+  "duration_s": 24.0,
+  "secondary_metrics_start_s": 1.0,
+  "figure8": {
+    "x_span_m": 0.28,
+    "y_amplitude_m": 0.09,
+    "edge_clearance_m": 0.02,
+    "period_s": 24.0
+  },
+  "solver_params": {
+    "max_sqp_iters": 5,
+    "max_pcg_iters": 120,
+    "pcg_tol": 0.001,
+    "mu": 1.0,
+    "rho": 0.01,
+    "q_cost": 4.0,
+    "qd_cost": 0.01,
+    "u_cost": 1e-06,
+    "N_cost": 8.0,
+    "q_lim_cost": 0.0,
+    "vel_lim_cost": 0.0,
+    "ctrl_lim_cost": 0.0
+  },
+  "controller": {
+    "limits_kw": {
+      "iters": 100,
+      "rho_u": 0.0005,
+      "eps_rel": 0.001
+    },
+    "admm_linsys": "pcg"
+  },
+  "limit_bounds": {
+    "velocity_fraction": 0.8,
+    "effort_fraction": 0.85
+  },
+  "joint_dynamics": {
+    "model": "coulomb_sign_viscous",
+    "coulomb_nm": [
+      1.66,
+      1.15,
+      1.16,
+      0.912,
+      1.25,
+      0.473,
+      0.56
+    ],
+    "viscous_nm_s_per_rad": [
+      4.7,
+      9.69,
+      5.3,
+      4.2,
+      3.66,
+      2.95,
+      2.95
+    ],
+    "provenance": "Actual right-arm joint values supplied by Felix 2026-10-21. No guessed coefficients. Coulomb compensation column used as frictionloss; damping column used as viscous Nm s/rad. Sign(0)=0; no stiction model. Armature metadata is inactive in both plant and predictor."
+  },
+  "predictor_smoothing_rad_s": 0.03,
+  "armature_runtime": "inactive in both models; custom URDF metadata only"
+}

@@ -179,9 +179,10 @@ class RosMpcRunner:
                    "config": asdict(self.config), "task": asdict(self.task),
                    "safety": asdict(self.safety_settings),
                    "worker_config": asdict(self.worker_config),
-                   "upstream": "aeacf16e7733df1a17dfd6627f3b5d15c2ba4387",
                    "restored": None, "cleanup_errors": [], "accepted_commands": 0}
         root = Path(__file__).resolve().parents[1]
+        summary["upstream"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root / "external/gato", text=True).strip()
         summary["application_commit"] = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         summary["source_dirty"] = bool(subprocess.check_output(

@@ -130,15 +130,15 @@ class CollisionPortTests(unittest.TestCase):
         self.assertEqual(len(active.findall('joint')), 69)
         self.assertEqual(len(active.findall('joint/mimic')), 10)
         # Includes all joint origins/axes/limits/dynamics/mimics, link inertias,
-        # native sensor frames, visuals, plugins, and right-arm provenance comments.
+        # native sensor frames, visuals, plugins, and supplied arm provenance comments.
         self.assertEqual(structure(active, ignore_collisions=True),
                          structure(canonical, ignore_collisions=True))
         for index in range(1, 8):
             joint = active.find(f"joint[@name='arm_right_{index}_joint']")
             comments = ' '.join(child.text or '' for child in joint if child.tag is ET.Comment)
             self.assertIn('TIAGO_MPC dynamics:', comments)
-            if index >= 5:
-                self.assertIn('ASSUMED', comments)
+            self.assertIn('Actual values supplied by Felix 2026-10-21', comments)
+            self.assertNotIn('ASSUMED', comments)
 
     def test_collision_overlay_and_reviewed_source_are_retained_exactly(self):
         provenance = json.loads((s.REPO_ROOT / 'models/safety/provenance.json').read_text())

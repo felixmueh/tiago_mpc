@@ -1,5 +1,7 @@
 """CPU checks for process protocol and the native/GPU coordinate boundary."""
 from dataclasses import replace
+import json
+from pathlib import Path
 from queue import Queue
 from threading import Event
 from types import SimpleNamespace
@@ -7,11 +9,39 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from tiago_mpc.mpc_worker import MpcEngine, WorkerConfig, _set_bounds, worker_loop
+from tiago_mpc.mpc_worker import MpcEngine, WorkerConfig, _configuration, _example_module, _set_bounds, worker_loop
 from tiago_mpc.protocol import SolveReply, SolveRequest, TaskReference, WorkerReady
 from tiago_mpc.ros2 import ArmState
 
 SIGNS = np.array([1., 1., 1., 1., 1., -1., 1.])
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_tracking_configuration_keeps_weights_limits_and_explicit_smooth_losses():
+    selected, settings, effective = _configuration(ROOT / "configs/tracking.json")
+    assert selected == ROOT / "configs/tracking.json"
+    assert (effective["N"], effective["dt_s"]) == (32, .002)
+    assert effective["solver_params"]["q_cost"] == 4
+    assert effective["solver_params"]["N_cost"] == 8
+    assert effective["solver_params"]["u_cost"] == 1e-6
+    assert all(effective["solver_params"][key] == 0
+               for key in ("q_lim_cost", "vel_lim_cost", "ctrl_lim_cost"))
+    assert effective["controller"]["limits_kw"]["iters"] == 100
+    losses = effective["prediction_joint_dynamics"]
+    assert losses == {**settings["joint_dynamics"], "model": "coulomb_tanh_viscous",
+                      "smoothing_rad_s": .03}
+    _, _, reaching = _configuration(None)
+    assert reaching["prediction_joint_dynamics"] is None
+    assert reaching["dt_s"] == .01
+
+
+def test_tracking_reference_matches_simulation_including_edge_clearance():
+    shape = json.loads((ROOT / "configs/tracking.json").read_text())["figure8"]
+    task = TaskReference((.3, -.2, .1), kind="figure8", **shape)
+    times = 1.3 + np.arange(7)*.002
+    expected = _example_module("track_figure8").reference(times, task.target_xyz_m, shape)
+    np.testing.assert_allclose(task.horizon(1.3, 7, .002)[:, :3], expected, atol=2e-8)
+    assert task.horizon(0., 2, .002)[0, 0] == pytest.approx(.32)
 
 
 def request(*, generation=1, elapsed=0.0, deadline=100.0):

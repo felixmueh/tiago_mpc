@@ -34,6 +34,21 @@ def test_cancelled_execution_creates_no_ros_client_or_runner(cli, monkeypatch):
     assert cli.main(["--execute", "--target", ".5", ".1", ".2"]) == 2
 
 
+def test_tracking_shape_comes_from_selected_config_before_ros(cli, monkeypatch):
+    tasks = []
+    class Runner:
+        def __init__(self, config, task, *args, **kwargs):
+            tasks.append(task)
+        def run(self, output, **kwargs):
+            return {"status": "checked"}
+    monkeypatch.setattr(cli, "RosMpcRunner", Runner)
+    assert cli.main(["--task", "figure8", "--target", ".3", "-.2", ".1",
+                     "--config", str(cli.ROOT / "configs/tracking.json")]) == 0
+    task = tasks[0]
+    assert (task.x_span_m, task.y_amplitude_m, task.period_s, task.edge_clearance_m) == (.28, .09, 24., .02)
+    assert task.target_xyz_m == (.3, -.2, .1)
+
+
 @pytest.mark.parametrize("args", [
     ["--execute"], ["--duration", "nan"], ["--target", "inf", "0", "0"],
     ["--budget-ms", "-1"], ["--output", "/tmp/not-this-worktree"],
