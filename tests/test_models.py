@@ -1,4 +1,4 @@
-"""CPU checks for the canonical simulator model and right-arm metadata patch."""
+"""CPU checks for the canonical simulator model and both-arm parameter patch."""
 import hashlib
 from pathlib import Path
 import subprocess
@@ -16,14 +16,20 @@ RAW = MODELS / 'tiago_pro/tiago_pro_sim_source.urdf'
 FULL = MODELS / 'tiago_pro/tiago_pro.urdf'
 ARM = MODELS / 'tiago_right/tiago_right_arm.urdf'
 NAMES = [f'arm_right_{i}_joint' for i in range(1, 8)]
-C = [2.1, 2.6, 2., 1.95, .8, 1.1, .3]
-B = [3.35, 4.15, 2.45, 2.25, .5, .3, .15]
+ACTUAL = {
+    'left': ([2.47, 3.52, 1.04, 1.35, .779, .773, .945],
+             [7.42, 8.71, 4.75, 3.65, 3.65, 2.82, 1.79],
+             [.511, 1.19, .472, .296, .424, .151, .14]),
+    'right': ([1.66, 1.15, 1.16, .912, 1.25, .473, .56],
+              [4.7, 9.69, 5.3, 4.2, 3.66, 2.95, 2.95],
+              [.746, .882, .211, .648, .326, .343, .27]),
+}
 
 
 def structure(node, ignore_dynamics=False):
     return (node.tag, dict(node.attrib), (node.text or '').strip(), [
         structure(child, ignore_dynamics) for child in node
-        if not (ignore_dynamics and child.tag == 'dynamics')])
+        if not (ignore_dynamics and child.tag in ('dynamics', 'tiago_mpc'))])
 
 
 class ModelTests(unittest.TestCase):
@@ -33,32 +39,41 @@ class ModelTests(unittest.TestCase):
         if original.is_file():
             self.assertEqual(RAW.read_bytes(), original.read_bytes())
 
-    def test_only_right_arm_dynamics_change_in_full_model(self):
+    def test_only_arm_parameters_change_in_full_model(self):
         raw, full = ET.parse(RAW).getroot(), ET.parse(FULL).getroot()
-        # Everything outside the seven right-arm dynamics is canonical, including
-        # left-arm metadata, all other geometry and the ten mimic followers.
+        names = {f'arm_{side}_{i}_joint' for side in ACTUAL for i in range(1, 8)}
         for tree in (raw, full):
             for joint in tree.findall('joint'):
-                if joint.get('name') in NAMES:
-                    joint.remove(joint.find('dynamics'))
+                if joint.get('name') in names:
+                    for child in list(joint):
+                        if child.tag in ('dynamics', 'tiago_mpc'):
+                            joint.remove(child)
+                    # Supplied effort values equal the original source numerically.
+                    limit = joint.find('limit')
+                    limit.set('effort', str(float(limit.get('effort'))))
         self.assertEqual(structure(full), structure(raw))
 
-    def test_seven_coefficients_and_assumption_comments(self):
-        for path in (FULL, ARM):
+    def test_actual_coefficients_and_metadata(self):
+        for path, sides in ((FULL, ACTUAL), (ARM, ('right',))):
             tree = ET.parse(path, parser=ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))).getroot()
-            for i, name in enumerate(NAMES):
-                joint = next(j for j in tree.findall('joint') if j.get('name') == name)
-                dynamics = joint.find('dynamics')
-                self.assertEqual(float(dynamics.get('friction')), C[i])
-                self.assertEqual(float(dynamics.get('damping')), B[i])
-                comments = ' '.join(child.text or '' for child in joint if child.tag is ET.Comment)
-                self.assertIn('TIAGO_MPC dynamics:', comments)
-                self.assertIn('Nm s/rad', comments)
-                self.assertIn('ASSUMED' if i >= 4 else 'User', comments)
-                if i == 5:
-                    self.assertIn('User c approximately 1.1', comments)
-                if i == 6:
-                    self.assertIn('both unmeasured', comments)
+            for side in sides:
+                c, b, armature = ACTUAL[side]
+                for i in range(7):
+                    name = f'arm_{side}_{i+1}_joint'
+                    joint = next(j for j in tree.findall('joint') if j.get('name') == name)
+                    dynamics = joint.find('dynamics')
+                    self.assertEqual(float(dynamics.get('friction')), c[i])
+                    self.assertEqual(float(dynamics.get('damping')), b[i])
+                    self.assertEqual(joint.find('tiago_mpc').attrib, {'armature': str(armature[i])})
+                    self.assertEqual(float(joint.find('limit').get('effort')), 43 if i < 2 else 26)
+                    comments = ' '.join(child.text or '' for child in joint if child.tag is ET.Comment)
+                    self.assertIn('Actual values supplied by Felix 2026-10-21', comments)
+                    self.assertIn('custom metadata', comments)
+                    self.assertNotIn('ASSUMED', comments)
+
+    def test_armature_is_metadata_only(self):
+        model = pin.buildModelFromUrdf(str(ARM))
+        np.testing.assert_array_equal(model.armature, np.zeros(7))
 
     def test_retained_arm_kinematics_and_inertias_match_simulator(self):
         raw, arm = ET.parse(RAW).getroot(), ET.parse(ARM).getroot()
@@ -69,7 +84,12 @@ class ModelTests(unittest.TestCase):
                 continue  # Composite gripper inertia is checked numerically below.
             self.assertEqual(structure(link), structure(raw_links[link.get('name')]))
         for joint in arm.findall('joint'):
-            self.assertEqual(structure(joint, True), structure(raw_joints[joint.get('name')], True))
+            original = raw_joints[joint.get('name')]
+            for node in (joint, original):
+                limit = node.find('limit')
+                if limit is not None:
+                    limit.set('effort', str(float(limit.get('effort'))))
+            self.assertEqual(structure(joint, True), structure(original, True))
 
     def test_all_mesh_references_resolve_to_included_assets(self):
         for path in (RAW, FULL, ARM):

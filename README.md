@@ -49,8 +49,8 @@ sources are unmodified. There is no dependency on the historical GATO fork.
 - Position only: the tool orientation is unconstrained.
 
 The canonical full model is the current simulator robot description; its
-original bytes are retained separately. The full and reduced models carry
-explicit right-arm friction/damping metadata. A generated simulation copy
+original bytes are retained separately. The full model carries both arms' supplied parameters; the reduction carries
+the right-arm values. Armature is metadata only. A generated simulation copy
 resolves mesh filenames to absolute local paths. A second, equivalent GPU model normalizes
 joint 6's negative Z axis to positive Z and reflects its position limits.
 The adapter converts that joint's position, velocity and torque signs at the
@@ -139,16 +139,19 @@ not certify physical safety.
 `models/tiago_pro/tiago_pro_sim_source.urdf` preserves the exact canonical
 simulator description from `/workspace/GATO/tiago_tools/sim_tiago_urdf.xml`.
 The active `models/tiago_pro/tiago_pro.urdf` replaces the outdated supplied full
-model and applies explicit right-arm friction/damping metadata. The existing
-reduced arm already matched the simulator's kinematics/inertias and retained
-gripper lump; only its seven dynamics tags/comments changed. Left-arm values
-are unchanged. Current reaching still ignores passive forces, so the 84/100
-historical no-friction evidence remains identified by its original source.
+model and applies explicit both-arm friction/damping and armature metadata.
+The existing reduced arm already matched the simulator's kinematics/inertias and retained
+gripper lump. The active full model now carries both arms' actual friction,
+damping and effort values supplied on 2026-10-21; the reduction carries the
+right-arm values. Armature is retained as custom metadata only, not enabled in
+either dynamics model. kp/kd are omitted as they belong to a different controller.
+Current reaching still ignores passive forces; historical experiments retain
+their recorded coefficients and source identities.
 
 All 35 canonical full-model mesh references are supplied, including two assets
 from pinned official PAL repositories. The full visual/collision geometry loads
 and all mesh vertices are finite. See `models/README.md` for the exact source,
-asset licenses, coefficient ranges and wrist assumptions, and the reproducible
+asset licenses, actual coefficients and metadata semantics, and the reproducible
 metadata preparation command.
 
 URDFs and code are ordinary Git files. Binary meshes use Git LFS, configured

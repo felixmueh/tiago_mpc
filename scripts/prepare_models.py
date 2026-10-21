@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply right-arm dynamics metadata without changing model geometry/inertia.
+"""Apply supplied arm joint parameters without changing model geometry/inertia.
 
 The canonical source is preserved byte for byte. The retained reduced arm was
 already extracted from it with the gripper lumped at its neutral posture; this
@@ -18,42 +18,57 @@ MODELS = ROOT / "models"
 SOURCE = MODELS / "tiago_pro/tiago_pro_sim_source.urdf"
 FULL = MODELS / "tiago_pro/tiago_pro.urdf"
 ARM = MODELS / "tiago_right/tiago_right_arm.urdf"
-COULOMB_NM = (2.1, 2.6, 2.0, 1.95, 0.8, 1.1, 0.3)
-VISCOUS_NM_S_PER_RAD = (3.35, 4.15, 2.45, 2.25, 0.5, 0.3, 0.15)
-NOTES = (
-    "User c estimate; b midpoint of 1.8-4.9 (2 runs)",
-    "User c/b midpoints of 2.3-2.9 / 2.7-5.6 (8 runs)",
-    "User c/b midpoints of 1.8-2.2 / 1.3-3.6 (8 runs)",
-    "User c/b midpoints of 1.8-2.1 / 1.1-3.4 (8 runs)",
-    "ASSUMED c=0.8 above user lower bound >0.7; ASSUMED b=0.5, unmeasured",
-    "User c approximately 1.1 (1 run); ASSUMED b=0.3, unmeasured",
-    "ASSUMED c=0.3 and b=0.15, both unmeasured",
-)
+# Felix's actual parameter table, 2026-10-21. No kp/kd: those belong to a
+# different controller. Columns: Coulomb Nm, viscous Nm s/rad, armature kg m^2,
+# actuator effort Nm. Armature is metadata only; no runtime currently reads it.
+PARAMETERS = {
+    "left": (
+        (2.47, 7.42, .511, 43), (3.52, 8.71, 1.19, 43),
+        (1.04, 4.75, .472, 26), (1.35, 3.65, .296, 26),
+        (.779, 3.65, .424, 26), (.773, 2.82, .151, 26),
+        (.945, 1.79, .14, 26),
+    ),
+    "right": (
+        (1.66, 4.7, .746, 43), (1.15, 9.69, .882, 43),
+        (1.16, 5.3, .211, 26), (.912, 4.2, .648, 26),
+        (1.25, 3.66, .326, 26), (.473, 2.95, .343, 26),
+        (.56, 2.95, .27, 26),
+    ),
+}
 
 
-def patch_dynamics(text):
-    """Replace seven dynamics tags/comments; preserve every other source byte."""
-    for i, (c, b, note) in enumerate(zip(COULOMB_NM, VISCOUS_NM_S_PER_RAD, NOTES), 1):
-        pattern = rf'(<joint\b(?=[^>]*\btype="revolute")[^>]*\bname="arm_right_{i}_joint"[^>]*>)(.*?)(</joint>)'
+def patch_dynamics(text, sides=("left", "right")):
+    """Patch only arm dynamics, effort and custom armature metadata."""
+    for side in sides:
+        for i, (c, b, armature, effort) in enumerate(PARAMETERS[side], 1):
+            name = f"arm_{side}_{i}_joint"
+            pattern = rf'(<joint\b(?=[^>]*\btype="revolute")[^>]*\bname="{name}"[^>]*>)(.*?)(</joint>)'
 
-        def patch_joint(match):
-            body = re.sub(r'(?m)^[ \t]*<!-- TIAGO_MPC dynamics:.*?-->\r?\n', '', match[2])
-            tag = re.compile(r'(?m)^([ \t]*)<dynamics\b[^>]*/>[ \t]*$')
+            def patch_joint(match):
+                body = re.sub(r'(?m)^[ \t]*<!-- TIAGO_MPC dynamics:.*?-->\r?\n', '', match[2])
+                body = re.sub(r'(?m)^[ \t]*<tiago_mpc\b[^>]*/>[ \t]*\r?\n', '', body)
+                tag = re.compile(r'(?m)^([ \t]*)<dynamics\b[^>]*/>[ \t]*$')
 
-            def replace_dynamics(dynamics):
-                indent = dynamics[1]
-                comment = (f'{indent}<!-- TIAGO_MPC dynamics: {note}; c in Nm, '
-                           'b in Nm s/rad. Metadata only; not a calibrated stiction model. -->')
-                return comment + '\n' + f'{indent}<dynamics damping="{b}" friction="{c}" />'
+                def replace_dynamics(dynamics):
+                    indent = dynamics[1]
+                    comment = (f'{indent}<!-- TIAGO_MPC dynamics: Actual values supplied by Felix '
+                               '2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 '
+                               'is custom metadata, not enabled by URDF loaders. -->')
+                    return (comment + '\n' + f'{indent}<dynamics damping="{b}" friction="{c}" />'
+                            + '\n' + f'{indent}<tiago_mpc armature="{armature}" />')
 
-            body, count = tag.subn(replace_dynamics, body)
+                body, count = tag.subn(replace_dynamics, body)
+                if count != 1:
+                    raise ValueError(f"Expected one dynamics tag for {name}, got {count}")
+                body, count = re.subn(r'(<limit\b[^>]*\beffort=")[^"]*(")',
+                                      lambda m: m[1] + str(effort) + m[2], body)
+                if count != 1:
+                    raise ValueError(f"Expected one effort limit for {name}, got {count}")
+                return match[1] + body + match[3]
+
+            text, count = re.subn(pattern, patch_joint, text, flags=re.DOTALL)
             if count != 1:
-                raise ValueError(f"Expected one dynamics tag for arm_right_{i}_joint, got {count}")
-            return match[1] + body + match[3]
-
-        text, count = re.subn(pattern, patch_joint, text, flags=re.DOTALL)
-        if count != 1:
-            raise ValueError(f"Expected one arm_right_{i}_joint, got {count}")
+                raise ValueError(f"Expected one {name}, got {count}")
     return text
 
 
@@ -70,7 +85,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="verify prepared models/manifest without writing")
     args = parser.parse_args()
     full = patch_dynamics(SOURCE.read_text())
-    arm = patch_dynamics(ARM.read_text())
+    arm = patch_dynamics(ARM.read_text(), sides=("right",))
     manifest = json.dumps(asset_manifest(full, arm), indent=2, sort_keys=True) + '\n'
     outputs = {FULL: full, ARM: arm, MODELS / "manifest.json": manifest}
     for path, expected in outputs.items():

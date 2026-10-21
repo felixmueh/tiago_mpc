@@ -1202,8 +1202,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <parent link="torso_lift_link"/>
     <child link="arm_left_1_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="43.0" lower="-0.5235987755982988" upper="4.71238898038469" velocity="2.5"/>
-    <dynamics damping="1.0" friction="1.0"/>
+    <limit effort="43" lower="-0.5235987755982988" upper="4.71238898038469" velocity="2.5"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="7.42" friction="2.47" />
+    <tiago_mpc armature="0.511" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-0.4535987755982988" soft_upper_limit="4.642388980384689"/>
   </joint>
   <!-- ARM 2 LINK -->
@@ -1233,8 +1235,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <parent link="arm_left_1_link"/>
     <child link="arm_left_2_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="43.0" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
-    <dynamics damping="1.0" friction="1.0"/>
+    <limit effort="43" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="8.71" friction="3.52" />
+    <tiago_mpc armature="1.19" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.3734609527920614" soft_upper_limit="1.0644640137963142"/>
   </joint>
   <!-- ARM 3 LINK -->
@@ -1265,7 +1269,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_left_3_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.6179938779914944" upper="2.6179938779914944" velocity="2.5"/>
-    <dynamics damping="1.0" friction="1.0"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="4.75" friction="1.04" />
+    <tiago_mpc armature="0.472" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.5479938779914946" soft_upper_limit="2.5479938779914946"/>
   </joint>
   <!-- ARM 4 LINK -->
@@ -1296,7 +1302,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_left_4_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
-    <dynamics damping="1.0" friction="1.0"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="3.65" friction="1.35" />
+    <tiago_mpc armature="0.296" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.3734609527920614" soft_upper_limit="1.0644640137963142"/>
   </joint>
   <!-- ARM 5 LINK -->
@@ -1328,7 +1336,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_left_5_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-3.6651914291880923" upper="1.5707963267948966" velocity="2.5"/>
-    <dynamics damping="1.0" friction="1.0"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="3.65" friction="0.779" />
+    <tiago_mpc armature="0.424" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-3.5951914291880924" soft_upper_limit="1.5007963267948965"/>
   </joint>
   <!-- ARM 6 LINK -->
@@ -1359,7 +1369,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_left_6_link"/>
     <axis xyz="0 0 -1"/>
     <limit effort="26" lower="-1.8849555921538759" upper="3.001966313430247" velocity="2.5"/>
-    <dynamics damping="1.0" friction="1.0"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="2.82" friction="0.773" />
+    <tiago_mpc armature="0.151" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-1.8149555921538758" soft_upper_limit="2.931966313430247"/>
   </joint>
   <!-- ARM 7 LINK -->
@@ -1390,7 +1402,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_left_7_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.6179938779914944" upper="2.6179938779914944" velocity="2.5"/>
-    <dynamics damping="1.0" friction="1.0"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="1.79" friction="0.945" />
+    <tiago_mpc armature="0.14" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.5479938779914946" soft_upper_limit="2.5479938779914946"/>
   </joint>
   <!--***********************-->
@@ -1763,9 +1777,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <parent link="torso_lift_link"/>
     <child link="arm_right_1_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="43.0" lower="-4.71238898038469" upper="0.5235987755982988" velocity="2.5"/>
-    <!-- TIAGO_MPC dynamics: User c estimate; b midpoint of 1.8-4.9 (2 runs); c in Nm, b in Nm s/rad. Metadata only; not a calibrated stiction model. -->
-    <dynamics damping="3.35" friction="2.1" />
+    <limit effort="43" lower="-4.71238898038469" upper="0.5235987755982988" velocity="2.5"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="4.7" friction="1.66" />
+    <tiago_mpc armature="0.746" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-4.642388980384689" soft_upper_limit="0.4535987755982988"/>
   </joint>
   <!-- ARM 2 LINK -->
@@ -1795,9 +1810,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <parent link="arm_right_1_link"/>
     <child link="arm_right_2_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="43.0" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
-    <!-- TIAGO_MPC dynamics: User c/b midpoints of 2.3-2.9 / 2.7-5.6 (8 runs); c in Nm, b in Nm s/rad. Metadata only; not a calibrated stiction model. -->
-    <dynamics damping="4.15" friction="2.6" />
+    <limit effort="43" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="9.69" friction="1.15" />
+    <tiago_mpc armature="0.882" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.3734609527920614" soft_upper_limit="1.0644640137963142"/>
   </joint>
   <!-- ARM 3 LINK -->
@@ -1828,8 +1844,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_3_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.6179938779914944" upper="2.6179938779914944" velocity="2.5"/>
-    <!-- TIAGO_MPC dynamics: User c/b midpoints of 1.8-2.2 / 1.3-3.6 (8 runs); c in Nm, b in Nm s/rad. Metadata only; not a calibrated stiction model. -->
-    <dynamics damping="2.45" friction="2.0" />
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="5.3" friction="1.16" />
+    <tiago_mpc armature="0.211" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.5479938779914946" soft_upper_limit="2.5479938779914946"/>
   </joint>
   <!-- ARM 4 LINK -->
@@ -1860,8 +1877,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_4_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
-    <!-- TIAGO_MPC dynamics: User c/b midpoints of 1.8-2.1 / 1.1-3.4 (8 runs); c in Nm, b in Nm s/rad. Metadata only; not a calibrated stiction model. -->
-    <dynamics damping="2.25" friction="1.95" />
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="4.2" friction="0.912" />
+    <tiago_mpc armature="0.648" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.3734609527920614" soft_upper_limit="1.0644640137963142"/>
   </joint>
   <!-- ARM 5 LINK -->
@@ -1893,8 +1911,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_5_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-1.5707963267948966" upper="3.6651914291880923" velocity="2.5"/>
-    <!-- TIAGO_MPC dynamics: ASSUMED c=0.8 above user lower bound >0.7; ASSUMED b=0.5, unmeasured; c in Nm, b in Nm s/rad. Metadata only; not a calibrated stiction model. -->
-    <dynamics damping="0.5" friction="0.8" />
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="3.66" friction="1.25" />
+    <tiago_mpc armature="0.326" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-1.5007963267948965" soft_upper_limit="3.5951914291880924"/>
   </joint>
   <!-- ARM 6 LINK -->
@@ -1925,8 +1944,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_6_link"/>
     <axis xyz="0 0 -1"/>
     <limit effort="26" lower="-1.8849555921538759" upper="3.001966313430247" velocity="2.5"/>
-    <!-- TIAGO_MPC dynamics: User c approximately 1.1 (1 run); ASSUMED b=0.3, unmeasured; c in Nm, b in Nm s/rad. Metadata only; not a calibrated stiction model. -->
-    <dynamics damping="0.3" friction="1.1" />
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="2.95" friction="0.473" />
+    <tiago_mpc armature="0.343" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-1.8149555921538758" soft_upper_limit="2.931966313430247"/>
   </joint>
   <!-- ARM 7 LINK -->
@@ -1957,8 +1977,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_7_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.6179938779914944" upper="2.6179938779914944" velocity="2.5"/>
-    <!-- TIAGO_MPC dynamics: ASSUMED c=0.3 and b=0.15, both unmeasured; c in Nm, b in Nm s/rad. Metadata only; not a calibrated stiction model. -->
-    <dynamics damping="0.15" friction="0.3" />
+    <!-- TIAGO_MPC dynamics: Actual values supplied by Felix 2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 is custom metadata, not enabled by URDF loaders. -->
+    <dynamics damping="2.95" friction="0.56" />
+    <tiago_mpc armature="0.27" />
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.5479938779914946" soft_upper_limit="2.5479938779914946"/>
   </joint>
   <!--***********************-->
