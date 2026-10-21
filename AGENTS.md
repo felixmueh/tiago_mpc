@@ -65,7 +65,11 @@ larger figure eight and tracking defaults), including their raw results, session
 archive copies and associated viewer replays. Their decisions are integrated or
 discarded. Do not describe those deleted records as still available or recreate
 the archives. Main's current code/defaults, the separate ROS2 work and the upstream
-axes/friction PRs remain. The native-axes PR is not yet adopted by main: its
+axes PR remain. After creating the friction issue, Felix also authorized removal
+of `/workspace/GATO-smooth-friction` and `feature/smooth-joint-friction`, including
+its drafts and benchmark data. Smooth friction remains available through main's
+pinned GATO commit `7918a83418dfcc220d40794f2dbd0ddff027a998`.
+The native-axes PR is not yet adopted by main: its
 joint-6 GPU boundary conversion remains required at the current pin.
 
 ## Experiment storage and presentation — Felix, 2026-10-21

@@ -36,10 +36,11 @@ logs, check/export scripts, archive copies and viewer replays during cleanup on
 2026-10-21. The measurements above remain historical summaries; the underlying
 records are no longer retained. Current code and defaults remain on main.
 
-The existing upstream contribution default-off baseline/final benchmarks remain
-at `/workspace/GATO-smooth-friction/_expr_data/smooth-friction-20261020/BENCHMARK.md`.
-Their scope and limitations remain unchanged; no new benchmark was run for this
-application integration.
+The upstream contribution's default-off baseline/final benchmarks were completed
+separately; no new benchmark was run for this application integration. After
+creating the friction issue, Felix requested removal of its worktree and branch;
+the benchmark files and local drafts were removed with it. Main still pins the
+smooth-friction implementation at GATO commit `7918a83`.
 
 # Canonical model correction — 20 October 2026
 
