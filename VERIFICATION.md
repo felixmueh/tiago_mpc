@@ -1,8 +1,49 @@
 > Current selection (2026-10-21): Felix selected running/terminal XYZ weights
 > **4/8** for both reaching and tracking. Reaching's terminal weight is now 8;
 > the historical 4/800 reaching results below retain their original configuration
-> and do not qualify this changed default. A bounded new sanity check is pending.
-> Tracking also uses a new GATO smooth-friction pin; see README.md.
+> and do not qualify this changed default. One new bounded sanity reach passed
+> the existing 5 cm arrival gate at .270 s with sampled raw limits passing.
+> Tracking also uses a new GATO smooth-friction pin. Its separately recorded
+> 24 s 4/8 episode completed at source b582309: 26.536 mm full-cycle RMS,
+> 40.570 mm peak, 31.392 mm endpoint; sampled executed and predicted raw limits
+> passed. These fixed-clock results are not real-time qualification; see README.md.
+
+## Integrated 4/8 defaults — 21 October 2026
+
+Integration code source `4dde1f8` uses GATO contribution `7918a83` with first-order
+fixed-arm dynamics. Existing 15 CPU checks pass, as do both CLI/import checks,
+py_compile and the actual-value passive-law CPU check. The latter checks sign
+and tanh dissipation, native/GPU sign covariance and public registration behavior;
+no-loss RK4 matches upstream exactly. Historical profile resolution tests retain
+their original baselines.
+
+A fresh sm61 N32 smooth module passes the tracking value/A-block checks,
+including zero velocity (step error 5.90e-7; A/finite-difference error 1.70e-5).
+The separate default-off reaching module passes its two model-step checks
+(max errors 3.11e-5 and 2.71e-5). GPU checks ran sequentially under the three
+shared locks. No performance benchmark or real-time claim is made.
+
+Exactly one 4/8 reaching sanity episode ran: comfortable start, 71.891 mm initial
+position error, 27 solves and .270 s simulated duration. It passed the existing
+5 cm/1 rad/s speed-L1 arrival gate at 49.830 mm error and .624 rad/s speed-L1.
+Maximum actuator torque was 10.608 Nm; sampled executed raw position, velocity
+and effort excesses were zero. This first-arrival stop is not precise settling,
+and one short reach does not qualify the historical random100 cohort. Reaching
+retains rigid-body dynamics without passive losses.
+
+Full logs, generated model receipts and reproducible bounded check/export scripts
+are retained in the main checkout under
+`_expr_data/session-20261021/tiago_mpc-tracking-defaults/_expr_data/checks/`.
+The replay library path is
+`reaching/default-weights-20261021/default_xyz4_terminal8`; it contains all 109
+recorded states, native velocities/applied torques and the five saved initial
+predictions. No episode was rerun for export. The separately recorded 24 s
+tracking result and its replay/raw paths are documented in README.md.
+
+The existing upstream contribution default-off baseline/final benchmarks remain
+at `/workspace/GATO-smooth-friction/_expr_data/smooth-friction-20261020/BENCHMARK.md`.
+Their scope and limitations remain unchanged; no new benchmark was run for this
+application integration.
 
 # Canonical model correction — 20 October 2026
 

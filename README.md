@@ -24,11 +24,12 @@ cd /workspace/tiago_mpc
 .venv/bin/python examples/reach_sim.py
 ```
 
-GATO is a Git submodule in `external/gato`, pinned to upstream commit
+GATO is a Git submodule in `external/gato`, pinned to commit
 `7918a83418dfcc220d40794f2dbd0ddff027a998`, the local smooth-joint-friction
 contribution based on upstream `aeacf16e`. Its own dependencies pin
 `grid-rbd==0.5.1`. The first run generates TIAGo dynamics and compiles just the
-N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The contribution adds opt-in passive prediction; default-off reaching retains
+N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The
+contribution adds opt-in passive prediction; default-off reaching retains
 the existing rigid-body model. There is no dependency on the historical GATO fork.
 
 ## The example
@@ -103,8 +104,11 @@ The historical promoted ADMM-only configuration used running/terminal position
 weights 4/800: **84/100 arrivals and 100/100 sampled physical-limit passes**,
 compared with 69/100 arrivals and 100/100 limit passes for the retained soft+ADMM
 profile. Felix has since selected **4/8** for both reaching and tracking; that
-new reaching terminal weight awaits a separately recorded sanity check. The
-historical 100-case outcome does not qualify the changed default. The same frozen inputs
+new reaching terminal weight passed one bounded comfortable-start sanity reach:
+71.891 mm initial displacement reached the 5 cm arrival threshold in 0.270 s,
+with sampled raw limits passing. The historical 100-case outcome does not
+qualify the changed default, and this short check does not establish broad
+reaching reliability or precise settling. The same frozen inputs
 ran once in original order for each cohort. There were 16 gained arrivals and
 one lost arrival; the selected diagnostic pilot overlaps the 100, so these
 counts are not independent holdout evidence. The historical cohort is retained
@@ -171,8 +175,10 @@ end-effector XYZ weight **4** and terminal XYZ weight **8**. Joint-velocity
 regularization remains **0.01** and actuator-torque regularization **1e-6**.
 Orientation and joint-posture objectives are inactive. All three soft-limit
 weights are zero; ADMM joint-position, velocity and actuator-effort constraints
-remain enabled. This selection awaits its separately recorded task check; older
-8/1600 results do not qualify the new 4/8 weights.
+remain enabled. The separately recorded 24 s check at 4/8 completed with
+**26.536 mm full-cycle RMS**, 40.570 mm peak and 31.392 mm endpoint error; sampled
+executed and returned-plan raw limits passed. This is the selected tuning, not
+the preceding 8/1600 configuration that achieved 2.056 mm RMS.
 
 The plant uses the supplied actual right-arm Coulomb/damping coefficients with
 hard-sign friction; GATO uses tanh friction with **0.03 rad/s** smoothing plus
@@ -201,3 +207,22 @@ see `../tiago_mpc_visualizer/docs/replay-format.md`. Historical study protocols,
 raw cohorts and rendering helpers remain on their experiment branches. Reaching
 also uses running/terminal XYZ weights 4/8; its other task-specific settings and
 the frozen random100 cohorts are unchanged.
+
+The 4/8 tracking replay is in the viewer at
+`tracking/default-weights-20261021/default_xyz4_terminal8_torque1e-6`
+(normally <http://192.168.178.82:8090>). The recorded episode used application
+source `b582309`; its final study branch is `199c899`. The retained raw run and
+report are in the main checkout's
+`_expr_data/session-20261021/tiago_mpc-larger-fig8/_expr_data/default-tracking-weights-20261021/`.
+The integration's effective tracking parameters match that episode; only the
+configuration description and removal of the unused historical hard-predictor
+adapter differ.
+
+The one 4/8 reaching sanity replay is
+`reaching/default-weights-20261021/default_xyz4_terminal8`: all 109 recorded states
+and five retained initial predictions. It stops on the existing 5 cm arrival
+gate (49.830 mm final error, speed L1 .624 rad/s), not after settling. Reaching
+continues to use rigid-body plant and predictor dynamics with passive forces
+inactive. The raw sanity run used integration source `4dde1f8` and is retained at
+`_expr_data/session-20261021/tiago_mpc-tracking-defaults/_expr_data/checks/reaching-4-8/`
+in the main checkout.

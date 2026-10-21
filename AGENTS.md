@@ -44,14 +44,17 @@ Felix selected running end-effector XYZ cost **4** and terminal XYZ cost **8**.
 `configs/tracking.json` owns tracking settings: qd_cost=.01, u_cost=1e-6,
 all three soft-limit costs zero (ADMM-only limits), actual right-arm losses,
 tanh predictor width .03 rad/s, hard-sign plant, N32/2 ms and .1 ms RK4 plant.
-This is a newly selected configuration awaiting its separately recorded task
-check; old 8/1600 results are not qualification of 4/8. Keep armature inactive
+The separate 24 s 4/8 tracking check completed (26.536 mm full-cycle RMS;
+sampled executed and planned raw limits passed); old 8/1600 results do not
+qualify 4/8. Keep armature inactive
 in both models. Preserve historical protocols and raw cohorts unchanged.
 Reaching also uses running/terminal XYZ weights 4/8 in `configs/reaching.json`;
 only its terminal weight changes from the preceding 4/800 profile. Other reaching
 settings remain task-specific and unchanged. The historical 84/100 cohort used
-4/800 and does not qualify this new terminal weight; a bounded sanity check is
-pending. Do not rerun or relabel the frozen historical cohort.
+4/800 and does not qualify this new terminal weight. One bounded 4/8 sanity reach
+passed the existing 5 cm arrival gate at .270 s with sampled raw limits passing;
+this is not broad reaching or settling qualification. Do not rerun or relabel
+the frozen historical cohort.
 
 ## Experiment storage and presentation — Felix, 2026-10-21
 
