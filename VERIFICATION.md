@@ -1,3 +1,45 @@
+## Shared setup and simulation solve latency — 2026-10-21
+
+Reaching, tracking and the ROS MPC worker now share configuration resolution,
+model preparation/checks, passive-force helpers and public GATO controller
+construction. No upstream sources, models, costs or ADMM defaults changed.
+Simulation adds fixed/measured solve latency; default fixed zero preserves the
+previous timing. ROS retains its processes, leases and safety checks.
+
+- Full CPU suite: 185 tests and 118 subtests pass without ROS. This includes
+  delayed actuation, initial zero torque, overruns, final clipping, reference
+  phase, exact 12,000-call tracking duration and saved plant-only coefficients.
+- Sequential GTX1070 baseline/refactor default reaches both arrive at .090 s
+  in nine solves, with identical recorded states and passing executed limits.
+- Both 24 s figure-eights complete in 12,000 solves and pass executed limits:
+  20.806 / 20.812 mm RMS, maximum Cartesian path difference .817 mm. Joint paths
+  differ by up to .0351 rad; the initial .01 rad comparison screen failed and is
+  retained. These are similar task outcomes, not exact trajectory equivalence.
+- Measured-time reaching arrives at .0934 s in six solves with passing executed
+  limits. Short 60 ms tracking checks complete with passing limits for fixed
+  .5 ms and measured latency. The latter exercises overruns and final clipping;
+  it is not a complete measured-time tracking qualification.
+- Spawned workers return finite bounded torques for three reaching and three
+  tracking requests. One refactored reaching reply arrives at 146 ms, exceeding
+  its original 100 ms lease (controller call about 49 ms); all other replies and
+  all six unchanged-main replies meet their leases. No retries or lease changes.
+  The extra delay is outside the controller call and is not causally attributed.
+  ROS timing/physical execution remains unqualified.
+
+Commands use `/workspace/tiago_mpc/.venv/bin/python`: `-m pytest -q tests`
+with `PYTHONPATH=external/gato/python PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`,
+`examples/reach_sim.py --output <run>/reach`, and
+`examples/track_figure8.py --output <run>/tracking`. Timing checks additionally
+use `--solve-time-mode measured`, or `--solve-time-mode fixed --solve-time-s .0005`.
+The short tracking configuration and worker smoke scripts, source snapshots,
+all outcomes and comparison are retained under
+`/workspace/tiago_mpc-shared-setup/_expr_data/consolidation/`.
+Baseline source is main `bef8e03`; refactored runs record its dirty working tree
+and copied implementation. No timing benchmark or physical commands were made.
+Display-only replays are `consolidation/{baseline,after}/{reach,tracking}` in the
+shared viewer library. Tracking exports every tenth plant sample and every
+200th saved plan; complete measurements remain in the raw runs.
+
 ## Nominal grasp-center frame — 2026-10-21
 
 The reduced model adds a massless fixed TCP at flange-local `(0, 0,

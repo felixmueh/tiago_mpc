@@ -2,13 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib.util
-import json
 import math
-import os
 from pathlib import Path
 import queue
-import sys
 import time
 
 import numpy as np
@@ -30,63 +26,6 @@ class WorkerConfig:
             raise ValueError("budget_s must be finite and positive")
 
 
-def _example_module(name):
-    # Resolve this checkout explicitly; avoid importing a different examples
-    # package from a user's environment. Called only by the child factory.
-    examples = str(ROOT / "examples")
-    sys.path.insert(0, examples)
-    try:
-        spec = importlib.util.spec_from_file_location(
-            f"_tiago_mpc_{name}", ROOT / "examples" / f"{name}.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        sys.path.remove(examples)
-
-
-def _configuration(path):
-    """Use shared parameter resolution, allowing tracking's explicit loss model."""
-    resolver = _example_module("reaching_config")
-    selected = Path(path) if path is not None else resolver.DEFAULT_CONFIG
-    settings = json.loads(selected.read_text())
-    tracking_fields = {"sim_dt_s", "duration_s", "secondary_metrics_start_s", "figure8",
-                       "joint_dynamics", "predictor_smoothing_rad_s", "armature_runtime"}
-    effective = resolver.resolve_configuration(
-        {key: value for key, value in settings.items() if key not in tracking_fields})
-    prediction_losses = None
-    if settings.get("joint_dynamics") is not None:
-        dynamics = _example_module("joint_dynamics")
-        losses = dynamics.validate(settings["joint_dynamics"])
-        prediction_losses = dynamics.validate(dict(
-            losses, model="coulomb_tanh_viscous",
-            smoothing_rad_s=settings["predictor_smoothing_rad_s"]))
-    elif "predictor_smoothing_rad_s" in settings:
-        raise ValueError("predictor_smoothing_rad_s requires joint_dynamics")
-    effective["prediction_joint_dynamics"] = prediction_losses
-    return selected, settings, effective
-
-
-def _set_bounds(solver, model, signs, bounds):
-    """Install explicit selected bounds; preserve explicit legacy omissions."""
-    margin = float(bounds["joint_margin_rad"])
-    if (not math.isfinite(margin) or margin < 0
-            or margin >= .5 * np.min(model.upperPositionLimit - model.lowerPositionLimit)):
-        raise ValueError("Invalid joint margin")
-    lo = (model.lowerPositionLimit + margin) * signs
-    hi = (model.upperPositionLimit - margin) * signs
-    solver.set_row_group_bounds(0, np.minimum(lo, hi), np.maximum(lo, hi))
-    for group, key, raw in ((1, "velocity_fraction", model.velocityLimit),
-                             (2, "effort_fraction", model.effortLimit)):
-        fraction = bounds[key]
-        if fraction is None:
-            continue  # The explicit historical profile retains compiled offsets.
-        fraction = float(fraction)
-        if not math.isfinite(fraction) or not 0 < fraction <= 1:
-            raise ValueError("Limit fractions must be finite and in (0, 1]")
-        solver.set_row_group_bounds(group, -fraction * raw, fraction * raw)
-
-
 class MpcEngine:
     """Small testable boundary around the public GATO MPCController API."""
 
@@ -106,44 +45,17 @@ class MpcEngine:
     @classmethod
     def build(cls, config):
         """Initialize and check the model in the worker, before WorkerReady."""
-        cache_dir = Path(config.cache_dir or ROOT / "_expr_data/runtime/mpc-cache").resolve()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["GATO_CACHE_DIR"] = str(cache_dir / "gato")
-        os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]
-        import gato
-        import pinocchio as pin
-        from .model_runtime import EE_FRAME, PLANT, check_model, ee_position, runtime_urdf
+        from .configuration import load_configuration
+        from .controller import build_controller
+        from .model_runtime import ee_position
 
-        selected, _, effective = _configuration(config.config_path)
-        prediction_losses = effective["prediction_joint_dynamics"]
-        path, gpu_path, signs, names, reference_frame = runtime_urdf(cache_dir, prediction_losses)
-        model = pin.buildModelFromUrdf(str(path))
-        if (model.nq, model.nv) != (7, 7) or tuple(model.names)[1:] != RIGHT_ARM_JOINTS or names != RIGHT_ARM_JOINTS:
-            raise ValueError("Native model joint dimensions/order differ from ROS right arm")
-        data = model.createData()
-        frame_id = model.getFrameId(EE_FRAME)
-        if frame_id >= model.nframes:
-            raise ValueError(f"Missing end-effector frame {EE_FRAME}")
-        n, dt_s = effective["N"], effective["dt_s"]
-        plant = PLANT + "_smooth" if prediction_losses else PLANT
-        adapter = _example_module("joint_dynamics").register_robot(
-            plant, gpu_path, n_points=n, ee_frame=EE_FRAME, config=prediction_losses)
-        solver = gato.BSQP(str(gpu_path), batch_size=1, N=n, dt=dt_s,
-                           plant_type=plant, params=gato.SolverParams(**effective["solver_params"]))
-        model_errors = check_model(solver, model, data, frame_id, signs, prediction_losses)
-        controller = gato.MPCController(solver, limits="admm", linsys="pcg", **effective["controller"])
-        _set_bounds(solver, model, signs, effective["limit_bounds"])
-        details = dict(
-            N=n, dt_s=dt_s, configuration_file=str(selected.resolve()),
-            effective_configuration=effective, reference_frame=reference_frame,
-            ee_frame=EE_FRAME, joint_names=list(names), gpu_joint_coordinate_signs=signs.tolist(),
-            end_effector_frame=EE_FRAME, prediction_joint_dynamics=prediction_losses,
-            generator_adapter=adapter,
-            q_lower=model.lowerPositionLimit.tolist(), q_upper=model.upperPositionLimit.tolist(),
-            velocity_limits=model.velocityLimit.tolist(), effort_limits=model.effortLimit.tolist(),
-            model_step_max_abs_errors=model_errors, cache_dir=str(cache_dir))
-        return cls(controller, signs=signs, n=n, dt_s=dt_s,
-                   ee_position=lambda q: ee_position(model, data, q, frame_id),
+        selected, _, effective = load_configuration(config.config_path)
+        setup = build_controller(effective, cache_dir=Path(
+            config.cache_dir or ROOT / "_expr_data/runtime/mpc-cache"))
+        details = dict(setup.details, configuration_file=str(selected.resolve()))
+        return cls(setup.controller, signs=setup.signs,
+                   n=effective["N"], dt_s=effective["dt_s"],
+                   ee_position=lambda q: ee_position(setup.model, setup.data, q, setup.frame_id),
                    budget_s=config.budget_s, details=details)
 
     def solve(self, request):

@@ -1,0 +1,126 @@
+"""Exercise example timing and saved telemetry with a deterministic controller."""
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace as NS
+import xml.etree.ElementTree as ET
+
+import numpy as np
+import pinocchio as pin
+import pytest
+
+from tiago_mpc.model_runtime import URDF, EE_FRAME
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def output_root():
+    parent = ROOT / "_expr_data" / "test-simulation-examples"
+    parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=parent) as directory:
+        yield Path(directory)
+
+
+def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch,
+                      *, duration=.03, period=.01):
+    spec = importlib.util.spec_from_file_location(example, ROOT / "examples" / f"{example}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tracking = example == "track_figure8"
+    settings = json.loads((ROOT / "configs" / ("tracking.json" if tracking else "reaching.json")).read_text())
+    settings.update(N=2, dt_s=period)
+    if tracking:
+        settings.update(sim_dt_s=min(.003, period), duration_s=duration, secondary_metrics_start_s=.01)
+        settings["figure8"]["period_s"] = duration
+        settings["joint_dynamics"]["coulomb_nm"][0] = 1.234
+    config = output_root / "config.json"
+    config.write_text(json.dumps(settings))
+    out = output_root / "run"
+    argv = [example, "--config", str(config), "--output", str(out),
+            "--solve-time-mode", mode, "--solve-time-s", str(fixed)]
+    argv += ["--losses", "plant-only"] if tracking else ["--hold", "--timeout", str(duration)]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(module, "git", lambda *args, **kwargs: "test")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda name: "test")
+
+    model = pin.buildModelFromUrdf(str(URDF))
+    calls, applied = [], []
+    controller = NS(reset=lambda state: None, solver=object(), reset_rho_each_step=False,
+                    LIMIT_DEFAULTS={"admm": {}}, admm_linsys="pcg")
+
+    def step(state, reference, *, dt_elapsed):
+        calls.append((state.copy(), reference.copy(), dt_elapsed))
+        stats = NS(**{key: np.ones(1, dtype=int) for key in
+                      ("sqp_iters", "pcg_iters", "admm_iters", "admm_linsys_iters")})
+        return NS(u=np.full(7, min(len(calls), 3)), wall_s=wall, admm_linsys="pcg",
+                  row_viol=np.zeros(1), solve=NS(stats=stats, solve_time_us=123.,
+                                               xu=np.zeros((1, 35))))
+
+    def integrate(model, data, q, v, u, h, *losses):
+        applied.append((u.copy(), h))
+        return q + .001 * h * u, v.copy()
+
+    controller.step = step
+    setup = NS(controller=controller, model=model, data=model.createData(),
+               frame_id=model.getFrameId(EE_FRAME), signs=np.ones(7),
+               urdf_path=URDF, gpu_urdf_path=URDF,
+               details=dict(model_step_max_abs_errors=[], generator_adapter="stub", plant_name="stub"))
+    def build(effective, **kwargs):
+        if tracking:
+            assert effective["prediction_joint_dynamics"] is None
+        return setup
+    monkeypatch.setattr(module, "build_controller", build)
+    monkeypatch.setattr(module, "plant_rk4" if tracking else "rk4", integrate)
+    if tracking:
+        monkeypatch.setattr(module, "model_receipt", lambda *args: {})
+        prepare = module.runtime_urdf
+        monkeypatch.setattr(module, "runtime_urdf", lambda cache, losses: prepare(output_root / "plant", losses))
+    assert module.main() == 0
+    if tracking:
+        joint = ET.parse(out / "plant.urdf").find(".//joint[@name='arm_right_1_joint']/dynamics")
+        assert float(joint.get("friction")) == 1.234
+
+    with np.load(out / "trajectory.npz") as trajectory:
+        np.testing.assert_allclose(trajectory["solve_start_s"], starts)
+        assert len(calls) == len(starts)
+        assert trajectory["time_s"][-1] == pytest.approx(duration)
+        assert np.sum([h for _, h in applied]) == pytest.approx(duration)
+        latency = fixed if mode == "fixed" else wall
+        np.testing.assert_allclose(trajectory["charged_solve_time_s"], latency)
+        np.testing.assert_allclose(trajectory["controller_wall_s"], wall)
+        # Every plant substep uses the control available at its start timestamp.
+        # The final solve's control may never become active before the episode ends.
+        sample_starts = trajectory["time_s"][:-1]
+        expected_u = np.minimum(3, np.searchsorted(np.asarray(starts) + latency,
+                                                  sample_starts + 1e-12, side="right"))
+        torque_key = "applied_actuator_torque_nm" if tracking else "applied_torque_nm"
+        np.testing.assert_allclose(trajectory[torque_key], np.repeat(expected_u[:, None], 7, axis=1))
+        assert calls[0][2] is None
+        np.testing.assert_allclose([call[2] for call in calls[1:]], np.diff(starts))
+        if tracking:
+            start_xyz = trajectory["ee_xyz_m"][0]
+            for call, start in zip(calls, starts):
+                expected = module.reference(start + np.arange(2) * period, start_xyz, settings["figure8"])
+                np.testing.assert_allclose(call[1].reshape(2, 6)[:, :3], expected, atol=1e-7)
+            np.testing.assert_allclose(trajectory["reference_xyz_m"],
+                module.reference(trajectory["time_s"], start_xyz, settings["figure8"]))
+
+
+@pytest.mark.parametrize("example", ["reach_sim", "track_figure8"])
+@pytest.mark.parametrize("mode,fixed,wall,starts", [
+    ("fixed", 0., .014, [0., .01, .02]),
+    ("fixed", .004, .014, [0., .01, .02]),
+    ("measured", 0., .004, [0., .01, .02]),
+    ("measured", 0., .014, [0., .014, .028]),
+])
+def test_example_delays_actuation_and_advances_reference(
+        example, mode, fixed, wall, starts, output_root, monkeypatch):
+    run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch)
+
+
+def test_default_tracking_clock_does_not_add_a_roundoff_solve(output_root, monkeypatch):
+    run_example_check("track_figure8", "fixed", 0., .001, np.arange(12000) * .002,
+                      output_root, monkeypatch, duration=24., period=.002)

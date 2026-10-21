@@ -6,6 +6,12 @@ integrated on `main`. ROS 2 is optional: simulation examples and package imports
 do not require ROS packages or initialize ROS. Source a compatible ROS/PAL
 environment only when constructing a ROS client.
 
+The worker and simulation examples call the same package helpers in
+`configuration.py`, `model_runtime.py`, `joint_dynamics.py` and `controller.py`.
+The worker no longer dynamically imports example scripts. Only the simulation
+loops use the fixed/measured latency model described in the README; ROS keeps
+its measured feedback, monotonic leases and independent safety process.
+
 ## Review fixes and accepted limitations
 
 The 21 October review led to three fixes: effort-controller setup and activation
@@ -145,6 +151,9 @@ PYTHONPATH=external/gato/python PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 ```
 
 After the review fixes (21 October 2026), **161 tests and 118 subtests pass**.
+The subsequent setup consolidation passes **185 tests and 118 subtests**;
+its spawned-worker smoke retains one first-reaching reply beyond the 100 ms
+lease. See `VERIFICATION.md` for the baseline comparison and limits of this check.
 The earlier main integration passed 147 tests and 118 subtests
 using GATO 0.1.2 plus the existing smooth-friction patch, GRiD 0.5.3 and the new
 grasp frame. ROS is not installed in the test environment. Package, I/O runner

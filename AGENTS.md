@@ -43,8 +43,16 @@ updates. These pass 161 CPU tests plus 118 subtests. Keep arm freshness separate
 from the safety sequence. Missing gripper mimic followers are warning-only by
 explicit request; neutral fallback geometry remains a limitation. He accepted
 the existing separate configuration-file reads; no snapshot change is requested.
-Sharing model/configuration/controller setup between simulation and the ROS
-worker is a proposed consolidation, not implemented by these review fixes.
+The later consolidation shares model/configuration/controller setup between
+simulation and the ROS worker through normal package imports. Keep setup in
+`configuration.py`, `model_runtime.py`, `joint_dynamics.py` and `controller.py`;
+do not add dynamic example imports or duplicate setup in callers.
+Simulation supports `fixed` (configurable seconds, default zero) and `measured`
+(complete controller-step wall time) solve latency. Hold the previous torque
+during the charge, starting with zero torque; apply the new torque for the
+remaining nominal period, and extend overruns to the charged duration. Record
+simulated solve-start/update/latency times. Reference phase follows simulated
+time. This is simulation-only and does not change ROS leases or safety gates.
 Logs remain in `/workspace/tiago_mpc-ros2-review-fixes/_expr_data/ros2-review-fixes/`.
 
 The application remote is `https://github.com/felixmueh/gato_tiago.git`. Its GATO

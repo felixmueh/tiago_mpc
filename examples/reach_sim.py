@@ -7,113 +7,46 @@ from datetime import datetime, timezone
 import hashlib
 import importlib.metadata
 import json
-import os
 from pathlib import Path
 import subprocess
 import shutil
 import sys
 import traceback
-import xml.etree.ElementTree as ET
 
 import numpy as np
-import pinocchio as pin
 
 ROOT = Path(__file__).resolve().parents[1]
-# Keep generated headers, CUDA builds and the runtime URDF inside this checkout.
-os.environ.setdefault("GATO_CACHE_DIR", str(ROOT / ".cache/gato"))
-# Let GATO's CMake subprocess use tools installed in this Python environment.
-os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]
+sys.path.insert(0, str(ROOT))
 
 import gato
+import pinocchio as pin
 from gato.common import rk4
-from reaching_config import load_configuration
+from tiago_mpc.configuration import load_configuration
+from tiago_mpc.controller import build_controller
+from tiago_mpc.model_runtime import (URDF, EE_FRAME, PLANT, Q_CHECK, Q_DELTA_CHECK,
+                                     ee_position, runtime_urdf as prepare_urdf,
+                                     check_model as check_predictor)
+from tiago_mpc.simulation import control_intervals
 
-URDF = ROOT / "models/tiago_right/tiago_right_arm.urdf"
-MESHES = ROOT / "models/tiago_pro/meshes"
-PLANT = "tiago_mpc_right"
-EE_FRAME = "arm_right_grasp_joint"
 SIM_DT_S = 0.003
 TIMEOUT_S, POSITION_TOL_M, SPEED_L1_TOL_RAD_S = 8.0, 0.05, 1.0
-Q_START_RAD = np.array([-0.39, -1.73, -0.38, -2.35, 0.0, -1.21, 0.04])
+Q_START_RAD = Q_CHECK.copy()
 # A reachable target is FK(q_start + delta); q_goal is NOT a posture objective.
-Q_GOAL_DELTA_RAD = np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
+Q_GOAL_DELTA_RAD = Q_DELTA_CHECK.copy()
 
 
 def git(*args, cwd=ROOT):
     return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
 
 
+# Keep the viewer's existing example API while sharing the implementation.
 def runtime_urdf(joint_dynamics=None):
-    """Resolve meshes; normalize signed axes only in the GPU coordinate model."""
-    manifest = json.loads((ROOT / "models/manifest.json").read_text())
-    for relative, info in manifest.items():
-        p = ROOT / "models" / relative
-        if hashlib.sha256(p.read_bytes()).hexdigest() != info["sha256"]:
-            raise ValueError(f"Model asset differs from manifest (or is an LFS pointer): {p}")
-    tree = ET.parse(URDF)
-    for mesh in tree.iter("mesh"):
-        path = MESHES / Path(mesh.attrib["filename"]).name
-        if not path.is_file():
-            raise FileNotFoundError(path)
-        mesh.set("filename", str(path))
-    if joint_dynamics is not None:
-        from joint_dynamics import configure_urdf
-        configure_urdf(tree, joint_dynamics)
-    suffix = "_dissipative" if joint_dynamics is not None else ""
-    out = ROOT / f".cache/models/tiago_right_arm{suffix}.urdf"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-    if not out.exists() or out.read_bytes() != payload:
-        out.write_bytes(payload)
-    signs = []
-    for joint in tree.iter("joint"):
-        if joint.get("type") == "fixed":
-            continue
-        axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
-        if not (np.array_equal(axis, [0, 0, 1]) or np.array_equal(axis, [0, 0, -1])):
-            raise ValueError(f"Unsupported arm axis: {axis}")
-        sign = float(axis[2]); signs.append(sign)
-        if sign < 0:
-            joint.find("axis").set("xyz", "0 0 1")
-            limit = joint.find("limit")
-            lo, hi = float(limit.get("lower")), float(limit.get("upper"))
-            limit.set("lower", repr(-hi)); limit.set("upper", repr(-lo))
-            safety = joint.find("safety_controller")
-            if safety is not None:
-                lo, hi = float(safety.get("soft_lower_limit")), float(safety.get("soft_upper_limit"))
-                safety.set("soft_lower_limit", repr(-hi)); safety.set("soft_upper_limit", repr(-lo))
-    gpu_path = out.with_name(f"tiago_right_grid{suffix}.urdf")
-    payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-    if not gpu_path.exists() or gpu_path.read_bytes() != payload:
-        gpu_path.write_bytes(payload)
-    return out, gpu_path, np.asarray(signs)
-
-
-def ee_position(model, data, q, fid):
-    pin.forwardKinematics(model, data, q)
-    pin.updateFramePlacements(model, data)
-    return data.oMf[fid].translation.copy()
+    native, gpu, signs, _, _ = prepare_urdf(ROOT / ".cache", joint_dynamics)
+    return native, gpu, signs
 
 
 def check_model(solver, model, data, fid, q_goal, signs):
-    """Bounded convention check at both task poses, including the signed axis."""
-    errors = []
-    for q in (Q_START_RAD, q_goal):
-        expected = ee_position(model, data, q, fid)
-        if not np.allclose(solver.ee_pos(q*signs), expected, atol=1e-5, rtol=1e-4):
-            raise ValueError("GATO/Pinocchio end-effector frames disagree")
-        v = np.array([0.10, -0.08, 0.06, -0.04, 0.02, -0.07, 0.03])
-        u = pin.rnea(model, data, q, v, np.zeros(7)) + np.linspace(-0.3, 0.3, 7)
-        x = np.r_[q, v]
-        gpu = np.asarray(solver.sim_forward((x*np.tile(signs, 2))[None],
-                                            (u*signs)[None], SIM_DT_S))[0]*np.tile(signs, 2)
-        q_next, v_next = rk4(model, data, q, v, u, SIM_DT_S)
-        error = float(np.max(np.abs(gpu - np.r_[q_next, v_next])))
-        errors.append(error)
-        if not np.isfinite(gpu).all() or error > 2e-3:
-            raise ValueError(f"GATO/Pinocchio one-step disagreement: {error:.6g}")
-    solver.reset()
-    return errors
+    return check_predictor(solver, model, data, fid, signs, q_goal=q_goal)
 
 
 def main():
@@ -126,7 +59,14 @@ def main():
                    help="tracked point; default nominal grasp center, flange for historical tasks")
     p.add_argument("--input", type=Path, help="frozen experiment NPZ with initial_state/target_xyz/reference")
     p.add_argument("--config", type=Path, help="JSON overrides against the historical base; default configs/reaching.json")
+    p.add_argument("--solve-time-mode", choices=("fixed", "measured"), default="fixed",
+                   help="charge fixed latency or measured controller wall time to the plant")
+    p.add_argument("--solve-time-s", type=float, default=0., help="fixed solve latency in seconds (default zero)")
     args = p.parse_args()
+    try:
+        control_intervals(1., 0., mode=args.solve_time_mode, fixed_s=args.solve_time_s)
+    except ValueError as exc:
+        p.error(str(exc))
     ee_frame = args.ee_frame
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         p.error("--timeout must be finite and positive")
@@ -134,15 +74,15 @@ def main():
         config_path, settings, effective = load_configuration(args.config)
     except (ValueError, TypeError) as exc:
         p.error(str(exc))
-    params = gato.SolverParams(**effective["solver_params"])
     n_points, knot_dt = effective["N"], effective["dt_s"]
-    controller_options = settings.get("controller", {})
+    controller_options = effective["controller"]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     out = args.output or ROOT / "_expr_data" / "reaching" / stamp
     out.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(__file__, out / "reach_sim.py")
     shutil.copyfile(config_path, out / "config.json")
-    shutil.copyfile(ROOT / "examples/reaching_config.py", out / "reaching_config.py")
+    for name in ("configuration.py", "controller.py", "model_runtime.py", "joint_dynamics.py", "simulation.py"):
+        shutil.copyfile(ROOT / "tiago_mpc" / name, out / name)
     result = dict(status="started", execution_stage="setup", mode="hold" if args.hold else "reach",
                   repository_commit=git("rev-parse", "HEAD") if (ROOT / ".git").exists()
                   and git("rev-list", "--all", "--count") != "0" else None,
@@ -154,30 +94,33 @@ def main():
                   N=n_points, dt_s=knot_dt, prediction_horizon_s=(n_points-1)*knot_dt,
                   sim_dt_s=SIM_DT_S, timeout_s=args.timeout,
                   position_tol_m=POSITION_TOL_M, speed_l1_tol_rad_s=SPEED_L1_TOL_RAD_S,
-                  solver_params=params.asdict(), configuration=settings,
+                  solver_params=effective["solver_params"], configuration=settings,
                   configuration_file=str(config_path.resolve()),
                   effective_configuration=effective, limits="admm", linsys="pcg",
-                  timing="fixed simulation time; solve latency does not advance plant",
+                  timing=dict(mode=args.solve_time_mode, fixed_s=args.solve_time_s,
+                              measured_source="MPCController.step wall_s",
+                              previous_control_during_solve=True, initial_control="zero torque"),
                   orientation="unconstrained", collisions="not checked",
                   end_effector_frame=ee_frame,
                   urdf_sha256=hashlib.sha256(URDF.read_bytes()).hexdigest())
     times, states, controls, errors, solve_us, wall_s, row_viol = [], [], [], [], [], [], []
-    work = []
+    work, charged_s, update_s, solve_start_s = [], [], [], []
     predicted_states, prediction_errors = [], []
     exit_code = 1
     try:
-        path, gpu_path, signs = runtime_urdf()
+        setup = build_controller(effective, cache_dir=ROOT / ".cache", ee_frame=ee_frame)
+        controller = setup.controller
+        model, data, fid, signs = setup.model, setup.data, setup.frame_id, setup.signs
+        gpu_path = setup.gpu_urdf_path
         state_signs = np.tile(signs, 2)
         result["gpu_joint_coordinate_signs"] = signs.tolist()
         result["gpu_urdf_sha256"] = hashlib.sha256(gpu_path.read_bytes()).hexdigest()
-        model = pin.buildModelFromUrdf(str(path))
-        data = model.createData()
-        if (model.nq, model.nv) != (7, 7):
-            raise ValueError(f"Expected seven-joint arm; got {model.nq}/{model.nv}")
         result["joint_names"] = list(model.names)[1:]
-        fid = model.getFrameId(ee_frame)
-        if fid >= model.nframes:
-            raise ValueError(f"Missing end-effector frame {ee_frame}")
+        result["model_step_max_abs_errors"] = setup.details["model_step_max_abs_errors"]
+        print("GATO/Pinocchio model checks passed", flush=True)
+        if args.build_only:
+            result["status"] = "model_checked"
+            return 0
         x_start = np.r_[Q_START_RAD, np.zeros(7)]
         q_goal = Q_START_RAD + (0.0 if args.hold else Q_GOAL_DELTA_RAD)
         reference = None
@@ -218,38 +161,6 @@ def main():
         print(f"Target displacement: {result['initial_distance_m']*1000:.1f} mm", flush=True)
         result["status"] = "building_model"
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
-        gato.register_robot(PLANT, gpu_path, N=[n_points], ee_frame=ee_frame, jobs=1)
-        solver = gato.BSQP(str(gpu_path), batch_size=1, N=n_points, dt=knot_dt,
-                           plant_type=PLANT, params=params)
-        result["status"] = "checking_model"
-        (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
-        # Reuse the already qualified bounded convention check; random task poses
-        # are task inputs, not an expanded numerical qualification campaign.
-        result["model_step_max_abs_errors"] = check_model(
-            solver, model, data, fid, Q_START_RAD+Q_GOAL_DELTA_RAD, signs)
-        print("GATO/Pinocchio model checks passed", flush=True)
-        if args.build_only:
-            result["status"] = "model_checked"
-            return 0
-        controller = gato.MPCController(solver, limits="admm", linsys="pcg", **controller_options)
-        bounds = settings.get("limit_bounds", {})
-        if set(bounds)-{"joint_margin_rad", "velocity_fraction", "effort_fraction"}:
-            raise ValueError("Unknown limit bound configuration")
-        for group, key in ((0, "joint_margin_rad"), (1, "velocity_fraction"), (2, "effort_fraction")):
-            if key not in bounds:
-                continue
-            value = float(bounds[key])
-            if group == 0:
-                if not 0 <= value < .5*np.min(model.upperPositionLimit-model.lowerPositionLimit):
-                    raise ValueError("Invalid joint margin")
-                lo, hi = (model.lowerPositionLimit+value)*signs, (model.upperPositionLimit-value)*signs
-                lo, hi = np.minimum(lo, hi), np.maximum(lo, hi)
-            else:
-                if not 0 < value <= 1:
-                    raise ValueError("Limit fractions must be in (0, 1]")
-                raw = model.velocityLimit if group == 1 else model.effortLimit
-                lo, hi = -value*raw, value*raw
-            solver.set_row_group_bounds(group, lo, hi)
         result.update(reset_rho_each_step=controller.reset_rho_each_step,
                       admm_defaults=controller.LIMIT_DEFAULTS["admm"],
                       admm_effective={**controller.LIMIT_DEFAULTS["admm"], **controller_options.get("limits_kw", {})},
@@ -260,9 +171,12 @@ def main():
         controller.reset(x*state_signs)
         times.append(0.0); states.append(x.copy()); errors.append(float(np.linalg.norm(initial-target)))
         t, reached = 0.0, False
+        previous_u = np.zeros(7)
+        elapsed = None
         # Hold mode runs the full interval to check stability. Reach stops at arrival.
-        while t < args.timeout - 1e-12:
-            step = controller.step(x*state_signs, reference.ravel())
+        while t < args.timeout - 1e-9:
+            solve_start_s.append(t)
+            step = controller.step(x*state_signs, reference.ravel(), dt_elapsed=elapsed)
             u = np.asarray(step.u, dtype=float)*signs
             stats = step.solve.stats
             predicted_next = np.asarray(step.solve.xu)[0, 21:35]*state_signs
@@ -282,19 +196,32 @@ def main():
                 np.savez_compressed(out / "failure_solve.npz", state=x, reference=reference,
                                     torque_nm=u, xu=step.solve.xu)
                 raise FloatingPointError("Nonfinite torque or predicted trajectory")
-            interval_end = min(t + knot_dt, args.timeout)
-            while t < interval_end - 1e-12:
-                h = min(SIM_DT_S, interval_end-t)
-                q, v = rk4(model, data, x[:7], x[7:], u, h)
-                x = np.r_[q, v]
-                if not np.isfinite(x).all():
-                    np.savez_compressed(out / "failure_plant.npz", state=x, torque_nm=u, time_s=t+h)
-                    raise FloatingPointError("Nonfinite simulated state")
-                t += h
-                controls.append(u.copy()); times.append(t); states.append(x.copy())
-                errors.append(float(np.linalg.norm(ee_position(model, data, q, fid)-target)))
-            prediction_errors.append(np.array([np.max(np.abs(x[:7]-predicted_next[:7])),
-                                               np.max(np.abs(x[7:]-predicted_next[7:]))]))
+            intervals = control_intervals(knot_dt, step.wall_s, mode=args.solve_time_mode,
+                                          fixed_s=args.solve_time_s, remaining_s=args.timeout-t)
+            charged_s.append(intervals.charged_s); update_s.append(intervals.elapsed_s)
+            interval_start = t
+            for applied_u, duration in ((previous_u, intervals.previous_s), (u, intervals.new_s)):
+                interval_end = t + duration
+                while t < interval_end - 1e-12:
+                    h = min(SIM_DT_S, interval_end-t)
+                    q, v = rk4(model, data, x[:7], x[7:], applied_u, h)
+                    x = np.r_[q, v]
+                    if not np.isfinite(x).all():
+                        np.savez_compressed(out / "failure_plant.npz", state=x, torque_nm=applied_u, time_s=t+h)
+                        raise FloatingPointError("Nonfinite simulated state")
+                    t += h
+                    controls.append(applied_u.copy()); times.append(t); states.append(x.copy())
+                    errors.append(float(np.linalg.norm(ee_position(model, data, q, fid)-target)))
+            # Snap to the update boundary instead of accumulating RK4 rounding.
+            t = min(interval_start + intervals.elapsed_s, args.timeout)
+            times[-1] = t
+            previous_u, elapsed = u, intervals.elapsed_s
+            # A knot prediction and delayed execution cover different controls/times.
+            if intervals.charged_s == 0 and abs(elapsed-knot_dt) < 1e-12:
+                prediction_errors.append(np.array([np.max(np.abs(x[:7]-predicted_next[:7])),
+                                                   np.max(np.abs(x[7:]-predicted_next[7:]))]))
+            else:
+                prediction_errors.append(np.full(2, np.nan))
             reached = errors[-1] <= POSITION_TOL_M and np.abs(x[7:]).sum() <= SPEED_L1_TOL_RAD_S
             if reached and not args.hold:
                 break
@@ -324,6 +251,8 @@ def main():
                             applied_torque_nm=controls, distance_m=errors,
                             solve_time_us=solve_us, controller_wall_s=wall_s,
                             planned_row_violation=row_viol, predicted_next_state=predicted_states,
+                            solve_start_s=solve_start_s, charged_solve_time_s=charged_s,
+                            control_interval_s=update_s,
                             prediction_error_qv=prediction_errors)
         (out / "summary.json").write_text(json.dumps(result, indent=2, allow_nan=False)+"\n")
         print(json.dumps(result, indent=2), flush=True)

@@ -167,9 +167,34 @@ To reproduce the original 30 ms/terminal80 example, pass an explicit JSON file
 containing `{}`. To customize the new defaults, copy `configs/reaching.json`
 and edit that complete file. The historical configuration-study profiles retain their original settings.
 
-Simulation uses fixed pacing: computation time does not advance the plant.
+Both simulation examples share model preparation, configuration, controller
+construction and limit setup with the ROS worker. Their simulation loops and
+the ROS I/O/safety processes remain separate. Small compatibility imports and
+wrappers in `examples/` keep existing experiment scripts and the viewer working.
+
+Both examples accept `--solve-time-mode fixed|measured`:
+
+- `fixed` charges `--solve-time-s` seconds per solve; the default is zero,
+  preserving instantaneous feedback in simulation.
+- `measured` charges `MPCController.step`'s complete reported wall time,
+  including host work, rather than native kernel timing.
+
+During charged time the plant holds the previous torque (initially zero).
+The new torque acts for the remainder of the nominal controller period.
+Overruns extend the interval to the charged solve time. References follow the
+resulting simulated timestamps; no wall-clock sleeping is used. Setup, plotting
+and logging time are not charged. The upstream one-knot warm-start shift is
+unchanged. Histories record solve-start times, charged latency and actual update
+intervals alongside native/controller timings.
+
+```bash
+.venv/bin/python examples/reach_sim.py --solve-time-mode fixed --solve-time-s .003
+.venv/bin/python examples/track_figure8.py --solve-time-mode measured \
+  --output _expr_data/tracking/measured
+```
+
 Recorded solve times are diagnostic, not benchmark results. Collision checking
-and hardware deployment are outside this example; planner constraint rows do
+and hardware deployment are outside these examples; planner constraint rows do
 not certify physical safety.
 
 ## Models and storage
