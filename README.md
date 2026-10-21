@@ -3,8 +3,8 @@
 Right-arm reaching and figure-eight tracking in internal simulation, using
 modern GATO for torque MPC and Pinocchio RK4 as the simulated plant. ROS 2 is
 optional. This is the new application repository, separate from the historical
-`felix-devel` implementation. The ROS runner has outstanding safety-review
-findings listed in [its guide](docs/ROS2_RUNNER.md#outstanding-review-findings);
+`felix-devel` implementation. The ROS runner's review fixes and accepted
+limitations are listed in [its guide](docs/ROS2_RUNNER.md#review-fixes-and-accepted-limitations);
 it is not qualified for physical execution.
 
 ## Setup

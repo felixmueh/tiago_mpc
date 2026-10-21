@@ -57,6 +57,8 @@ class ArmState:
     arm_received_monotonic_sec: float | None = None
     body_received_monotonic_sec: float | None = None
     feedback_metadata: dict[str, Any] | None = None
+    # SEA body updates require collision checks without inventing an arm sample.
+    safety_seq: int | None = None
 
     @property
     def age_sec(self) -> float:
@@ -155,7 +157,7 @@ def _ros_imports(setup_path: str | None = None) -> dict[str, Any]:
         )
         from rcl_interfaces.msg import Parameter as RosParameter
         from rcl_interfaces.msg import ParameterType, ParameterValue
-        from rcl_interfaces.srv import SetParameters
+        from rcl_interfaces.srv import GetParameters, SetParameters
         from sensor_msgs.msg import JointState
         from std_msgs.msg import Float64MultiArray
         from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -295,6 +297,7 @@ class TiagoRightArmClient:
         self.effort_command_topic = f"/{effort_controller}/commands"
         self._latest_state: ArmState | None = None
         self._state_seq = 0
+        self._safety_seq = 0
         self._state_callback_count = 0
         self._last_joint_stamp_sec: float | None = None
         # Optional synchronous supervisor; it may raise to abort our wait.
@@ -413,6 +416,7 @@ class TiagoRightArmClient:
         body_stamp, body_received, positions, velocities = self._body_state
         q, qd, stamp, arm_received, seq, motor = self._sea_state
         positions, velocities = positions.copy(), velocities.copy()
+        self._safety_seq += 1
         positions.update(zip(self.joint_names, map(float, q)))
         velocities.update(zip(self.joint_names, map(float, qd)))
         self._latest_state = ArmState(
@@ -420,7 +424,7 @@ class TiagoRightArmClient:
             received_monotonic_sec=min(arm_received, body_received), seq=seq,
             joint_positions=positions, joint_velocities=velocities,
             body_stamp_sec=body_stamp, arm_received_monotonic_sec=arm_received,
-            body_received_monotonic_sec=body_received,
+            body_received_monotonic_sec=body_received, safety_seq=self._safety_seq,
             feedback_metadata={
                 "arm_source": "sea_state_msgs/msg/SeaState.absolute_position",
                 "arm_topic": self.sea_state_topic,
@@ -574,27 +578,46 @@ class TiagoRightArmClient:
         # below only bounds our wait for a response, not the lifetime of an effort.
         controllers = self._list_controllers(timeout_sec)
         controller = controllers.get(self.effort_controller)
-        if controller is not None and controller.state in {"inactive", "active"}:
-            return
-
-        self._set_controller_manager_type(
-            self.effort_controller,
-            "forward_command_controller/ForwardCommandController",
-            timeout_sec,
-        )
-        if controller is None:
+        expected_type = "forward_command_controller/ForwardCommandController"
+        if controller is not None:
+            if controller.type != expected_type:
+                raise RuntimeError(f"unexpected effort controller type: {controller.type}")
+            if controller.state in {"inactive", "active"}:
+                self._validate_effort_controller(controller, timeout_sec)
+                return
+            if controller.state != "unconfigured":
+                raise RuntimeError(f"unexpected effort controller state: {controller.state}")
+        else:
+            self._set_controller_manager_type(self.effort_controller, expected_type, timeout_sec)
             self._load_controller(self.effort_controller, timeout_sec)
-        elif controller.state != "unconfigured":
-            raise RuntimeError(f"unexpected effort controller state: {controller.state}")
         self._set_remote_parameters(
             f"/{self.effort_controller}",
-            {
-                "joints": list(self.joint_names),
-                "interface_name": "effort",
-            },
+            {"joints": list(self.joint_names), "interface_name": "effort"},
             timeout_sec,
         )
         self._configure_controller(self.effort_controller, timeout_sec)
+        self._validate_effort_controller(
+            self._list_controllers(timeout_sec).get(self.effort_controller), timeout_sec,
+        )
+
+    def _validate_effort_controller(self, controller: Any, timeout_sec: float) -> None:
+        """Verify the ordered vector contract; claimed resources are only a set."""
+        if (controller is None or controller.state not in {"inactive", "active"}
+                or controller.type != "forward_command_controller/ForwardCommandController"):
+            raise RuntimeError("effort controller must be a configured ForwardCommandController")
+        request = self.ros["GetParameters"].Request()
+        request.names = ["joints", "interface_name"]
+        response = self._service_call(
+            f"/{self.effort_controller}/get_parameters",
+            self.ros["GetParameters"], request, timeout_sec,
+        )
+        values = response.values
+        types = self.ros["ParameterType"]
+        if (len(values) != 2 or values[0].type != types.PARAMETER_STRING_ARRAY
+                or tuple(values[0].string_array_value) != self.joint_names):
+            raise RuntimeError("effort controller joint order must exactly match commanded joints")
+        if values[1].type != types.PARAMETER_STRING or values[1].string_value != "effort":
+            raise RuntimeError("effort controller interface_name must be effort")
 
     def active_arm_controller(self, timeout_sec: float = 5.0) -> str | None:
         """Read the unique verified arm owner without changing controller mode."""
@@ -654,6 +677,8 @@ class TiagoRightArmClient:
         source = self._active_arm_controller(controllers)
         if destination not in controllers:
             raise RuntimeError(f"required controller is not loaded: {destination}")
+        if destination == self.effort_controller:
+            self._validate_effort_controller(controllers[destination], timeout_sec)
         if source == destination:
             return
         if controllers[destination].state != "inactive":

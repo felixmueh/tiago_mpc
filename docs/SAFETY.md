@@ -22,6 +22,9 @@ finally:
 the collision configuration and velocity; the seven arm arrays alone are
 insufficient. Each new observation needs a new sequence number. The runner is
 responsible for input freshness and avoiding stale/replayed observations.
+For SEA feedback the runner uses a separate safety sequence that advances on
+arm or body updates. Body-only updates preserve the arm sequence, timestamp and
+receipt age; they trigger geometry checks without making old arm data fresh.
 
 The API starts a separate Python **spawn** process, validates model creation,
 then processes one outstanding check at a time. Startup has a 15 s initialization
@@ -30,6 +33,8 @@ timeout. `check` submits/polls without waiting for geometry computation;
 and expose `safety_status`, `safety_fault`, and `safety_message`. Faults latch until
 the monitor is closed/replaced. `close` is idempotent and joins or terminates the
 child. Run entry points must use the normal `if __name__ == '__main__'` guard.
+An outstanding deadline is enforced before polling replies: a late successful
+reply cannot clear an expired check or reset its timer.
 
 The preserved defaults are enabled safety, right-arm controlled joints, 0.04 m
 minimum clearance, 0.05 s outstanding-check timeout, 1 m/s monitored geometry
@@ -90,6 +95,11 @@ neutral references. It requires full position **and velocity** feedback for the
 remaining 17 joints: torso lift, seven left arm, seven right arm, and two head
 joints. It does not require wheel/finger feedback, and cannot qualify changing
 finger positions or a moving mobile base.
+Missing fixed gripper mimic followers produce a model-construction warning.
+Their neutral fallback does not apply mimic coupling; a nonzero measured driver
+angle alone can therefore give incorrect finger geometry. Felix accepted this
+warning-only limitation; supplying all follower positions at model construction
+provides the corresponding fixed geometry.
 
 All 51 collision geometries remain in the model. The default right-arm selection
 checks the 569 nonblacklisted pairs touching geometry attached below a controlled
@@ -105,6 +115,11 @@ Unsupported/missing radius geometry fails model construction. The worker does
 not add blacklist entries automatically.
 
 ## Verification and posture limitation
+
+The 21 October review fixes pass the full 161-test/118-subtest CPU suite,
+including a late-success deadline regression and a body-only SEA update through
+the asynchronous monitor transport. Review-fix logs remain in
+`/workspace/tiago_mpc-ros2-review-fixes/_expr_data/ros2-review-fixes/`.
 
 Run the bounded CPU checks with Pinocchio and NumPy installed:
 

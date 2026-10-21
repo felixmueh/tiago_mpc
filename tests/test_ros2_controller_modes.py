@@ -18,20 +18,28 @@ def make_arm(active=(POSITION,), *, bad_claims=False, switch_ok=True, apply=True
     arm.effort_controller = EFFORT
     arm.trajectory_topic = "/arm_right_controller/joint_trajectory"
     arm.effort_command_topic = f"/{EFFORT}/commands"
-    arm.ros = {name: NS(Request=NS) for name in ("ListControllers", "SwitchController")}
+    arm.ros = {name: NS(Request=NS) for name in ("ListControllers", "SwitchController", "GetParameters")}
+    arm.ros["ParameterType"] = NS(PARAMETER_STRING=4, PARAMETER_STRING_ARRAY=9)
     arm.ros["Duration"] = NS
     controllers = {}
     calls = []
     for name in (POSITION, GRAVITY, EFFORT):
         interface = "position" if name == POSITION else "effort"
-        controllers[name] = NS(name=name, state="active" if name in active else "inactive",
+        controllers[name] = NS(name=name, type="forward_command_controller/ForwardCommandController", state="active" if name in active else "inactive",
             claimed_interfaces=[f"{j}/{interface}" for j in RIGHT_ARM_JOINTS]
             if name in active else [], required_command_interfaces=[
                 f"{j}/{interface}" for j in RIGHT_ARM_JOINTS])
     if bad_claims:
         controllers[POSITION].claimed_interfaces = []
 
+    parameters = {"joints": NS(type=9, string_array_value=list(RIGHT_ARM_JOINTS)),
+                  "interface_name": NS(type=4, string_value="effort")}
+    arm.test_parameters = parameters
+
     def service(name, kind, request, timeout):
+        if name.endswith("get_parameters"):
+            assert name == f"/{EFFORT}/get_parameters"
+            return NS(values=[parameters[key] for key in request.names])
         if name.endswith("list_controllers"):
             return NS(controller=list(controllers.values()))
         calls.append(request)
@@ -133,6 +141,7 @@ def test_position_handback_holds_measured_state_before_reactivation():
     arm, _, _ = make_arm((EFFORT,))
     operations = []
     original_service = arm._service_call
+
     def service(name, kind, request, timeout):
         if name.endswith('switch_controller'):
             operations.append(('switch', list(request.activate_controllers)))
@@ -146,3 +155,40 @@ def test_position_handback_holds_measured_state_before_reactivation():
          {'set_last_command_interface_value_as_state_on_activation': False}),
         ('switch', [POSITION]),
     ]
+
+
+@pytest.mark.parametrize("controller_state", ["inactive", "active"])
+@pytest.mark.parametrize("fault", ["order", "missing_joint", "interface", "type", "unset"])
+def test_existing_effort_controller_contract_is_checked_before_reuse(controller_state, fault):
+    arm, controllers, calls = make_arm((EFFORT,) if controller_state == "active" else (POSITION,))
+    parameters = arm.test_parameters
+    if fault == "order":
+        parameters["joints"].string_array_value.reverse()
+    elif fault == "missing_joint":
+        parameters["joints"].string_array_value.pop()
+    elif fault == "interface":
+        parameters["interface_name"].string_value = "position"
+    elif fault == "type":
+        controllers[EFFORT].type = "joint_trajectory_controller/JointTrajectoryController"
+    elif fault == "unset":
+        parameters["joints"].type = 0
+    mutations = []
+    arm._set_remote_parameters = lambda *args: mutations.append(args)
+    with pytest.raises(RuntimeError, match="effort controller"):
+        arm.configure_runtime_effort_controller()
+    assert mutations == [] and calls == []
+
+
+def test_reversed_effort_joint_order_cannot_be_activated():
+    arm, controllers, calls = make_arm()
+    arm.test_parameters["joints"].string_array_value.reverse()
+    with pytest.raises(RuntimeError, match="joint order"):
+        arm.switch_to_effort_control()
+    assert calls == []
+
+
+def test_correct_existing_effort_controller_is_reused_without_mutation():
+    arm, _, calls = make_arm()
+    arm._set_remote_parameters = lambda *args: pytest.fail("configured controller mutated")
+    arm.configure_runtime_effort_controller()
+    assert calls == []

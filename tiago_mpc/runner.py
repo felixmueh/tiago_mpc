@@ -49,7 +49,8 @@ def safety_state(state):
         raise RuntimeError("full named body positions and velocities are required")
     return SafetyCheckState(
         q=state.q.copy(), qd=state.qd.copy(), stamp_sec=state.stamp_sec,
-        received_monotonic_sec=state.received_monotonic_sec, seq=state.seq,
+        received_monotonic_sec=state.received_monotonic_sec,
+        seq=state.seq if state.safety_seq is None else state.safety_seq,
         joint_positions=dict(state.joint_positions),
         joint_velocities=dict(state.joint_velocities))
 
@@ -370,7 +371,9 @@ class RosMpcRunner:
                 if mode_attempted and current is not None and not stopping:
                     # The receiver holds this torque; republish only while valid.
                     publish_checked(current, current_request)
-                record("state", seq=state.seq, stamp_sec=state.stamp_sec,
+                record("state", seq=state.seq,
+                       safety_seq=state.seq if state.safety_seq is None else state.safety_seq,
+                       stamp_sec=state.stamp_sec,
                        receipt_sec=state.received_monotonic_sec, q=state.q, qd=state.qd,
                        named_positions=state.joint_positions,
                        named_velocities=state.joint_velocities,

@@ -6,19 +6,25 @@ integrated on `main`. ROS 2 is optional: simulation examples and package imports
 do not require ROS packages or initialize ROS. Source a compatible ROS/PAL
 environment only when constructing a ROS client.
 
-## Outstanding review findings
+## Review fixes and accepted limitations
 
-The 21 October review found issues not covered by the passing tests below.
-They remain unfixed in this published snapshot:
+The 21 October review led to three fixes: effort-controller setup and activation
+validate the exact ordered joints and effort interface through its public
+parameters; outstanding collision deadlines are enforced before accepting a
+reply; and SEA body updates receive their own safety sequence without changing
+arm feedback freshness. Focused regressions fail before these fixes and pass
+afterwards.
 
-- Reused effort controllers need validation of their exact configured joint order.
-- Late successful collision checks can clear their timeout before it is enforced.
-- SEA body-only feedback changes can reuse a safety sequence and skip checks.
-- Missing gripper mimic followers can give incorrect stationary finger geometry.
-- Task and worker settings need one immutable configuration snapshot.
+Felix accepted two remaining limitations. Missing gripper mimic followers emit
+a model-construction warning; they remain locked at neutral, so stationary finger
+geometry can be wrong for a nonzero gripper pose. Task and worker configuration
+still read the original file separately from the recorded copy; changing that
+file during startup can produce inconsistent settings. Configuration snapshots
+are unchanged.
 
-The first four have CPU reproductions in the local
-`_expr_data/ros2-code-review-20261021/` notes. Physical execution is not qualified.
+Original reproductions remain in `_expr_data/ros2-code-review-20261021/`.
+New CPU logs are in `/workspace/tiago_mpc-ros2-review-fixes/_expr_data/ros2-review-fixes/`.
+Physical execution is not qualified.
 
 ```mermaid
 flowchart LR
@@ -138,7 +144,8 @@ PYTHONPATH=external/gato/python PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   python -m pytest -q tests
 ```
 
-Current main integration (21 October 2026): **147 tests and 118 subtests pass**
+After the review fixes (21 October 2026), **161 tests and 118 subtests pass**.
+The earlier main integration passed 147 tests and 118 subtests
 using GATO 0.1.2 plus the existing smooth-friction patch, GRiD 0.5.3 and the new
 grasp frame. ROS is not installed in the test environment. Package, I/O runner
 and worker imports leave ROS, GATO and Pinocchio unloaded; importing the CLI's

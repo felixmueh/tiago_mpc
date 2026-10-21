@@ -190,3 +190,47 @@ def test_abs_position_is_sufficient_without_optional_motor_channel(client):
     arm._on_sea_state(second)
     np.testing.assert_allclose(arm.latest_state().qd, 2.)
     assert arm.latest_state().feedback_metadata["sea_motor_position"] is None
+
+
+def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client):
+    import queue
+    from tiago_mpc.runner import RunnerConfig, RuntimeGuard, safety_state
+    from tiago_mpc.safety import AsyncSafetyMonitor
+    arm = client.arm
+    names = (*ros.RIGHT_ARM_JOINTS, "torso_lift_joint")
+    arm._on_joint_state(message(1., 0., names=names))
+    arm._on_sea_state(message(1.))
+    client.clock.now = 1.01
+    arm._on_sea_state(message(1.01))
+    first = arm.latest_state()
+    limits = dict(q_lower=[-3.]*7, q_upper=[3.]*7, velocity_limits=[2.5]*7,
+                  effort_limits=[26.]*7)
+    guard = RuntimeGuard(RunnerConfig(), first, limits)
+    guard.state(first, client.clock.now)
+    client.clock.now = 1.02
+    body = message(1.02, 0., names=names)
+    body.position[-1] = .201  # New body configuration, below runtime drift cutoff.
+    arm._on_joint_state(body)
+    merged = arm.latest_state()
+    assert merged.seq == first.seq and merged.stamp_sec == first.stamp_sec
+    assert merged.arm_received_monotonic_sec == first.arm_received_monotonic_sec
+    assert merged.received_monotonic_sec == first.arm_received_monotonic_sec
+    assert safety_state(merged).seq > safety_state(first).seq
+    assert safety_state(merged).joint_positions["torso_lift_joint"] == .201
+    guard.state(merged, client.clock.now)  # Equal arm stamp remains valid for this arm seq.
+    monitor = AsyncSafetyMonitor.__new__(AsyncSafetyMonitor)
+    monitor.timeout_sec, monitor._closed = .05, False
+    monitor.safety_fault = monitor.safety_message = ""
+    monitor._process = NS(exitcode=None)
+    monitor._last_checked_seq = safety_state(first).seq
+    monitor._pending_seq = monitor._pending_since_monotonic_sec = None
+    monitor._request_q, monitor._response_q = queue.Queue(), queue.Queue()
+    monitor.check(safety_state(merged))
+    submitted = monitor._request_q.get_nowait()
+    assert submitted.joint_positions["torso_lift_joint"] == .201
+    assert submitted.seq == safety_state(merged).seq
+
+    # Body-only messages cannot make a stalled SEA arm source fresh.
+    client.clock.now = 1.12
+    arm._on_joint_state(message(1.12, 0., names=names))
+    assert arm.latest_state() is None

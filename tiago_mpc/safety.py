@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import queue
 import time
+import warnings
 from typing import Iterable, Mapping, Sequence
 import xml.etree.ElementTree as ET
 
@@ -290,12 +291,12 @@ class AsyncSafetyMonitor:
             raise RuntimeError(self.safety_message)
         self._raise_if_dead()
         now = time.monotonic()
+        # A queued success must not erase an already expired check deadline.
+        self._enforce_pending_timeout(now, seq)
         self._poll_responses()
 
         if seq != self._last_checked_seq and self._pending_seq is None:
             self._submit(state, now)
-
-        self._enforce_pending_timeout(now, seq)
 
     def wait_until_checked(
         self,
@@ -571,6 +572,16 @@ def build_tiago_collision_model(
         _write_named_positions(full_model, reference_q, reference_positions)
 
     state_fixed_names = tuple(state_fixed_joint_names)
+    missing_mimics = [joint.get("name") for joint in ET.parse(urdf).findall("joint")
+                      if joint.get("name") in state_fixed_names
+                      and joint.find("mimic") is not None
+                      and joint.get("name") not in (reference_positions or {})]
+    if missing_mimics:
+        warnings.warn(
+            f"Collision model: {len(missing_mimics)} gripper mimic followers lack feedback "
+            "and are locked at neutral; mimic coupling is not applied. Finger geometry "
+            "can be inaccurate for nonzero gripper poses. Supply all follower positions "
+            "for matching geometry.", RuntimeWarning, stacklevel=2)
     locked_ids = []
     missing_state_fixed = []
     for name in state_fixed_names:

@@ -7,6 +7,8 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import queue
+from types import SimpleNamespace
 import os
 import signal
 import subprocess
@@ -362,6 +364,32 @@ class SpawnedSafetyTests(unittest.TestCase):
         finally:
             os.kill(monitor._process.pid, signal.SIGCONT)
             monitor.close()
+
+
+class SafetyDeadlineTests(unittest.TestCase):
+    def test_late_success_cannot_clear_pending_deadline_and_fault_latches(self):
+        monitor = s.AsyncSafetyMonitor.__new__(s.AsyncSafetyMonitor)
+        monitor.timeout_sec = .05
+        monitor._closed = False
+        monitor.safety_fault = monitor.safety_message = ''
+        monitor.safety_status = 'ok'
+        monitor._process = SimpleNamespace(exitcode=None)
+        monitor._last_checked_seq = 0
+        monitor._pending_seq = 1
+        monitor._pending_since_monotonic_sec = 10.
+        monitor._request_q = queue.Queue(maxsize=1)
+        monitor._response_q = queue.Queue()
+        monitor._response_q.put(s._SafetyCheckResult(seq=1, ok=True, elapsed_sec=.06))
+        state = s.SafetyCheckState(np.zeros(7), np.zeros(7), 100.06, 10.06, 2, {}, {})
+        with patch.object(s.time, 'monotonic', return_value=10.06):
+            with self.assertRaisesRegex(RuntimeError, 'timeout'):
+                monitor.check(state)
+            self.assertEqual(monitor.safety_fault, 'worker_stale')
+            self.assertEqual(monitor.last_checked_seq, 0)
+            self.assertTrue(monitor._request_q.empty())
+            # A queued success cannot recover a previously detected fault.
+            with self.assertRaisesRegex(RuntimeError, 'timeout'):
+                monitor.check(state)
 
 
 if __name__ == '__main__':

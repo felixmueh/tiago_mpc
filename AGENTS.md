@@ -35,7 +35,17 @@ Felix authorized removal of the merged `integration/ros2-adapter` branch and
 files were retained under main's `_expr_data/ros2-worktree/`; embedded original
 paths remain historical. Current review notes are in
 `_expr_data/ros2-code-review-20261021/`; the confirmed findings are summarized in
-`docs/ROS2_RUNNER.md`. Publishing the repository does not resolve those findings.
+`docs/ROS2_RUNNER.md`.
+
+Felix requested fixes for exact effort-controller joint ordering, collision
+deadline enforcement before polling late replies, and SEA body-only safety
+updates. These pass 161 CPU tests plus 118 subtests. Keep arm freshness separate
+from the safety sequence. Missing gripper mimic followers are warning-only by
+explicit request; neutral fallback geometry remains a limitation. He accepted
+the existing separate configuration-file reads; no snapshot change is requested.
+Sharing model/configuration/controller setup between simulation and the ROS
+worker is a proposed consolidation, not implemented by these review fixes.
+Logs remain in `/workspace/tiago_mpc-ros2-review-fixes/_expr_data/ros2-review-fixes/`.
 
 The application remote is `https://github.com/felixmueh/gato_tiago.git`. Its GATO
 submodule points to `felixmueh/GATO` so the pinned smooth-friction commit is
