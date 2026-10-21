@@ -40,6 +40,10 @@ def model_checks(solver, model, data, signs, prediction_losses):
         acceleration = pin.aba(model, data, qn, vn, u-passive_torque(vn, prediction_losses)).copy()
         return np.r_[qn+vn*h+.5*acceleration*h*h, vn+acceleration*h]
     checks = {}
+    expected_ee = common.ee_position(model, data, q, model.getFrameId(common.EE_FRAME))
+    actual_ee = np.asarray(solver.ee_pos(q*signs))
+    np.testing.assert_allclose(actual_ee, expected_ee, atol=1e-5, rtol=1e-4)
+    checks["ee_position_max_abs_error_m"] = float(np.max(np.abs(actual_ee-expected_ee)))
     for h in (.001, solver.dt):
         expected = native_predictor(x, h)
         actual = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], h))[0]*ss
@@ -121,7 +125,8 @@ def main():
         timing="fixed simulation clock; compute latency does not advance plant",
         reference_alignment="At time t controller reference knots are t+k*dt, k=0..N-1; state errors use reference at the same state timestamp, including t=0 and t=24s.",
         predictor_integration="upstream constant acceleration (named trapezoidal); native plant uses RK4 substeps",
-        orientation="unconstrained", collisions="not checked", initial_warm_start="state hold, zero actuator torque; identical across cohorts",
+        orientation="unconstrained", collisions="not checked", end_effector_frame=common.EE_FRAME,
+        initial_warm_start="state hold, zero actuator torque; identical across cohorts",
         torque_convention="Saved applied torque is actuator torque; passive resisting torque is subtracted internally in ABA at every RK4 stage.",
         original_urdf_sha256=hashlib.sha256(common.URDF.read_bytes()).hexdigest())
     times, states, xyzs, refs, controls, passive, solve_us, wall_s, work, row_viol = [], [], [], [], [], [], [], [], [], []

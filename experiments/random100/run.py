@@ -68,6 +68,7 @@ def main():
             if not np.allclose(a["reference"].reshape(32, 6)[:, :3], a["target_xyz"], atol=1e-6):
                 raise ValueError(f"Nonconstant or inconsistent position target: {name}")
     config = dict(input_source_commit=manifest["source_commit"], task_ids=ids,
+                  end_effector_frame="arm_right_tool_joint",
                   input_manifest_sha256=digest(HERE / "manifest.json"),
                   application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                   driver_sha256=digest(ROOT / "examples/reach_sim.py"),
@@ -102,7 +103,8 @@ def main():
         case = out / f"pair_{task:05d}"
         cmd = [sys.executable, str(ROOT / "examples/reach_sim.py"), "--input",
                str(out / "inputs" / f"random_{task:05d}.npz"), "--output", str(case)]
-        cmd.extend(["--config", str(out / "config.json")])
+        cmd.extend(["--config", str(out / "config.json"),
+                    "--ee-frame", config["end_effector_frame"]])
         start = time.perf_counter()
         with (out / f"pair_{task:05d}.log").open("w") as log:
             try:

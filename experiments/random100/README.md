@@ -6,6 +6,9 @@ These are the exact ordered 100 random start/goal pairs from GATO branch
 Initial velocities are zero; each task starts independently from its own
 recorded random posture. Goal configurations are FK witnesses, never controller
 seeds or posture targets. No task is filtered or resampled.
+These frozen XYZ goals refer to the historical flange (`arm_right_tool_joint`);
+the runner explicitly selects that frame. They are not the new grasp-center
+tasks. Its per-case summaries and cohort configuration record the frame.
 
 ```bash
 .venv/bin/python experiments/random100/run.py --dry-run

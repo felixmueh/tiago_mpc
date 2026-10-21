@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply supplied arm joint parameters without changing model geometry/inertia.
+"""Apply supplied arm parameters and add the reduced arm's nominal grasp frame.
 
 The canonical source is preserved byte for byte. The retained reduced arm was
 already extracted from it with the gripper lumped at its neutral posture; this
@@ -12,12 +12,24 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 MODELS = ROOT / "models"
 SOURCE = MODELS / "tiago_pro/tiago_pro_sim_source.urdf"
 FULL = MODELS / "tiago_pro/tiago_pro.urdf"
 ARM = MODELS / "tiago_right/tiago_right_arm.urdf"
+# Midpoint of the two fingertip contact-pad centers at zero gripper posture,
+# derived from the simulator URDF and fingertip.stl. This is a nominal geometric
+# TCP, not a hardware calibration. Keep the flange and all inertias unchanged.
+GRASP_FRAME = '''  <!-- Nominal pad-center TCP at zero gripper posture; not hardware-calibrated. -->
+  <link name="arm_right_grasp_link" />
+  <joint name="arm_right_grasp_joint" type="fixed">
+    <parent link="arm_right_tool_link" />
+    <child link="arm_right_grasp_link" />
+    <origin rpy="0 0 0" xyz="0 0 0.139288457525" />
+  </joint>
+'''
 # Felix's actual parameter table, 2026-10-21. No kp/kd: those belong to a
 # different controller. Columns: Coulomb Nm, viscous Nm s/rad, armature kg m^2,
 # actuator effort Nm. Armature is metadata only; no runtime currently reads it.
@@ -80,12 +92,28 @@ def asset_manifest(full, arm):
         for p in paths for payload in [replacements.get(p, p.read_bytes())]}
 
 
+def add_grasp_frame(text):
+    """Add a massless application frame without rewriting the retained model."""
+    root = ET.fromstring(text)
+    expected = ET.fromstring('<robot>' + GRASP_FRAME + '</robot>')
+    for element in expected:
+        found = root.find(f'{element.tag}[@name="{element.get("name")}"]')
+        if found is not None and ET.tostring(found).strip() != ET.tostring(element).strip():
+            raise ValueError(f"Unexpected existing grasp frame: {element.get('name')}")
+    present = [root.find(f'{e.tag}[@name="{e.get("name")}"]') is not None for e in expected]
+    if all(present):
+        return text
+    if any(present):
+        raise ValueError("Incomplete existing grasp frame")
+    return text.replace('</robot>', GRASP_FRAME + '</robot>')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify prepared models/manifest without writing")
     args = parser.parse_args()
     full = patch_dynamics(SOURCE.read_text())
-    arm = patch_dynamics(ARM.read_text(), sides=("right",))
+    arm = add_grasp_frame(patch_dynamics(ARM.read_text(), sides=("right",)))
     manifest = json.dumps(asset_manifest(full, arm), indent=2, sort_keys=True) + '\n'
     outputs = {FULL: full, ARM: arm, MODELS / "manifest.json": manifest}
     for path, expected in outputs.items():
@@ -95,7 +123,7 @@ def main():
         else:
             path.write_text(expected)
     print("Prepared model metadata and manifest are current" if args.check else
-          "Prepared full model, patched retained reduced arm metadata and updated manifest")
+          "Prepared full model, reduced arm metadata/grasp frame and manifest")
 
 
 if __name__ == "__main__":

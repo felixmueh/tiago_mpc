@@ -31,7 +31,7 @@ from reaching_config import load_configuration
 URDF = ROOT / "models/tiago_right/tiago_right_arm.urdf"
 MESHES = ROOT / "models/tiago_pro/meshes"
 PLANT = "tiago_mpc_right"
-EE_FRAME = "arm_right_tool_joint"
+EE_FRAME = "arm_right_grasp_joint"
 SIM_DT_S = 0.003
 TIMEOUT_S, POSITION_TOL_M, SPEED_L1_TOL_RAD_S = 8.0, 0.05, 1.0
 Q_START_RAD = np.array([-0.39, -1.73, -0.38, -2.35, 0.0, -1.21, 0.04])
@@ -122,9 +122,12 @@ def main():
     p.add_argument("--timeout", type=float, default=TIMEOUT_S, help="simulated seconds")
     p.add_argument("--output", type=Path, help="fresh output directory")
     p.add_argument("--build-only", action="store_true", help="build and check model conventions")
+    p.add_argument("--ee-frame", choices=(EE_FRAME, "arm_right_tool_joint"), default=EE_FRAME,
+                   help="tracked point; default nominal grasp center, flange for historical tasks")
     p.add_argument("--input", type=Path, help="frozen experiment NPZ with initial_state/target_xyz/reference")
     p.add_argument("--config", type=Path, help="JSON overrides against the historical base; default configs/reaching.json")
     args = p.parse_args()
+    ee_frame = args.ee_frame
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         p.error("--timeout must be finite and positive")
     try:
@@ -156,6 +159,7 @@ def main():
                   effective_configuration=effective, limits="admm", linsys="pcg",
                   timing="fixed simulation time; solve latency does not advance plant",
                   orientation="unconstrained", collisions="not checked",
+                  end_effector_frame=ee_frame,
                   urdf_sha256=hashlib.sha256(URDF.read_bytes()).hexdigest())
     times, states, controls, errors, solve_us, wall_s, row_viol = [], [], [], [], [], [], []
     work = []
@@ -171,9 +175,9 @@ def main():
         if (model.nq, model.nv) != (7, 7):
             raise ValueError(f"Expected seven-joint arm; got {model.nq}/{model.nv}")
         result["joint_names"] = list(model.names)[1:]
-        fid = model.getFrameId(EE_FRAME)
+        fid = model.getFrameId(ee_frame)
         if fid >= model.nframes:
-            raise ValueError(f"Missing end-effector frame {EE_FRAME}")
+            raise ValueError(f"Missing end-effector frame {ee_frame}")
         x_start = np.r_[Q_START_RAD, np.zeros(7)]
         q_goal = Q_START_RAD + (0.0 if args.hold else Q_GOAL_DELTA_RAD)
         reference = None
@@ -214,7 +218,7 @@ def main():
         print(f"Target displacement: {result['initial_distance_m']*1000:.1f} mm", flush=True)
         result["status"] = "building_model"
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
-        gato.register_robot(PLANT, gpu_path, N=[n_points], ee_frame=EE_FRAME, jobs=1)
+        gato.register_robot(PLANT, gpu_path, N=[n_points], ee_frame=ee_frame, jobs=1)
         solver = gato.BSQP(str(gpu_path), batch_size=1, N=n_points, dt=knot_dt,
                            plant_type=PLANT, params=params)
         result["status"] = "checking_model"

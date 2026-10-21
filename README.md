@@ -77,7 +77,10 @@ resolves mesh filenames to absolute local paths. A second, equivalent GPU model 
 joint 6's negative Z axis to positive Z and reflects its position limits.
 The adapter converts that joint's position, velocity and torque signs at the
 GPU boundary; the simulated plant and saved histories use native TIAGo
-coordinates. Transforms, tool frame and inertias are retained. This is the
+coordinates. Original transforms, flange and inertias are retained. Reaching
+and tracking target the added nominal grasp-center frame, 139.3 mm along the
+flange's +Z axis, between the finger pads at zero gripper posture. See
+[the frame definition](models/README.md#end-effector-point). This is the
 same coordinate convention used by the historical TIAGo wrapper: upstream's
 fixed-arm adapter assumes zero topology-helper storage, whereas a directly
 registered signed-axis model needs nonzero helper storage and traps on launch.
@@ -124,7 +127,8 @@ The historical promoted ADMM-only configuration used running/terminal position
 weights 4/800: **84/100 arrivals and 100/100 sampled physical-limit passes**,
 compared with 69/100 arrivals and 100/100 limit passes for the retained soft+ADMM
 profile. Felix has since selected **4/8** for both reaching and tracking; that
-new reaching terminal weight passed one bounded comfortable-start sanity reach:
+new reaching terminal weight passed one bounded comfortable-start sanity reach
+at the historical flange:
 71.891 mm initial displacement reached the 5 cm arrival threshold in 0.270 s,
 with sampled raw limits passing. The historical 100-case outcome does not
 qualify the changed default, and this short check does not establish broad
@@ -194,10 +198,18 @@ end-effector XYZ weight **4** and terminal XYZ weight **8**. Joint-velocity
 regularization remains **0.01** and actuator-torque regularization **1e-6**.
 Orientation and joint-posture objectives are inactive. All three soft-limit
 weights are zero; ADMM joint-position, velocity and actuator-effort constraints
-remain enabled. The separately recorded 24 s check at 4/8 completed with
+remain enabled. The historical flange's 24 s check at 4/8 completed with
 **26.536 mm full-cycle RMS**, 40.570 mm peak and 31.392 mm endpoint error; sampled
 executed and returned-plan raw limits passed. This is the selected tuning, not
 the preceding 8/1600 configuration that achieved 2.056 mm RMS.
+
+The new nominal grasp-center default completed its own 24 s check with
+**20.806 mm RMS** and 31.216 mm peak error; executed samples and all 12,000
+saved plans passed raw joint/speed/torque limits. Changing the tracked point
+also changes the Cartesian task, so these numbers do not isolate a controller
+improvement. A short grasp-center reach passed the coarse 5 cm arrival gate
+after 0.090 s (63.308 mm initial displacement); this is a frame/loop sanity check.
+Raw validation is in `/workspace/tiago_mpc-grasp-frame/_expr_data/grasp-center/`.
 
 The plant uses the supplied actual right-arm Coulomb/damping coefficients with
 hard-sign friction; GATO uses tanh friction with **0.03 rad/s** smoothing plus

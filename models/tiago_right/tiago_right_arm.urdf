@@ -257,4 +257,11 @@
     <child link="arm_right_tool_link" />
     <origin rpy="0 0 0" xyz="0 0 0.017" />
   </joint>
+  <!-- Nominal pad-center TCP at zero gripper posture; not hardware-calibrated. -->
+  <link name="arm_right_grasp_link" />
+  <joint name="arm_right_grasp_joint" type="fixed">
+    <parent link="arm_right_tool_link" />
+    <child link="arm_right_grasp_link" />
+    <origin rpy="0 0 0" xyz="0 0 0.139288457525" />
+  </joint>
 </robot>

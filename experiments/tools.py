@@ -100,7 +100,8 @@ def _joint_limits(limits):
 def save_replay(path, *, time_s, q, joint_names, model_urdf=DEFAULT_MODEL, time_basis,
                 label=None, fixed_joints=None, reference_xyz_m=None,
                 reference_time_s=None, reference_frame=None, plans=None, provenance=None,
-                qd_rad_s=None, torque_nm=None, torque_time_s=None, joint_limits=None):
+                qd_rad_s=None, torque_nm=None, torque_time_s=None, joint_limits=None,
+                end_effector_frame="arm_right_tool_joint"):
     """Export one compressed v1 file using a temporary file and atomic rename.
 
     Each optional plan is a dict containing origin_time_s, time_s and q;
@@ -114,6 +115,9 @@ def save_replay(path, *, time_s, q, joint_names, model_urdf=DEFAULT_MODEL, time_
     For interval controls pass torque_time_s=time_s[:-1]; at the final state the
     viewer shows the last applied interval. Plans use predicted torque and omit
     the terminal control. Optional joint_limits use the same joint_names order.
+    end_effector_frame identifies the point tracked by the reference. The legacy
+    flange default preserves old exports; new grasp-center runs must pass their
+    recorded frame explicitly (e.g. summary['end_effector_frame']).
     """
     if (not isinstance(time_basis, str) or time_basis not in ("simulation", "wall")):
         raise ValueError("time_basis must be simulation or wall")
@@ -125,11 +129,14 @@ def save_replay(path, *, time_s, q, joint_names, model_urdf=DEFAULT_MODEL, time_
     _reference(reference_xyz_m, reference_time_s, reference_frame)
     _telemetry(time_s, qd_rad_s, torque_nm, torque_time_s, "Recorded")
     _joint_limits(joint_limits)
+    if end_effector_frame not in ("arm_right_tool_joint", "arm_right_grasp_joint"):
+        raise ValueError("Unsupported end_effector_frame")
     destination = Path(path).expanduser()
     if destination.suffix.lower() != ".npz":
         raise ValueError("Replay export path must end in .npz")
     metadata = dict(format=FORMAT, version=VERSION, joint_names=names,
-                    model_sha256=model_sha256(model_urdf), time_basis=time_basis)
+                    model_sha256=model_sha256(model_urdf), time_basis=time_basis,
+                    end_effector_frame=end_effector_frame)
     arrays = dict(time_s=np.asarray(time_s), q=np.asarray(q))
     for key, value in (("qd_rad_s", qd_rad_s), ("torque_nm", torque_nm), ("torque_time_s", torque_time_s)):
         if value is not None:

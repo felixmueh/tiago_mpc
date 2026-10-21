@@ -1,5 +1,23 @@
 # Agent instructions
 
+## Nominal grasp-center frame — Felix, 2026-10-21
+
+Use `arm_right_grasp_joint` for new reaching/tracking: the reduced URDF contains
+a massless fixed frame at tool-local `(0, 0, .139288457525)` m, zero RPY.
+`scripts/prepare_models.py` owns its addition/check. This is the nominal midpoint
+of the contact pads at zero gripper posture, derived from the simulator URDF and
+mesh; it is not hardware calibration or a moving-gripper TCP. See models/README.md.
+Select it through GATO's existing `ee_frame`; do not modify generic GRiD code.
+Keep full simulator URDF bytes and the flange frame unchanged. Viewers must
+derive the extra frame from the reduced model. Save `end_effector_frame` in
+summaries/replay exports. Missing historical metadata means flange; do not
+reinterpret old XYZ references or qualification results at the new point.
+The grasp-center default passed 16 application CPU checks, native/Pinocchio FK,
+one coarse reach and one full 24 s tracking check (20.806 mm RMS; executed
+samples and all 12,000 saved plans inside raw limits). Raw data remains in
+`/workspace/tiago_mpc-grasp-frame/_expr_data/grasp-center/`. Existing 26.536 mm
+and .270 s checks below describe the historical flange, not the new TCP.
+
 ## Canonical TIAGo model and joint parameters — Felix, 2026-10-21
 
 The current robot description is the simulator URDF originally captured at

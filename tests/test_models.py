@@ -80,10 +80,14 @@ class ModelTests(unittest.TestCase):
         raw_links = {e.get('name'): e for e in raw.findall('link')}
         raw_joints = {e.get('name'): e for e in raw.findall('joint')}
         for link in arm.findall('link'):
+            if link.get('name') == 'arm_right_grasp_link':
+                continue  # Additional massless application frame, checked below.
             if link.get('name') == 'arm_right_tool_link':
                 continue  # Composite gripper inertia is checked numerically below.
             self.assertEqual(structure(link), structure(raw_links[link.get('name')]))
         for joint in arm.findall('joint'):
+            if joint.get('name') == 'arm_right_grasp_joint':
+                continue
             original = raw_joints[joint.get('name')]
             for node in (joint, original):
                 limit = node.find('limit')
@@ -154,6 +158,29 @@ class ModelTests(unittest.TestCase):
                     base = data.oMf[model.getFrameId('torso_lift_link')].inverse()
                     poses.append((base * data.oMf[model.getFrameId('arm_right_tool_link')]).homogeneous)
                 np.testing.assert_allclose(poses[0], poses[1], atol=1e-8, rtol=1e-8)
+
+    def test_grasp_frame_matches_neutral_finger_pad_midpoint(self):
+        full, arm = (pin.buildModelFromUrdf(str(p)) for p in (FULL, ARM))
+        fd, ad = full.createData(), arm.createData()
+        # Center of the inward flat face in fingertip.stl: x=-11.5 mm,
+        # y in [7,47] mm, z in [-10,10] mm. Fingers stay at zero as in the
+        # retained inertia reduction; the fixed TCP is nominal, not calibrated.
+        pad_center = np.array([-.0115, .027, 0.])
+        arm_indices = [full.joints[full.getJointId(n)].idx_q for n in NAMES]
+        for q in (np.zeros(7), np.array([-.39, -1.73, -.38, -2.35, 0., -1.21, .04]),
+                  arm.lowerPositionLimit + .6*(arm.upperPositionLimit-arm.lowerPositionLimit)):
+            q_full = pin.neutral(full)
+            q_full[arm_indices] = q
+            pin.framesForwardKinematics(full, fd, q_full)
+            pin.framesForwardKinematics(arm, ad, q)
+            pads = [fd.oMf[full.getFrameId(f'gripper_right_fingertip_{side}_link')].act(pad_center)
+                    for side in ('left', 'right')]
+            torso = fd.oMf[full.getFrameId('torso_lift_link')]
+            expected = torso.actInv(np.mean(pads, axis=0))
+            actual = ad.oMf[arm.getFrameId('arm_right_grasp_joint')].translation
+            np.testing.assert_allclose(actual, expected, atol=2e-7, rtol=0)
+        self.assertEqual(arm.nq, 7)
+        self.assertEqual(len(ET.parse(ARM).findall('link[@name="arm_right_grasp_link"]/inertial')), 0)
 
     def test_preparation_is_reproducible(self):
         subprocess.run([sys.executable, str(ROOT / 'scripts/prepare_models.py'), '--check'], check=True)

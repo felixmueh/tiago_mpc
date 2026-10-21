@@ -84,6 +84,7 @@ class ReachingConfigurationTests(unittest.TestCase):
         self.assertEqual(config['configuration_file'], str(DEFAULT_CONFIG))
         self.assertEqual(config['effective_configuration'], load_configuration()[2])
         self.assertEqual(len(config['task_ids']), 100)
+        self.assertEqual(config['end_effector_frame'], 'arm_right_tool_joint')
         self.assertTrue(config['configuration_sha256'])
 
     def test_random100_copies_default_and_passes_snapshot_to_child(self):
@@ -95,6 +96,7 @@ class ReachingConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=data) as tmp:
             out = Path(tmp) / 'cohort'
             def fake_episode(cmd, **kwargs):
+                self.assertEqual(cmd[cmd.index('--ee-frame')+1], 'arm_right_tool_joint')
                 copied = Path(cmd[cmd.index('--config')+1])
                 self.assertEqual(copied, out.resolve() / 'config.json')
                 self.assertEqual(copied.read_bytes(), DEFAULT_CONFIG.read_bytes())

@@ -1,3 +1,33 @@
+## Nominal grasp-center frame — 2026-10-21
+
+The reduced model adds a massless fixed TCP at flange-local `(0, 0,
+.139288457525)` m, the nominal contact-pad midpoint at zero gripper posture.
+Full simulator URDFs, old flange, rigid inertias, joint coordinate mapping,
+costs, limits, ADMM, and passive-force settings are unchanged. New reaching and
+tracking select `arm_right_grasp_joint`; frozen random100 explicitly keeps its
+historical flange and XYZ goals. No GRiD/GATO source change is involved.
+
+Completed with main's GATO 0.1.2 + friction patch / GRiD 0.5.3 environment:
+
+- `python -m unittest discover -s tests -q`: 16 checks pass, including full
+  simulator pad-midpoint FK and unchanged mass/gravity at three arm states.
+- `python examples/reach_sim.py --output _expr_data/grasp-center/reach`:
+  native/Pinocchio FK and dynamics checks pass; coarse 5 cm arrival at .090 s
+  from 63.308 mm displacement; sampled executed raw limits pass. This short
+  sanity check does not qualify settling or broad reaching.
+- `python examples/track_figure8.py --output _expr_data/grasp-center/tracking`:
+  24 s completed, 20.806 mm RMS, 31.216 mm peak; sampled executed raw limits
+  and all 12,000 saved raw plans pass. Native/Pinocchio EE difference at the
+  checked pose is zero to stored precision. The Cartesian task changes with
+  the TCP, so no isolated tracking-improvement claim follows.
+
+Commands used `/workspace/tiago_mpc/.venv/bin/python`, with
+`PYTHONPATH=external/gato/python` from the owning isolated application checkout.
+Raw validation and source snapshots:
+`/workspace/tiago_mpc-grasp-frame/_expr_data/grasp-center/`.
+The matching viewer preserves legacy flange replays and derives the new TCP
+from the reduced model; its 51 CPU checks pass.
+
 > Current selection (2026-10-21): Felix selected running/terminal XYZ weights
 > **4/8** for both reaching and tracking. Reaching's terminal weight is now 8;
 > the historical 4/800 reaching results below retain their original configuration
