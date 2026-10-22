@@ -92,8 +92,9 @@ def reach(plant, run=run_simulation, task=Reach(), params=TIAGO, law=sample_knot
             max_limit_excess=excess, limits_pass=max(excess.values()) <= 1e-5,
             max_abs_torque_nm=float(np.nanmax(np.abs(trajectory["command"]))),
             **solve_summary(trajectory))
-    except Exception:
-        record.summary.update(status="error", error=traceback.format_exc())
+    except BaseException as exc:  # also Ctrl-C and SIGTERM, which end robot runs
+        record.summary.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
+                              error=traceback.format_exc())
         raise
     finally:
         if mpc is not None:

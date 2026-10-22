@@ -115,10 +115,11 @@ def test_selected_current_bounds_map_native_joint_box_and_limit_fractions():
     np.testing.assert_allclose(rows[2][1], .85 * model.effortLimit)
 
 
-@pytest.mark.parametrize("budget", [0., -1., np.nan, np.inf])
-def test_budget_must_be_finite_and_positive(budget):
+@pytest.mark.parametrize("change", [*(dict(budget_s=b) for b in (0., -1., np.nan, np.inf)),
+                                    dict(friction=URDF_FRICTION)])  # hard sign: plant only
+def test_invalid_params_are_refused(change):
     with pytest.raises(ValueError):
-        replace(TIAGO, budget_s=budget)
+        replace(TIAGO, **change)
 
 
 # Both Mpc twins around a fake GATO controller: N = 3 knots, 10 ms.

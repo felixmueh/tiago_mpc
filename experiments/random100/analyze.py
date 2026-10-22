@@ -6,7 +6,6 @@ import csv
 import json
 from pathlib import Path
 import sys
-import textwrap
 
 import matplotlib
 matplotlib.use("Agg")
@@ -117,25 +116,6 @@ def main():
     fig.suptitle(f"Frozen random100 — ADMM, N{params['N']}, SQP{params['solver']['max_sqp_iters']}, {1000*params['dt_s']:g} ms fixed clock")
     fig.tight_layout(); fig.savefig(out / "overview.png", dpi=160); fig.savefig(out / "overview.pdf")
     counts = result["counts"]
-    from matplotlib.backends.backend_pdf import PdfPages
-    with PdfPages(out / "REPORT.pdf") as pdf:
-        cover = plt.figure(figsize=(8.27, 11.69))
-        cover.text(.08, .93, "Frozen random100 — GATO / ADMM", fontsize=17, weight="bold")
-        paragraphs = [
-            f"Arrivals: {counts['arrivals']}/100. Arrived within all sampled physical limits: {counts['valid_arrivals']}/100. Full-run limit passes: {counts['full_limit_passes']}/100. Timeouts: {counts['timeouts']}. Execution errors: {counts['execution_errors']}.",
-            f"Episodes violating joint position / speed / torque: {result['violating_episodes']['joint']} / {result['violating_episodes']['speed']} / {result['violating_episodes']['torque']}. Maximum excess: {result['max_excess']['joint']:.6g} rad / {result['max_excess']['speed']:.6g} rad/s / {result['max_excess']['torque']:.6g} Nm. Categories can overlap. Independent saved-state audits agree with all completed-case labels.",
-            "All 100 original random-posture start/goal pairs ran once in frozen order. "+setting_line+" Arrival means <=50 mm position error and joint-speed L1 <=1 rad/s, no dwell. Orientation unconstrained. No collision or robot qualification.",
-            "ADMM settings: "+json.dumps(admm_settings)+". Planning bounds: "+json.dumps(bound_settings)+". Physical limits remain the original URDF values.",
-            config['differences_from_historical'],
-            "Finite-budget ADMM does not guarantee feasibility. Fixed simulation pacing leaves solver latency unpaid. Timings are diagnostics, not a benchmark comparison. No within-cohort retuning, retries, clipping, candidate vetoes or solver repairs. Earlier diagnostic configuration attempts, if present, remain separate. Successful episodes stop on arrival, so this does not assess later settling.",
-            "Application: "+config['application_commit'],
-            "Input-source commit: "+config['input_source_commit'],
-            "Unmodified upstream GATO aeacf16; GRiD 0.5.1; GTX1070/sm61, CUDA12.9, float. Full histories, source/input identities, case tables and violation details accompany this report.",
-        ]
-        cover.text(.08, .87, "\n\n".join(textwrap.fill(s, 86) for s in paragraphs),
-                   fontsize=10, va="top", linespacing=1.5)
-        pdf.savefig(cover); plt.close(cover)
-        pdf.savefig(fig)
     plt.close(fig)
     (out / "REPORT.md").write_text(f"""# Frozen random100 on modern GATO / ADMM
 
@@ -163,8 +143,8 @@ Settings: {setting_line}
 Position tolerance 5 cm, joint-speed L1 <= 1 rad/s, zero dwell. Position-only;
 no final approach, collisions, clipping or physical hardware. Fixed simulation
 pacing leaves solve latency unpaid. ADMM uses its finite upstream budget;
-actual inner modes/work are retained. GATO is unchanged upstream aeacf16,
-GRiD 0.5.1; GTX1070 sm61 / CUDA12.9 / float.
+actual inner modes/work are retained. GATO `{first['gato_commit']}`, package
+versions `{json.dumps(first['versions'])}` (the first case's summary).
 
 Effective ADMM settings: `{json.dumps(admm_settings)}`.
 Planning bounds: `{json.dumps(bound_settings)}`; the physical

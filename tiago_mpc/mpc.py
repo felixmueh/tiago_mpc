@@ -62,6 +62,8 @@ class MpcParams:
             raise ValueError("N must be >=2 and dt_s finite and positive")
         if self.budget_s is not None and (not math.isfinite(self.budget_s) or self.budget_s <= 0):
             raise ValueError("budget_s must be finite and positive")
+        if self.friction is not None and self.friction.width_rad_s is None:
+            raise ValueError("GATO predicts smooth Coulomb friction only; hard sign is plant-only")
 
     @classmethod
     def from_dict(cls, values):
@@ -99,8 +101,6 @@ def register_robot(name, urdf_path, *, n_points, ee_frame, friction):
     if friction is None:
         gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame, jobs=1)
         return
-    if friction.width_rad_s is None:
-        raise ValueError("GATO prediction supports smooth Coulomb friction; hard sign is plant-only")
     gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame,
                         jobs=1, joint_friction_smoothing=friction.width_rad_s)
 

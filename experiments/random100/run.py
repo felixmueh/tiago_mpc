@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
 from experiments.reach import Reach, reach
-from tiago_mpc.mpc import TIAGO
+from tiago_mpc.mpc import TIAGO, MpcWorker
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import FLANGE_FRAME, fk
 
@@ -90,6 +90,7 @@ def main():
             lock = path.open("a")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             locks.append(lock)
+    MpcWorker(PARAMS).close()  # a shared setup failure (GATO build, model check) stops here, before any case
     out.mkdir(parents=True, exist_ok=False)
     (out / "configuration.json").write_text(json.dumps(config, indent=2)+"\n")
     shutil.copyfile(__file__, out / "run.py")
@@ -113,9 +114,6 @@ def main():
         counts = aggregate(out, rows, len(ids))
         print(f"{index+1}/{len(ids)} id={task}: {row['status']}, limits={row.get('limits_pass')}; "
               f"arrivals={counts['arrivals']} valid={counts['valid_arrivals']} errors={counts['execution_errors']}", flush=True)
-        if not row.get("ticks"):
-            print("Shared setup failure: remaining tasks held. See case log.", flush=True)
-            return 2
     print(json.dumps(dict(output=str(out), counts=counts), indent=2), flush=True)
     return 0
 

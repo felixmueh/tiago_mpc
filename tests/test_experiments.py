@@ -112,3 +112,13 @@ def test_duration_caps_the_tasks_own(tmp_path, monkeypatch):
                       out=tmp_path / "r", duration=.02)
     assert record.summary["status"] == "timeout" and record.summary["duration_cap_s"] == .02
     assert len(record.ticks) == 3  # 0, 10 and 20 ms
+
+
+def test_an_interrupted_run_is_saved_as_interrupted(tmp_path, monkeypatch):
+    def interrupted(*args, **kw):
+        raise KeyboardInterrupt  # Ctrl-C, or SIGTERM through reach._interrupt
+
+    monkeypatch.setattr(rc, "MpcWorker", Mpc)
+    with pytest.raises(KeyboardInterrupt):
+        rc.reach(SimPlant(substep=.003), run=interrupted, params=replace(rc.TIAGO, N=4), out=tmp_path / "r")
+    assert json.loads((tmp_path / "r" / "summary.json").read_text())["status"] == "interrupted"
