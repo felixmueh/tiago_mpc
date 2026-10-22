@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 import json
 import math
 import multiprocessing as mp
+import os
 from pathlib import Path
 import queue
 import shutil
@@ -201,7 +202,8 @@ class RosMpcRunner:
                    "config": asdict(self.config), "task": asdict(self.task),
                    "safety": asdict(self.safety_settings),
                    "worker_config": asdict(self.worker_config),
-                   "restored": None, "cleanup_errors": [], "accepted_commands": 0}
+                   "restored": None, "cleanup_errors": [], "accepted_commands": 0,
+                   "ros_distro": os.environ.get("ROS_DISTRO")}
         root = Path(__file__).resolve().parents[1]
         summary["upstream"] = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root / "external/gato", text=True).strip()

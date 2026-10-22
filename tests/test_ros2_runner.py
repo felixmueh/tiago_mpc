@@ -191,6 +191,7 @@ def test_normal_run_hands_back_and_records_original_command_lease(rig, tmp_path)
     assert np.all(rig.publications[-1][1] == 0)
     saved = json.loads((tmp_path / "run/summary.json").read_text())
     assert saved["status"] == "arrived"
+    assert "ros_distro" in saved
 
 
 
