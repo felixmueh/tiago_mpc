@@ -20,7 +20,8 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
   nothing, publishes nothing and builds no MPC. Nothing is saved.
 - **Execution:** `--execute --target X_M Y_M Z_M` (target required). You type
   `EXECUTE` before the ROS client exists. Then `launch` (`experiments/common.py`)
-  builds the `MpcProcess`, and `run_robot` calls `plant.start()`, so the startup
+  compiles GATO's module unless it is cached and builds the `MpcProcess`
+  (`MpcProcess.compile`), and `run_robot` calls `plant.start()`, so the startup
   checks see a state read after the build; meanwhile the arm stays under PAL's
   position controller. SIGTERM ends the run like Ctrl-C. `launch` closes the
   MPC and the plant at the end.
@@ -35,8 +36,8 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
 | Process | Runs |
 |---|---|
-| 1 (launching) | loop, task, law, `guard`, `Record`, `RosPlant` and the ROS client |
-| 2 (spawned) | `MpcProcess`: builds the GATO controller and solves on the GPU |
+| 1 (launching) | compiling GATO's module before the run (`compile_binary`); loop, task, law, `guard`, `Record`, `RosPlant` and the ROS client |
+| 2 (spawned) | `MpcProcess`: loads that module, builds the GATO controller and solves on the GPU |
 | 3 (spawned) | the safety worker (`AsyncSafetyMonitor`), owned by `RosPlant`: no robot run without it |
 
 ## Where each check lives

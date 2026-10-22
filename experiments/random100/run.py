@@ -18,7 +18,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
 from experiments.reach import Reach, reach
-from tiago_mpc.mpc import TIAGO, MpcProcess
+from tiago_mpc.mpc import TIAGO, MpcProcess, compile_binary
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import FLANGE_FRAME, ROOT, fk
 
@@ -89,7 +89,8 @@ def main():
             lock = path.open("a")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             locks.append(lock)
-    MpcProcess(PARAMS).close()  # a shared setup failure (GATO build, model check) stops here, before any case
+    binary = compile_binary(PARAMS)
+    MpcProcess(PARAMS, binary).close()  # a shared setup failure (model check) stops here, before any case
     out.mkdir(parents=True, exist_ok=False)
     (out / "configuration.json").write_text(json.dumps(config, indent=2)+"\n")
     shutil.copyfile(__file__, out / "run.py")
@@ -103,7 +104,7 @@ def main():
         start = time.perf_counter()
         plant, mpc = SimPlant(x0[:7], x0[7:], substep=.003), None
         try:
-            mpc = MpcProcess(PARAMS)
+            mpc = MpcProcess(PARAMS, binary)
             reach(plant, mpc, task=Reach(target, ee_frame=FLANGE_FRAME), out=case)
         except Exception:
             traceback.print_exc()

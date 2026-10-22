@@ -106,8 +106,8 @@ def _interrupt(signum, frame):
 
 def launch(args, experiment, sim_plant, params):
     """experiment(plant, mpc, run=..., out=..., command_period=..., update_period=...,
-    duration=...) from args, on args.plant with MpcProcess(params); launch closes both
-    and prints the summary. The robot only runs the startup checks (plant.start() and
+    duration=...) from args, on args.plant with MpcProcess.compile(params); launch closes
+    both and prints the summary. The robot only runs the startup checks (plant.start() and
     plant.stop()) unless --execute is confirmed; returns the Record or None."""
     if args.plant == "sim":
         plant, run = sim_plant(), partial(run_simulation, latency=args.latency)
@@ -129,7 +129,7 @@ def launch(args, experiment, sim_plant, params):
             print(json.dumps(dict(status="checked", plant=plant.settings), indent=2, default=str))
             return None
     try:
-        mpc = MpcProcess(params)
+        mpc = MpcProcess.compile(params)  # compiles GATO's module once per variant (minutes)
         try:
             record = experiment(plant, mpc, run=run, out=args.output, command_period=args.command_period,
                                 update_period=args.update_period, duration=args.duration)

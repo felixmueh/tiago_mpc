@@ -20,7 +20,8 @@ state's time; on the robot a state can be older than the tick and repeat.
 
 ```
 tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction laws),
-              mpc.py (MpcParams, TIAGO, plant names, Mpc, MpcProcess),
+              mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary,
+              Mpc, MpcProcess),
               plan.py (State, Plan, Tick; the protocols PlantInterface, MpcInterface,
               TaskInterface; Law, Callback),
               clock.py (Clock), laws.py, loops.py (run, guard),
@@ -49,9 +50,14 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
   joint friction and trajectory capture, pinned by the gitlink; it needs
   `grid-rbd` 0.5.3. After a new pin: `git submodule sync --recursive`,
   `git submodule update --init --recursive`, reinstall `requirements.txt`.
-- **The first run** generates the TIAGo dynamics and compiles one CUDA module
-  (minutes), named `tiago_right_<hash>` over the GPU URDF, end-effector frame
-  and predictor friction, and cached in `GATO_CACHE_DIR` (default `.cache/gato`).
+- **GATO's module is compiled explicitly.** `compile_binary(params)` generates
+  the TIAGo dynamics and compiles one CUDA module per variant (minutes, CPU
+  only), `bsqpN<N>_tiago_right_<hash>` with the hash over the GPU URDF,
+  end-effector frame and predictor friction, cached in `GATO_CACHE_DIR` (default
+  `.cache/gato`); once cached it returns at once, `use_cache=False` rebuilds.
+  `find_binary(params)` returns the cached module or None. `Mpc(params, binary)`
+  and `MpcProcess(params, binary)` load exactly that file and never compile;
+  `Mpc.compile(params)` and `MpcProcess.compile(params)` do both, as the mains do.
 - **Container and host share this checkout.** The container
   (`/workspace/tiago_mpc`) uses `.venv` and `.cache/gato`; the host uses
   `venv-host` with `GATO_CACHE_DIR=$PWD/.cache/host-gato` (nvcc 12.9, g++-14).
@@ -101,7 +107,7 @@ from tiago_mpc.loops import Fixed, run_simulation
 from tiago_mpc.mpc import TIAGO, Mpc
 from tiago_mpc.sim import SimPlant
 
-mpc = Mpc(replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)))  # in this process; MpcProcess: its own
+mpc = Mpc.compile(replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)))  # in this process; MpcProcess: its own
 record = reach(SimPlant(substep=.003), mpc, run=partial(run_simulation, latency=Fixed(.005)),
                task=Reach(position_tol_m=.02), law=hold_first)
 mpc.close()
@@ -116,8 +122,8 @@ mpc.close()
   the **predictor's**; the run records both.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
-  the raw GATO `controller`), `run` and `Record` directly, without
-  `run_experiment`.
+  the raw GATO `controller` and `step`, the latest solve's result), `run` and
+  `Record` directly, without `run_experiment`.
 
 ## On the robot
 
@@ -153,7 +159,8 @@ python experiments/figure8.py --plant robot --execute --target X_M Y_M Z_M --dur
   per plan its start time, knot states, knot torques and solve stats
   (`plan_*`); plus the experiment's arrays. Times count from the first state's.
 - `replay.npz`: the visualizer replay on execution time, exported after `record.save()` by
-  `experiments/replay.py:save_replay` (`../tiago_mpc_visualizer/docs/replay-format.md`).
+  `experiments/replay.py:save_replay` (`../tiago_mpc_visualizer/docs/replay-format.md`),
+  with the `MpcParams` in `provenance.params`.
 
 More: [docs/robot.md](docs/robot.md) (robot path and checks),
 [docs/safety.md](docs/safety.md) (collision-safety worker),

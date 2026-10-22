@@ -274,7 +274,7 @@ def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
 
 @pytest.mark.parametrize("module", [rc, f8])
 def test_robot_main_checks_only_by_default(rig, monkeypatch, module):
-    monkeypatch.setattr(common, "MpcProcess", lambda params: pytest.fail("check-only builds no MPC"))
+    monkeypatch.setattr(common, "MpcProcess", NS(compile=lambda params: pytest.fail("check-only builds no MPC")))
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("check-only must not prompt"))
     monkeypatch.setattr(common.signal, "signal", lambda *args: None)
     assert module.main(["--plant", "robot"]) == 0
@@ -309,7 +309,8 @@ def test_confirmed_execution_runs_the_experiment_on_the_robot_and_closes_both(ri
     name = "reach" if module is rc else "figure8"
     monkeypatch.setattr("builtins.input", lambda prompt: "EXECUTE")
     monkeypatch.setattr(common.signal, "signal", lambda *args: None)
-    monkeypatch.setattr(common, "MpcProcess", lambda params: NS(params=params, close=lambda: closed.append("mpc")))
+    monkeypatch.setattr(common, "MpcProcess",
+                        NS(compile=lambda params: NS(params=params, close=lambda: closed.append("mpc"))))
     monkeypatch.setattr(module, name, experiment)
     assert module.main(["--plant", "robot", "--execute", "--target", ".5", ".1", ".2"]) == 0
     (plant, mpc, run, task), = runs

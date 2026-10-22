@@ -1,10 +1,11 @@
-"""MPC parameters with the TIAGo defaults, and the MPC built from them.
+"""MPC parameters with the TIAGo defaults, GATO's solver module for them, and the MPC.
 
 Experiments override the defaults with dataclasses.replace, for example
-replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). Mpc and MpcProcess
-share one interface: request(state, reference, updates=None), which raises while
-the previous request's plan is unread, result(block=False) -> Plan or None, N,
-dt, params and close().
+replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). compile_binary compiles GATO's
+module for the params (minutes, once per variant), find_binary finds it, Mpc and
+MpcProcess load it; Mpc.compile(params) does both. They share one interface:
+request(state, reference, updates=None), which raises while the previous request's
+plan is unread, result(block=False) -> Plan or None, N, dt, params and close().
 """
 from __future__ import annotations
 
@@ -115,26 +116,93 @@ def plant_name(gpu_urdf_path: Path, ee_frame: str, friction: Friction | None = N
     return "tiago_right_" + digest(Path(gpu_urdf_path).read_bytes(), ee_frame.encode(), config)
 
 
-def build_controller(params: MpcParams):
-    """Build and check the GATO controller; returns it and the GPU coordinate signs."""
-    cache_dir = cache_root()  # exports GATO_CACHE_DIR before GATO compiles or loads
-    # GATO's build calls cmake by name: use this environment's pinned one (part of GATO's module key).
-    os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]
-    import gato
+def _plant(params: MpcParams):
+    """The Pinocchio arm, GPU URDF, GPU coordinate signs and GATO plant name for params.
+    Exports GATO_CACHE_DIR and puts this environment's cmake first on PATH: GATO's
+    module key includes the cmake it finds."""
     import pinocchio as pin
 
-    friction, ee_frame, n = params.friction, params.ee_frame, params.N
-    gpu_path, signs = runtime_urdf(cache_dir, friction)
     model = pin.buildModelFromUrdf(str(ARM_URDF))
-    data = model.createData()
-    if model.getFrameId(ee_frame) >= model.nframes:
-        raise ValueError(f"Missing end-effector frame {ee_frame}")
-    plant = plant_name(gpu_path, ee_frame, friction)
-    gato.register_robot(plant, gpu_path, N=[n], ee_frame=ee_frame, jobs=1,
+    if not model.existFrame(params.ee_frame):
+        raise ValueError(f"Missing end-effector frame {params.ee_frame}")
+    bin_dir = str(Path(sys.executable).parent)
+    if os.environ["PATH"].split(os.pathsep)[0] != bin_dir:
+        os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
+    gpu_path, signs = runtime_urdf(cache_root(), params.friction)
+    return model, gpu_path, signs, plant_name(gpu_path, params.ee_frame, params.friction)
+
+
+def _register(params: MpcParams, gpu_path: Path, plant: str) -> None:
+    """GATO's code generation and manifest entry for the plant (seconds when new, never a
+    compile). BSQP reads the end-effector frame from it."""
+    import gato
+
+    friction = params.friction
+    gato.register_robot(plant, gpu_path, N=[params.N], ee_frame=params.ee_frame,
                         **({} if friction is None else dict(joint_friction_smoothing=friction.width_rad_s)))
-    solver = gato.BSQP(str(gpu_path), batch_size=1, N=n, dt=params.dt_s,
-                       plant_type=plant, params=params.solver)
-    check_model(solver, model, data, ee_frame, signs, friction)
+
+
+def find_binary(params: MpcParams) -> Path | None:
+    """The cached GATO module for params, or None when it is not built or the plant not
+    registered. Never registers or compiles."""
+    from gato import _cache
+
+    plant = _plant(params)[3]
+    return _cache.find_module(plant, params.N)
+
+
+def compile_binary(params: MpcParams, use_cache: bool = True, jobs: int = 2) -> Path:
+    """Register the plant and compile its GATO module (minutes) unless cached; returns its
+    path. CPU only: no CUDA context. use_cache=False rebuilds: the old file is unlinked,
+    not overwritten, so processes that loaded it keep their mapping. jobs: parallel
+    compile jobs."""
+    from gato import _cache
+
+    _, gpu_path, _, plant = _plant(params)
+    _register(params, gpu_path, plant)
+    if not use_cache:
+        with _cache._locked(_cache.cache_dir()):  # not while another process compiles it
+            old = _cache.find_module(plant, params.N)
+            if old is not None:
+                old.unlink()
+    return _cache.ensure_module(plant, params.N, jobs=jobs)
+
+
+def load_controller(params: MpcParams, binary: Path | None):
+    """Load exactly binary as GATO's module for params (never compiles), then build and
+    check the controller; returns it and the GPU coordinate signs."""
+    import importlib.util
+
+    import gato
+
+    model, gpu_path, signs, plant = _plant(params)
+    name = f"bsqpN{params.N}_{plant}"
+    if binary is None or not Path(binary).is_file():
+        raise FileNotFoundError(f"No GATO module for these params{f' at {binary}' if binary else ''}; "
+                                "compile_binary(params) builds it")
+    binary = Path(binary).resolve()
+    if binary.name.split(".")[0] != name:
+        raise ValueError(f"{binary.name} is not the GATO module {name} for these params")
+    # BSQP imports gato.<name> from sys.modules, so it never reaches its compile fallback.
+    module = sys.modules.get("gato." + name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location("gato." + name, binary)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot import {binary}")
+        try:
+            module = sys.modules[spec.name] = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            sys.modules.pop(spec.name, None)
+            raise ImportError(f"Cannot import {binary}: {exc}") from exc
+    elif Path(module.__file__ or "").resolve() != binary:
+        raise RuntimeError(f"gato.{name} is already loaded from {module.__file__}, not {binary}")
+    _register(params, gpu_path, plant)
+    friction = params.friction
+    # Explicit friction widths: BSQP then never looks up the registration that built the module.
+    solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,
+                       params=params.solver, joint_friction_smoothing=friction and friction.width_rad_s)
+    check_model(solver, model, model.createData(), params.ee_frame, signs, friction)
     controller = gato.MPCController(
         solver, limits="admm", linsys="pcg", warm_start=params.warm_start,
         reset_rho_each_step=params.reset_rho_each_step, admm_linsys=params.admm_linsys,
@@ -209,16 +277,24 @@ def _checked(mpc, plan, t):
 class Mpc:
     """The GATO controller in this process: request solves, result returns the plan.
 
-    The first request resets the controller from its state (and runs the warm-up
-    solves); later requests never reset it. A fresh controller needs a new Mpc,
-    or controller.reset. ``controller`` is the raw GATO MPCController.
+    binary is the GATO module for params (find_binary, compile_binary); Mpc loads exactly
+    it and never compiles. The first request resets the controller from its state (and
+    runs the warm-up solves); later requests never reset it. A fresh controller needs a
+    new Mpc, or controller.reset. ``controller`` is the raw GATO MPCController, ``step``
+    the raw GATO result of the latest solve (MPCController.step; None before the first).
     """
 
-    def __init__(self, params: MpcParams):
-        self.controller, self.signs = build_controller(params)
+    def __init__(self, params: MpcParams, binary: Path | None):
+        self.controller, self.signs = load_controller(params, binary)
         self.params, self.N, self.dt = params, params.N, params.dt_s
+        self.step: Any = None
         self._previous_t: float | None = None
         self._plan: Plan | None = None
+
+    @classmethod
+    def compile(cls, params: MpcParams, use_cache: bool = True) -> Mpc:
+        """Mpc on compile_binary(params, use_cache)."""
+        return cls(params, compile_binary(params, use_cache))
 
     def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
         _known(updates)
@@ -248,7 +324,8 @@ class Mpc:
         # GATO uses dt_elapsed only to score hypotheses (none here).
         dt_elapsed = None if self._previous_t is None else state.t - self._previous_t
         self._previous_t = state.t
-        step = self.controller.step(x, reference, dt_elapsed=dt_elapsed, budget_s=self.params.budget_s)
+        self.step = step = self.controller.step(x, reference, dt_elapsed=dt_elapsed,
+                                                budget_s=self.params.budget_s)
         xu = np.asarray(step.xu_best, dtype=float).reshape(-1)
         if xu.size != self.N * 21 - 7:
             raise ValueError("Malformed GATO trajectory")
@@ -272,15 +349,15 @@ _SPAWN = mp.get_context("spawn")
 class MpcProcess:
     """Mpc in a spawned process, behind the same interface.
 
-    __init__ returns once the process has built and checked its controller. A
-    failed solve replies with its error and ends the process; result() raises on
-    that reply, and on a dead process, at the next call.
+    __init__ returns once the process has loaded binary and checked its controller;
+    it never compiles. A failed solve replies with its error and ends the process;
+    result() raises on that reply, and on a dead process, at the next call.
     """
 
-    def __init__(self, params: MpcParams):
+    def __init__(self, params: MpcParams, binary: Path | None):
         self.params, self.N, self.dt = params, params.N, params.dt_s
         self._requests, self._replies = _SPAWN.Queue(), _SPAWN.Queue()
-        self._process = _SPAWN.Process(target=_serve, args=(params, self._requests, self._replies),
+        self._process = _SPAWN.Process(target=_serve, args=(params, binary, self._requests, self._replies),
                                        daemon=True)
         self._process.start()
         self._pending: float | None = None  # the outstanding request's state time
@@ -289,6 +366,11 @@ class MpcProcess:
         except BaseException:
             self.close()
             raise
+
+    @classmethod
+    def compile(cls, params: MpcParams, use_cache: bool = True) -> MpcProcess:
+        """This process compiles (compile_binary), the MPC process loads the module."""
+        return cls(params, compile_binary(params, use_cache))
 
     def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
         _known(updates)
@@ -332,10 +414,10 @@ class MpcProcess:
             return reply
 
 
-def _serve(params, requests, replies):
-    """The process: build, reply None when ready (or the error), then one plan per request."""
+def _serve(params, binary, requests, replies):
+    """The process: load, reply None when ready (or the error), then one plan per request."""
     try:
-        mpc = Mpc(params)
+        mpc = Mpc(params, binary)
         replies.put(None)
         while (item := requests.get()) is not None:
             replies.put(mpc._solve(*item))

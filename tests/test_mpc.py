@@ -1,13 +1,17 @@
-"""MpcParams, plant names, the settings GATO receives, and both Mpc twins on fakes (CPU only)."""
+"""MpcParams, plant names, loading GATO's module, the settings GATO receives, and both Mpc
+twins on fakes (CPU only)."""
 from dataclasses import asdict, replace
 import json
+from pathlib import Path
 import pickle
 import queue
+import sys
 import threading
 from types import SimpleNamespace as NS
 from unittest.mock import Mock
 
 import gato
+from gato import _cache
 import numpy as np
 import pinocchio as pin
 import pytest
@@ -15,7 +19,7 @@ import pytest
 from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction
-from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess
+from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, urdf_friction
 
@@ -30,13 +34,34 @@ def test_asdict_round_trips_also_through_json_and_pickle(params):
     assert pickle.loads(pickle.dumps(params)) == params
 
 
+@pytest.fixture
+def no_compile(monkeypatch, tmp_path):
+    """A fresh GATO cache in which compiling or a solver raises."""
+    monkeypatch.setenv("GATO_CACHE_DIR", str(tmp_path / "cache"))
+    def compiled(*args, **kwargs):
+        raise AssertionError("compiled")
+    for name in ("ensure_module", "load_module"):
+        monkeypatch.setattr(_cache, name, compiled)
+    monkeypatch.setattr(gato, "BSQP", compiled)
+
+
+def fake_binary(directory, params, plant=None):
+    """An importable Python file named as GATO's module for params."""
+    path = Path(directory) / f"bsqpN{params.N}_{plant or mpc._plant(params)[3]}.py"
+    path.write_text("")
+    return path
+
+
 @pytest.mark.parametrize("params", [TIAGO, FIGURE8])
-def test_build_controller_passes_the_params_to_gato(monkeypatch, params):
+def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkeypatch, no_compile, tmp_path, params):
     seen = {}
+    binary = fake_binary(tmp_path, params)
+    name = "gato." + binary.stem
 
     class Solver:
-        def __init__(self, urdf, *, batch_size, N, dt, plant_type, params):
-            seen.update(N=N, dt=dt, solver=params.asdict())
+        def __init__(self, urdf, *, batch_size, N, dt, plant_type, params, joint_friction_smoothing):
+            seen.update(N=N, dt=dt, solver=params.asdict(), module=sys.modules[name].__file__,
+                        width=joint_friction_smoothing)
 
         def set_row_group_bounds(self, group, lo, hi):
             seen.setdefault("bounds", []).append(group)
@@ -46,11 +71,56 @@ def test_build_controller_passes_the_params_to_gato(monkeypatch, params):
     monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: seen.update(controller=kwargs),
                         raising=False)
     monkeypatch.setattr(mpc, "check_model", lambda *args: None)
-    mpc.build_controller(params)
+    try:
+        mpc.load_controller(params, binary)
+    finally:
+        sys.modules.pop(name, None)
     assert (seen["N"], seen["dt"], seen["solver"]) == (params.N, params.dt_s, params.solver.asdict())
     assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
-    # Smooth predictor friction is registered only when the params have one.
-    assert seen["register"].get("joint_friction_smoothing") == (params.friction and params.friction.width_rad_s)
+    assert seen["module"] == str(binary)
+    # Smooth predictor friction is registered and passed only when the params have one.
+    width = params.friction and params.friction.width_rad_s
+    assert seen["register"].get("joint_friction_smoothing") == width == seen["width"]
+
+
+def test_load_controller_refuses_a_missing_or_foreign_binary_without_compiling(monkeypatch, no_compile, tmp_path):
+    params = replace(TIAGO, N=3)
+    with pytest.raises(FileNotFoundError, match="compile_binary"):
+        Mpc(params, None)
+    with pytest.raises(FileNotFoundError):
+        Mpc(params, tmp_path / "missing.so")
+    for other in (replace(params, N=4), replace(params, friction=LOSSES)):
+        with pytest.raises(ValueError, match="is not the GATO module"):
+            Mpc(params, fake_binary(tmp_path, other))
+    binary = fake_binary(tmp_path, params)
+    binary.write_text("raise OSError('not a module')")
+    with pytest.raises(ImportError, match="not a module"):
+        Mpc(params, binary)
+    assert "gato." + binary.stem not in sys.modules
+    (tmp_path / "other").mkdir()
+    elsewhere = fake_binary(tmp_path / "other", params)
+    monkeypatch.setitem(sys.modules, "gato." + binary.stem, NS(__file__=str(elsewhere)))
+    with pytest.raises(RuntimeError, match="already loaded"):
+        Mpc(params, binary)
+
+
+def test_find_binary_finds_nothing_for_an_unregistered_plant(no_compile):
+    assert find_binary(replace(TIAGO, N=3)) is None
+
+
+@pytest.mark.parametrize("use_cache", [True, False])
+def test_compile_binary_registers_and_rebuilds_without_overwriting(monkeypatch, tmp_path, use_cache):
+    monkeypatch.setenv("GATO_CACHE_DIR", str(tmp_path / "cache"))
+    old, seen = tmp_path / "old.so", {}
+    old.write_bytes(b"mapped")
+    monkeypatch.setattr(gato, "register_robot", lambda name, path, **kwargs: seen.update(register=name))
+    monkeypatch.setattr(_cache, "find_module", lambda name, N: old)
+    def ensure(name, N, jobs):
+        seen.update(ensure=(name, N, jobs), old=old.exists())
+        return old
+    monkeypatch.setattr(_cache, "ensure_module", ensure)
+    assert compile_binary(replace(TIAGO, N=3), use_cache, jobs=5) == old
+    assert seen["ensure"] == (seen["register"], 3, 5) and seen["old"] == use_cache
 
 
 def test_same_plant_inputs_same_name(tmp_path):
@@ -111,6 +181,7 @@ def test_invalid_params_are_refused(change):
 SIGNS = np.array([1., 1., 1., 1., 1., -1., 1.])
 N, DT = 3, .01
 PARAMS = replace(TIAGO, N=N, dt_s=DT, budget_s=.004)
+BINARY = Path("bsqpN3_fake.so")  # load_controller is faked
 REFERENCE = np.tile([.3, -.2, .1, 0., 0., 0.], (N, 1)).astype(np.float32)
 
 
@@ -146,7 +217,7 @@ class Controller:
 def controller(monkeypatch):
     """Every Mpc built in this process (also MpcProcess on threads) gets this controller."""
     controller = Controller()
-    monkeypatch.setattr(mpc, "build_controller", lambda params: (controller, SIGNS))
+    monkeypatch.setattr(mpc, "load_controller", lambda params, binary: (controller, SIGNS))
     return controller
 
 
@@ -156,9 +227,11 @@ def state(t=1., scale=1.):
 
 def test_native_coordinates_cross_only_the_gpu_boundary(controller):
     item = state()
-    m = Mpc(PARAMS)
+    m = Mpc(PARAMS, BINARY)
+    assert m.step is None
     m.request(item, REFERENCE)
     plan = m.result()
+    assert m.step.iterations == 2  # the raw GATO step result
     x = np.r_[item.q, item.qd]
     gpu = x * np.tile(SIGNS, 2)
     np.testing.assert_array_equal(controller.events[-1][1], gpu)
@@ -170,7 +243,7 @@ def test_native_coordinates_cross_only_the_gpu_boundary(controller):
 
 
 def test_first_request_resets_and_warms_up_once_and_dt_elapsed_follows_state_times(controller):
-    m = Mpc(replace(PARAMS, warmup=2))
+    m = Mpc(replace(PARAMS, warmup=2), BINARY)
     for t in (1., 1.013, 1.02):
         m.request(state(t, scale=t), REFERENCE)
         m.result()
@@ -183,7 +256,7 @@ def test_first_request_resets_and_warms_up_once_and_dt_elapsed_follows_state_tim
 
 
 def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller):
-    m = Mpc(PARAMS)
+    m = Mpc(PARAMS, BINARY)
     q_nom = np.arange(7.)
     m.request(state(), REFERENCE, {"cost_weights": dict(q_cost=2.), "posture": (.5, q_nom)})
     names = [event[0] for event in controller.events]
@@ -196,7 +269,7 @@ def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller
 
 
 def test_a_request_raises_while_the_previous_plan_is_unread(controller):
-    m = Mpc(PARAMS)
+    m = Mpc(PARAMS, BINARY)
     m.request(state(), REFERENCE)
     with pytest.raises(RuntimeError, match="pending"):
         m.request(state(2.), REFERENCE)
@@ -207,7 +280,7 @@ def test_a_request_raises_while_the_previous_plan_is_unread(controller):
 
 @pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite", "effort"])
 def test_every_knot_is_checked(controller, bad):
-    m = Mpc(PARAMS)
+    m = Mpc(PARAMS, BINARY)
     fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)))
     assert mpc._checked(m, Plan(**fields), 1.)
     if bad == "shape":
@@ -255,7 +328,7 @@ def process(controller, monkeypatch):
     monkeypatch.setattr(mpc, "_SPAWN", NS(Queue=Channel, Process=Thread))
     processes = []
     def make(params=PARAMS):
-        processes.append(MpcProcess(params))
+        processes.append(MpcProcess(params, BINARY))
         return processes[-1]
     yield make
     for item in processes:
@@ -316,4 +389,4 @@ def test_unknown_update_raises_in_the_callers_process(process, controller):
 def test_a_spawned_process_reports_a_failed_build():
     # A real spawned process: the build fails on the frame before any GPU work.
     with pytest.raises(RuntimeError, match="Missing end-effector frame"):
-        MpcProcess(replace(TIAGO, ee_frame="no_such_frame"))
+        MpcProcess(replace(TIAGO, ee_frame="no_such_frame"), BINARY)
