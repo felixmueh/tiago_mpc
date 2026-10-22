@@ -25,13 +25,16 @@ def output_root():
 
 
 def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch,
-                      *, duration=.03, period=.01):
+                      *, duration=.03, period=.01, loss_free=False):
     spec = importlib.util.spec_from_file_location(example, ROOT / "examples" / f"{example}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     tracking = example == "track_figure8"
     settings = json.loads((ROOT / "configs" / ("tracking.json" if tracking else "reaching.json")).read_text())
     settings.update(N=2, dt_s=period)
+    if loss_free:
+        settings.pop("joint_dynamics")
+        settings.pop("predictor_smoothing_rad_s")
     if tracking:
         settings.update(sim_dt_s=min(.003, period), duration_s=duration, secondary_metrics_start_s=.01)
         settings["figure8"]["period_s"] = duration
@@ -61,6 +64,10 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
 
     def integrate(model, data, q, v, u, h, *losses):
         applied.append((u.copy(), h))
+        if settings.get("joint_dynamics") is None:
+            assert losses == ()
+        else:
+            assert losses == (settings["joint_dynamics"],)
         return q + .001 * h * u, v.copy()
 
     controller.step = step
@@ -71,14 +78,25 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
     def build(effective, **kwargs):
         if tracking:
             assert effective["prediction_joint_dynamics"] is None
+        elif loss_free:
+            assert effective["prediction_joint_dynamics"] is None
+        else:
+            assert effective["prediction_joint_dynamics"] == {
+                **settings["joint_dynamics"], "model": "coulomb_tanh_viscous", "smoothing_rad_s": .03}
         return setup
     monkeypatch.setattr(module, "build_controller", build)
-    monkeypatch.setattr(module, "plant_rk4" if tracking else "rk4", integrate)
+    monkeypatch.setattr(module, "plant_rk4", integrate)
+    if not tracking:
+        monkeypatch.setattr(module, "rk4", integrate)
     if tracking:
         monkeypatch.setattr(module, "model_receipt", lambda *args: {})
         prepare = module.runtime_urdf
         monkeypatch.setattr(module, "runtime_urdf", lambda cache, losses: prepare(output_root / "plant", losses))
     assert module.main() == 0
+    if not tracking:
+        summary = json.loads((out / "summary.json").read_text())
+        assert summary["simulator_joint_dynamics"] == settings.get("joint_dynamics")
+        assert (summary["prediction_joint_dynamics"] is None) == loss_free
     if tracking:
         joint = ET.parse(out / "plant.urdf").find(".//joint[@name='arm_right_1_joint']/dynamics")
         assert float(joint.get("friction")) == 1.234
@@ -124,3 +142,8 @@ def test_example_delays_actuation_and_advances_reference(
 def test_default_tracking_clock_does_not_add_a_roundoff_solve(output_root, monkeypatch):
     run_example_check("track_figure8", "fixed", 0., .001, np.arange(12000) * .002,
                       output_root, monkeypatch, duration=24., period=.002)
+
+
+def test_explicit_legacy_reaching_configuration_keeps_loss_free_plant(output_root, monkeypatch):
+    run_example_check("reach_sim", "fixed", 0., .001, [0., .01, .02],
+                      output_root, monkeypatch, loss_free=True)

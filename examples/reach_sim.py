@@ -27,6 +27,7 @@ from tiago_mpc.model_runtime import (URDF, EE_FRAME, PLANT, Q_CHECK, Q_DELTA_CHE
                                      ee_position, runtime_urdf as prepare_urdf,
                                      check_model as check_predictor)
 from tiago_mpc.simulation import control_intervals
+from tiago_mpc.joint_dynamics import plant_rk4
 
 SIM_DT_S = 0.003
 TIMEOUT_S, POSITION_TOL_M, SPEED_L1_TOL_RAD_S = 8.0, 0.05, 1.0
@@ -75,6 +76,7 @@ def main():
     except (ValueError, TypeError) as exc:
         p.error(str(exc))
     n_points, knot_dt = effective["N"], effective["dt_s"]
+    plant_losses = settings.get("joint_dynamics")
     controller_options = effective["controller"]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     out = args.output or ROOT / "_expr_data" / "reaching" / stamp
@@ -97,6 +99,8 @@ def main():
                   solver_params=effective["solver_params"], configuration=settings,
                   configuration_file=str(config_path.resolve()),
                   effective_configuration=effective, limits="admm", linsys="pcg",
+                  simulator_joint_dynamics=plant_losses,
+                  prediction_joint_dynamics=effective["prediction_joint_dynamics"],
                   timing=dict(mode=args.solve_time_mode, fixed_s=args.solve_time_s,
                               measured_source="MPCController.step wall_s",
                               previous_control_during_solve=True, initial_control="zero torque"),
@@ -204,7 +208,10 @@ def main():
                 interval_end = t + duration
                 while t < interval_end - 1e-12:
                     h = min(SIM_DT_S, interval_end-t)
-                    q, v = rk4(model, data, x[:7], x[7:], applied_u, h)
+                    if plant_losses is None:
+                        q, v = rk4(model, data, x[:7], x[7:], applied_u, h)
+                    else:
+                        q, v = plant_rk4(model, data, x[:7], x[7:], applied_u, h, plant_losses)
                     x = np.r_[q, v]
                     if not np.isfinite(x).all():
                         np.savez_compressed(out / "failure_plant.npz", state=x, torque_nm=applied_u, time_s=t+h)

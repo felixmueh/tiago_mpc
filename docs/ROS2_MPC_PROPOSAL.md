@@ -167,8 +167,8 @@ acceptance gate.
 
 **Model features are a separate boundary.** ROS integration does not add native
 full-robot MPC or orientation cost support. The application remains the
-seven-joint right arm. Current tracking explicitly selects the existing
-smooth-friction/damping predictor; reaching retains its own loss-free default.
+seven-joint right arm. Current tracking and reaching explicitly select the existing
+smooth-friction/damping predictor through their task configuration files.
 
 ## Reviewable next implementation
 

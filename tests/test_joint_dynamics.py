@@ -13,14 +13,15 @@ from tiago_mpc.joint_dynamics import model_receipt, register_robot
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_tracking_registration_supplies_width_defaults_and_reaching_stays_off(monkeypatch):
+def test_both_task_defaults_register_smooth_losses(monkeypatch):
     calls = []
     monkeypatch.setattr(gato, "register_robot", lambda *args, **kwargs: calls.append((args, kwargs)))
     for config_path in (None, ROOT / "configs/tracking.json"):
         _, _, effective = load_configuration(config_path)
         register_robot("test", "arm.urdf", n_points=effective["N"], ee_frame="tcp",
                        config=effective["prediction_joint_dynamics"])
-    assert calls[0] == (("test", "arm.urdf"), dict(N=[32], ee_frame="tcp", jobs=1))
+    assert calls[0] == (("test", "arm.urdf"),
+                        dict(N=[32], ee_frame="tcp", jobs=1, joint_friction_smoothing=.03))
     assert calls[1] == (("test", "arm.urdf"),
                         dict(N=[32], ee_frame="tcp", jobs=1, joint_friction_smoothing=.03))
 

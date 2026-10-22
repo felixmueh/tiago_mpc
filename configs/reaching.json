@@ -1,5 +1,5 @@
 {
-  "description": "Selected TIAGo reaching default: running XYZ weight 4 and terminal XYZ weight 8, ADMM-only N32/10ms. Other settings retain the promoted c3f226b profile; the historical 84/100 cohort used terminal weight 800 and does not qualify this newly selected terminal weight.",
+  "description": "Selected TIAGo reaching default: running XYZ weight 4 and terminal XYZ weight 8, ADMM-only N32/10ms, actual right-arm losses in the hard-sign plant and tanh predictor at width 0.03 rad/s. The historical loss-free 84/100 and 4/8 sanity cohorts do not qualify this friction-enabled default.",
   "N": 32,
   "dt_s": 0.01,
   "solver_params": {
@@ -38,5 +38,29 @@
     "velocity_fraction": 0.8,
     "effort_fraction": 0.85
   },
-  "save_plan_steps": 5
+  "save_plan_steps": 5,
+  "joint_dynamics": {
+    "model": "coulomb_sign_viscous",
+    "coulomb_nm": [
+      1.66,
+      1.15,
+      1.16,
+      0.912,
+      1.25,
+      0.473,
+      0.56
+    ],
+    "viscous_nm_s_per_rad": [
+      4.7,
+      9.69,
+      5.3,
+      4.2,
+      3.66,
+      2.95,
+      2.95
+    ],
+    "provenance": "Actual right-arm joint values supplied by Felix 2026-10-21. No guessed coefficients. Coulomb compensation column used as frictionloss; damping column used as viscous Nm s/rad. Sign(0)=0; no stiction model. Armature metadata is inactive in both plant and predictor."
+  },
+  "predictor_smoothing_rad_s": 0.03,
+  "armature_runtime": "inactive in both models; custom URDF metadata only"
 }
