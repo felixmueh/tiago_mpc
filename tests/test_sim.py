@@ -47,12 +47,14 @@ def test_on_the_wall_clock_advance_integrates_then_waits_for_it(monkeypatch):
     assert slept == [pytest.approx(.006)] and plant.state().t == 100.01
     wall[0] += .03  # late: integrates to the deadline, no wait
     plant.advance(100.02)
-    assert slept[1] == 0. and plant.state().t == 100.02
+    assert slept[1] == 0. and plant.t == 100.02
+    assert plant.state().t == 100.034  # a state is read at the clock's time
     assert plant.settings["clock"] == "wall"
 
 
 def test_on_the_wall_clock_the_start_state_holds_until_the_first_command(monkeypatch):
-    """Held through a tick and a 50 ms first solve; the command integrates from when it is applied."""
+    """Held through a tick and a 50 ms first solve (or warm-up): read then, the held state
+    has the clock's time; the command integrates from when it is applied."""
     wall = [100.]
     monkeypatch.setattr(sim.time, "monotonic", lambda: wall[0])
     monkeypatch.setattr(sim.time, "sleep", lambda s: None)
@@ -62,7 +64,7 @@ def test_on_the_wall_clock_the_start_state_holds_until_the_first_command(monkeyp
     plant.advance(100.01)
     wall[0] = 100.05
     s = plant.state()
-    assert s.t == 100.01
+    assert s.t == 100.05
     np.testing.assert_array_equal(s.q, q0)
     np.testing.assert_array_equal(s.qd, np.zeros(7))
     plant.apply(U)

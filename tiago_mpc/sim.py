@@ -24,8 +24,8 @@ class SimPlant:
     there until the first command.
 
     clock is Clock.simulation() by default; Clock.wall() runs in real time (for
-    run_robot). State.t is the integrated time, in the clock's domain. model and
-    data are the Pinocchio handles.
+    run_robot). state() first integrates up to the clock's time, so State.t is when
+    the state is read. model and data are the Pinocchio handles.
     """
 
     def __init__(self, q: np.ndarray = Q_START, qd: np.ndarray | None = None, *, substep: float,
@@ -46,6 +46,7 @@ class SimPlant:
         return self.clock.now()
 
     def state(self) -> State:
+        self._integrate(self.clock.now())
         return State(self.t, self.q.copy(), self.qd.copy())
 
     def apply(self, command: np.ndarray) -> None:
@@ -64,7 +65,7 @@ class SimPlant:
 
     def _integrate(self, t):
         """Integrate the held command from self.t to t in substeps; nothing unless t is later
-        (apply on the simulation clock, or a deadline that apply passed on the wall clock)."""
+        (state and apply on the simulation clock, or a deadline passed on the wall clock)."""
         if t - self.t <= 1e-12:
             return
         # No command yet: the state stays while time moves on, as the robot's onboard position
