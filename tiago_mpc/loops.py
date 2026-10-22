@@ -137,11 +137,18 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
                 end = done or t - start >= duration - _TOLERANCE
             command = None
             if plan is not None and not end:
+                # Remedies (thesis workspace, research/tiago-mpc-latency-analysis.md, "How other
+                # MPC systems apply their plans"): (a) feedback around the plan at the command
+                # rate, e.g. u = u_plan(t) + Kp (q_plan(t) - q) + Kd (qd_plan(t) - qd) on the
+                # plan's knot states (OCS2: Riccati gains; BiConMP: joint impedance); (b) latency
+                # compensation: solve from the state predicted at the plan's application time
+                # under the committed torques and date the plan from then (Findeisen and
+                # Allgöwer; Mastalli et al.).
                 if new is not None and not warned and plan.index(t - plan.t0) >= 1:
                     warned = True
-                    warnings.warn(f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, at "
-                                  f"least one knot ({1e3 * plan.dt:g} ms): its knot 0 never runs, and "
-                                  "sample_knot may diverge (docs/robot.md, Latency; warned once per run)")
+                    warnings.warn(f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, "
+                                  f"{1e3 * plan.dt:g} ms knots: its knot 0 never runs "
+                                  "(docs/robot.md, Latency; warned once per run)")
                 command = guard(law(plan, t, s), plan, t)
                 plant.apply(command)
             tick = Tick(t, s, command, plan, new is not None)
