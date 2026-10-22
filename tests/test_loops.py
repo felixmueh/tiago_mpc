@@ -5,15 +5,18 @@ import math
 import numpy as np
 import pytest
 
+from tiago_mpc.clock import Clock
 from tiago_mpc.laws import hold_first
 from tiago_mpc.loops import Fixed, Measured, Schedule, guard, run, run_robot, run_simulation
 from tiago_mpc.plan import Plan, State
 
 
 class Plant:
-    """On a simulation clock; measure(t) is the time of the latest state at time t."""
-    def __init__(self, measure=lambda t: t):
+    """On a simulation clock, or labelled kind ("wall" for run_robot); measure(t) is the
+    time of the latest state at time t."""
+    def __init__(self, measure=lambda t: t, kind="simulation"):
         self.t, self.measure, self.calls, self.applied = 0., measure, [], []
+        self.clock = Clock(kind)
 
     def start(self):
         self.calls.append("start")
@@ -72,7 +75,7 @@ class Task:
 
 
 def go(mpc, task=Task(), loop=run_simulation, duration=.1, update_period=.01, plant=None, **kw):
-    plant, ticks = plant or Plant(), []
+    plant, ticks = plant or Plant(kind="wall" if loop is run_robot else "simulation"), []
     result = loop(plant, mpc, task, callbacks=[ticks.append], command_period=.01,
                   update_period=update_period, duration=duration, **kw)
     return plant, ticks, result
@@ -153,12 +156,12 @@ def test_ticks_keep_their_rate_and_a_late_tick_skips_the_missed_ones():
         def advance(self, t):
             self.t = {.02: .025, .04: .055}.get(round(t, 6), t)
 
-    _, ticks, _ = go(Mpc(), loop=run_robot, plant=Late(), duration=.07)
+    _, ticks, _ = go(Mpc(), loop=run_robot, plant=Late(kind="wall"), duration=.07)
     assert [round(k.t, 6) for k in ticks] == [0., .01, .025, .03, .055, .065, .075]
 
 
 def test_past_the_plans_end_faults_and_stops():
-    plant, ticks = Plant(), []
+    plant, ticks = Plant(kind="wall"), []
     with pytest.raises(RuntimeError, match="lease expired"):  # 30 ms plan: lease ends with it
         run_robot(plant, Mpc(N=4, replies=1), Task(), hold_first, callbacks=[ticks.append],
                   command_period=.01, update_period=.01, duration=1.)
@@ -167,7 +170,7 @@ def test_past_the_plans_end_faults_and_stops():
 
 
 def test_a_dead_mpc_process_is_noticed_within_one_tick_and_stops_the_plant():
-    mpc, plant = Mpc(), Plant()
+    mpc, plant = Mpc(), Plant(kind="wall")
 
     def die(tick):
         mpc.dead = tick.t >= .02
@@ -175,6 +178,14 @@ def test_a_dead_mpc_process_is_noticed_within_one_tick_and_stops_the_plant():
     with pytest.raises(RuntimeError, match="exited"):
         run_robot(plant, mpc, Task(), callbacks=[die], command_period=.01, update_period=.05, duration=1.)
     assert plant.calls == ["start", "stop"] and plant.t == pytest.approx(.03)
+
+
+def test_each_loop_refuses_a_plant_on_the_other_clock():
+    for loop, kind in ((run_simulation, "wall"), (run_simulation, "external"), (run_robot, "simulation")):
+        plant = Plant(kind=kind)
+        with pytest.raises(ValueError, match="clock"):
+            go(Mpc(), loop=loop, plant=plant)
+        assert not plant.calls  # never started
 
 
 def test_task_updates_reach_the_request_and_the_schedule_sets_the_control_rate():

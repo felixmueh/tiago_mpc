@@ -144,11 +144,15 @@ def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
             gc.enable()
 
 
-def run_robot(*args, **kw):
+def run_robot(plant, *args, **kw):
     """Wall clock: the robot, Gazebo or SimPlant(clock=Clock.wall()); plans are used on arrival."""
-    return run(*args, latency=None, **kw)
+    if plant.clock.kind == "simulation":
+        raise ValueError("run_robot needs a wall or external clock; use run_simulation")
+    return run(plant, *args, latency=None, **kw)
 
 
-def run_simulation(*args, latency=Fixed(), **kw):
+def run_simulation(plant, *args, latency=Fixed(), **kw):
     """Simulated clock: each solve is charged latency, Fixed(s) or Measured()."""
-    return run(*args, latency=latency, **kw)
+    if plant.clock.kind != "simulation":
+        raise ValueError("run_simulation needs a simulation clock; use run_robot")
+    return run(plant, *args, latency=latency, **kw)
