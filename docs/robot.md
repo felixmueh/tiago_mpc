@@ -19,10 +19,11 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
   settings. It reads the controller inventory but loads no controller, switches
   nothing, publishes nothing and builds no MPC. Nothing is saved.
 - **Execution:** `--execute --target X_M Y_M Z_M` (target required). You type
-  `EXECUTE` before the ROS client exists. Then the experiment builds the
-  `MpcProcess`, and `run_robot` calls `plant.start()`, so the startup checks see a
-  state read after the build; meanwhile the arm stays under PAL's position
-  controller. SIGTERM ends the run like Ctrl-C.
+  `EXECUTE` before the ROS client exists. Then `launch` (`experiments/common.py`)
+  builds the `MpcProcess`, and `run_robot` calls `plant.start()`, so the startup
+  checks see a state read after the build; meanwhile the arm stays under PAL's
+  position controller. SIGTERM ends the run like Ctrl-C. `launch` closes the
+  MPC and the plant at the end.
 - **`--duration S`** ends a run after at most S seconds (otherwise the reach
   times out after 8 s and the figure eight runs its 24 s period); use it for
   first runs.

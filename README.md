@@ -24,7 +24,8 @@ tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction la
               plan.py (State, Plan, Tick), clock.py (Clock), laws.py, loops.py (run, guard),
               sim.py (SimPlant), robot.py (RosPlant), ros2.py (ROS 2 client), safety.py,
               record.py (Record)
-experiments/  reach.py, figure8.py, random100/, replay.py
+experiments/  common.py (run_experiment, the mains' options), reach.py, figure8.py,
+              random100/, replay.py
 scripts/      setup.sh, prepare_models.py, prepare_safety_model.py
 ```
 
@@ -79,8 +80,12 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
 ## Writing an experiment
 
 An experiment is a task (a frozen dataclass with `reference(t, n, dt)` and
-`done(state, t)`), parameters, and a function that composes the pieces; `main`
-only picks the plant. Swap a piece by passing another one:
+`done(state, t)`) and a function that takes the assembled plant and MPC and
+hands them to `run_experiment` (`experiments/common.py`) with its own metrics.
+`run_experiment` records the run, sets its status (done, timeout, interrupted or
+error), saves it and exports the replay. `main` picks the plant and the
+parameters through `launch`. Whoever creates the plant and the MPC closes them.
+Swap a piece by passing another one:
 
 ```python
 from dataclasses import replace
@@ -89,12 +94,13 @@ from functools import partial
 from experiments.reach import Reach, reach
 from tiago_mpc.laws import hold_first
 from tiago_mpc.loops import Fixed, run_simulation
-from tiago_mpc.mpc import TIAGO
+from tiago_mpc.mpc import TIAGO, Mpc
 from tiago_mpc.sim import SimPlant
 
-params = replace(TIAGO, solver=TIAGO.solver.replace(mu=1.))
-record = reach(SimPlant(substep=.003), run=partial(run_simulation, latency=Fixed(.005)),
-               task=Reach(position_tol_m=.02), params=params, law=hold_first)
+mpc = Mpc(replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)))  # in this process; MpcProcess: its own
+record = reach(SimPlant(substep=.003), mpc, run=partial(run_simulation, latency=Fixed(.005)),
+               task=Reach(position_tol_m=.02), law=hold_first)
+mpc.close()
 ```
 
 - A **control law** is a function `law(plan, t, state) -> command`;
@@ -104,7 +110,8 @@ record = reach(SimPlant(substep=.003), run=partial(run_simulation, latency=Fixed
   the **predictor's**; the run records both.
 - **Per-solve solver changes** come from the task's optional `updates(t)`,
   named in `UPDATES` (`mpc.py`). **Your own loop** can use `Mpc` (the
-  `MpcProcess` interface plus the raw GATO `controller`) directly.
+  `MpcProcess` interface plus the raw GATO `controller`), `run` and `Record`
+  directly, without `run_experiment`.
 
 ## On the robot
 

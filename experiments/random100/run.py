@@ -101,11 +101,16 @@ def main():
         with np.load(out / "inputs" / f"random_{task:05d}.npz") as a:
             x0, target = a["initial_state"], tuple(map(float, a["target_xyz"]))
         start = time.perf_counter()
+        plant, mpc = SimPlant(x0[:7], x0[7:], substep=.003), None
         try:
-            reach(SimPlant(x0[:7], x0[7:], substep=.003), task=Reach(target, ee_frame=FLANGE_FRAME),
-                  params=PARAMS, out=case)
+            mpc = MpcProcess(PARAMS)
+            reach(plant, mpc, task=Reach(target, ee_frame=FLANGE_FRAME), out=case)
         except Exception:
             traceback.print_exc()
+        finally:
+            if mpc is not None:
+                mpc.close()
+            plant.close()
         path = case / "summary.json"
         row = json.loads(path.read_text()) if path.exists() else dict(status="error", error="no summary")
         row.update(task_id=task, wall_s=time.perf_counter()-start, output=str(case))

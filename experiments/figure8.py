@@ -6,20 +6,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import partial
-import json
 from pathlib import Path
 import sys
-import traceback
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from experiments.reach import arguments, launch, limit_excess, solve_summary
-from experiments.replay import export_replay
+from experiments.common import arguments, launch, run_experiment
 from tiago_mpc.laws import sample_knot
 from tiago_mpc.loops import run_simulation
-from tiago_mpc.mpc import TIAGO, MpcProcess
-from tiago_mpc.record import Record
+from tiago_mpc.mpc import TIAGO
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import Q_START, fk, urdf_friction
 
@@ -51,7 +47,7 @@ class Figure8:
         return out
 
     def done(self, state, t):
-        return t >= self.period_s
+        return t >= self.period_s - 1e-9  # absorbs the rounding of summed command periods
 
 
 FIGURE8 = replace(TIAGO, dt_s=.01, solver=TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
@@ -63,54 +59,32 @@ def metrics(error):
                 p95_m=float(np.percentile(error, 95)), max_m=float(np.max(error)))
 
 
-def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sample_knot, out=None,
+def figure8(plant, mpc, run=run_simulation, task=Figure8(), law=sample_knot, out=None,
             command_period=None, update_period=None, duration=None):
-    """command_period and update_period default to the knot interval params.dt_s;
-    duration (seconds) caps the task's period."""
-    record = Record(out, task=task, params=params, plant=plant)
-    mpc = None
-    try:
-        mpc = MpcProcess(params)
-        run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
-            update_period=update_period or params.dt_s,
-            duration=task.period_s if duration is None else min(task.period_s, duration))
+    """Track task with mpc on plant (common.run_experiment); duration (seconds) caps
+    the task's period."""
+    def evaluate(record):
         trajectory = record.trajectory
         t = trajectory["state_time_s"]  # when each position was measured
-        xyz = np.array([fk(q, params.ee_frame) for q in trajectory["state"][:, :7]])
+        xyz = np.array([fk(q, record.params.ee_frame) for q in trajectory["state"][:, :7]])
         error = np.linalg.norm(xyz - task.path(t), axis=1)
-        excess = limit_excess(trajectory)
         record.arrays.update(ee_xyz_m=xyz, reference_xyz_m=task.path(t))
         record.summary.update(
-            status="completed", duration_cap_s=duration, metrics_full_cycle=metrics(error),
-            metrics_after_initial_1s=metrics(error[t >= 1.]) if np.any(t >= 1.) else None,
-            max_limit_excess=excess, limits_pass=max(excess.values()) <= 1e-5,
-            max_abs_torque_nm=float(np.nanmax(np.abs(trajectory["command"]))),
-            **solve_summary(trajectory))
-    except BaseException as exc:  # also Ctrl-C and SIGTERM, which end robot runs
-        record.summary.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
-                              error=traceback.format_exc())
-        raise
-    finally:
-        if mpc is not None:
-            mpc.close()
-        plant.close()
-        record.save()
-        export_replay(record)
-    return record
+            duration_cap_s=duration, metrics_full_cycle=metrics(error),
+            metrics_after_initial_1s=metrics(error[t >= 1.]) if np.any(t >= 1.) else None)
+
+    return run_experiment(plant, mpc, task, law, run, command_period=command_period,
+                          update_period=update_period,
+                          duration=task.period_s if duration is None else min(task.period_s, duration),
+                          out=out, done_status="completed", evaluate=evaluate)
 
 
 def main(argv=None):
     args = arguments(__doc__, argv)
     task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
-    record = launch(args, partial(figure8, task=task, out=args.output, command_period=args.command_period,
-                                  update_period=args.update_period, duration=args.duration),
-                    lambda: SimPlant(substep=1e-4, friction=urdf_friction()))
-    if record is None:
-        return 0
-    print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},
-                     indent=2, default=str))
-    print(f"Saved {record.out}")
-    return 0 if record.summary["limits_pass"] else 1
+    record = launch(args, partial(figure8, task=task), lambda: SimPlant(substep=1e-4, friction=urdf_friction()),
+                    FIGURE8)
+    return 0 if record is None or record.summary["limits_pass"] else 1
 
 
 if __name__ == "__main__":

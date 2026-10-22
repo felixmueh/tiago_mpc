@@ -3,8 +3,8 @@
 Experiments override the defaults with dataclasses.replace, for example
 replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). Mpc and MpcProcess
 share one interface: request(state, reference, updates=None), which raises while
-the previous request's plan is unread, result(block=False) -> Plan or None, N, dt
-and close().
+the previous request's plan is unread, result(block=False) -> Plan or None, N,
+dt, params and close().
 """
 from __future__ import annotations
 
@@ -276,7 +276,7 @@ class MpcProcess:
     """
 
     def __init__(self, params):
-        self.N, self.dt = params.N, params.dt_s
+        self.params, self.N, self.dt = params, params.N, params.dt_s
         self._requests, self._replies = _SPAWN.Queue(), _SPAWN.Queue()
         self._process = _SPAWN.Process(target=_serve, args=(params, self._requests, self._replies),
                                        daemon=True)
