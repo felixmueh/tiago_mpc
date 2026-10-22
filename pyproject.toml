@@ -1,0 +1,14 @@
+# mypy over the core: python -m mypy (tests/test_types.py runs it). The experiments stay untyped.
+[tool.mypy]
+files = ["tiago_mpc", "tests/test_types.py"]
+python_version = "3.10"
+warn_unreachable = true  # also catches an attribute typed None by its first assignment
+
+[[tool.mypy.overrides]]  # not checked: the safety worker (a rewrite is pending) and the experiments
+module = ["tiago_mpc.safety", "experiments.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]  # untyped: GATO, Pinocchio and ROS 2
+module = ["gato.*", "pinocchio.*", "rclpy.*", "builtin_interfaces.*", "rcl_interfaces.*",
+          "controller_manager_msgs.*", "sensor_msgs.*", "std_msgs.*", "sea_state_msgs.*"]
+ignore_missing_imports = true

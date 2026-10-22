@@ -16,7 +16,7 @@ class Plant:
     time of the latest state at time t."""
     def __init__(self, measure=lambda t: t, kind="simulation"):
         self.t, self.measure, self.calls, self.applied = 0., measure, [], []
-        self.clock = Clock(kind)
+        self.clock, self.settings = Clock(kind), {}
 
     def start(self):
         self.calls.append("start")
@@ -36,12 +36,16 @@ class Plant:
     def stop(self):
         self.calls.append("stop")
 
+    def close(self):
+        pass
+
 
 class Mpc:
     """Plans whose knot k has torque k + 1. delay: result() calls before a reply;
     replies: how many requests get one (later ones hang)."""
     def __init__(self, N=11, dt=.01, delay=0, replies=math.inf, wall=0.):
-        self.N, self.dt, self.delay, self.replies, self.wall = N, dt, delay, replies, wall
+        self.params, self.N, self.dt = None, N, dt
+        self.delay, self.replies, self.wall = delay, replies, wall
         self.requests, self.waiting, self.dead = [], None, False
 
     def request(self, state, reference, updates=None):
@@ -61,6 +65,9 @@ class Mpc:
         t, self.waiting = self.waiting[1], None
         torques = np.arange(1., self.N)[:, None] * np.ones(7)
         return Plan(t, self.dt, np.zeros((self.N, 14)), torques, dict(wall_s=self.wall))
+
+    def close(self):
+        pass
 
 
 @dataclass

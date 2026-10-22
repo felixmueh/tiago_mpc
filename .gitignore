@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 *.egg-info/
 _expr_data/
+.mypy_cache/

@@ -21,7 +21,8 @@ state's time; on the robot a state can be older than the tick and repeat.
 ```
 tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, Mpc, MpcProcess),
-              plan.py (State, Plan, Tick), clock.py (Clock), laws.py, loops.py (run, guard),
+              plan.py (State, Plan, Tick; the protocols Plant, MpcLike, Task; Law, Callback),
+              clock.py (Clock), laws.py, loops.py (run, guard),
               sim.py (SimPlant), robot.py (RosPlant), ros2.py (ROS 2 client), safety.py,
               record.py (Record)
 experiments/  common.py (run_experiment, the mains' options), reach.py, figure8.py,
@@ -39,7 +40,8 @@ git lfs install
 git clone --recurse-submodules https://github.com/felixmueh/gato_tiago.git tiago_mpc
 cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirements.txt
 .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q --ignore=external   # CPU tests, no ROS needed
+.venv/bin/python -m pytest -q --ignore=external   # CPU tests, no ROS needed, and mypy
+.venv/bin/python -m mypy                          # the type check alone (pyproject.toml)
 ```
 
 - **GATO** is the fork `felixmueh/GATO`: upstream 0.1.2 plus opt-in smooth
@@ -105,7 +107,9 @@ mpc.close()
 
 - A **control law** is a function `law(plan, t, state) -> command`;
   **callbacks** see every `Tick` (execution time, state, command, plan,
-  whether it is new).
+  whether it is new). The pieces' interfaces are typed in `tiago_mpc/plan.py`:
+  a plant, an MPC and a task need no base class, only what the protocols
+  `Plant`, `MpcLike` and `Task` declare.
 - `SimPlant(friction=...)` sets the **plant's** losses, `MpcParams.friction`
   the **predictor's**; the run records both.
 - **Per-solve solver changes** come from the task's optional `updates(t)`,

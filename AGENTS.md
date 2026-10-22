@@ -16,6 +16,11 @@ something lasting. The robot path is in `docs/robot.md`, the safety worker in
 - Parameters are Python dataclasses with defaults (`MpcParams` and `TIAGO` in
   `tiago_mpc/mpc.py`, the task dataclasses), overridden with `dataclasses.replace`.
   No JSON configurations.
+- Types (Felix, 2026-10-22): mypy checks the core, `tiago_mpc/` without
+  `safety.py` (`python -m mypy`, configured in `pyproject.toml`, also run by
+  `tests/test_types.py`). Annotate public functions and methods; the interfaces
+  are the structural protocols in `tiago_mpc/plan.py` (no inheritance, no
+  run-time checks). Experiments stay untyped.
 - Docs describe the current code only; git keeps the history.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)
