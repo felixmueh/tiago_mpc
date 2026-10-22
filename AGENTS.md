@@ -104,7 +104,25 @@ Use standard `dynamics` friction/damping and `limit` effort fields. Store armatu
 in a custom `<tiago_mpc armature="..."/>` joint child (kg m^2), explicitly metadata
 only: neither current URDF loader enables it, and no runtime reads that tag.
 Do not store kp/kd: Felix says those belong to a different controller.
-Do not silently add armature to link inertia or enable it only in one model.
+Do not silently add armature to link inertia.
+
+**Simulator versus MPC model — Felix, 2026-10-22:** the simulated plant may be
+more realistic than the MPC's predictor model; the MPC is expected to use a
+simpler model, as it does on the real robot. Armature or losses may therefore
+be enabled in the plant alone. Enable them explicitly and record the
+plant/predictor difference in run metadata. This supersedes the earlier rule
+against enabling armature in only one model; the "keep armature inactive"
+wording below describes the state at that time.
+
+**Developing with questionable coefficients — Felix, 2026-10-22:** the
+supplied friction, damping and armature values are questionable (see the
+caution in the URDFs and `docs/real-robot-friction-plan.md` in the thesis
+workspace). Develop controllers with them anyway, but keep every coefficient a
+parameter, never a constant baked into an algorithm, and test each controller
+against a plant whose coefficients differ from the ones the controller
+assumes (for example the 2026-10-16 physical fits, or ±50 %). Identified
+values are inserted later and matter for tuning on the robot, not for the
+design.
 
 Existing experiment protocols and saved cohorts retain their historical
 coefficients. Their explicit configuration can override canonical URDF losses;
