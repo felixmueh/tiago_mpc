@@ -1,6 +1,7 @@
 """The loop on a fake plant and a fake Mpc (CPU only)."""
 from dataclasses import dataclass
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -9,6 +10,9 @@ from tiago_mpc.clock import Clock
 from tiago_mpc.laws import hold_first
 from tiago_mpc.loops import Fixed, Measured, Schedule, guard, run, run_robot, run_simulation
 from tiago_mpc.plan import Plan, State
+
+# Many tests here delay plans by a knot or more on purpose; the warning has its own test.
+pytestmark = pytest.mark.filterwarnings("ignore:a plan took effect")
 
 
 class Plant:
@@ -104,6 +108,15 @@ def test_zero_latency_commands_each_plan_at_its_own_tick():
     assert commanded(ticks) == [(0., 1.), (.01, 1.), (.02, 1.)]
     assert [k.new for k in ticks] == [True, True, True, False]
     assert ticks[-1].command is None and ticks[-1].t == pytest.approx(.03)
+
+
+def test_a_plan_that_skips_its_knot_0_warns_once_per_run():
+    with pytest.warns(UserWarning, match="10.0 ms after its state") as caught:
+        go(Mpc(), latency=Fixed(.01), duration=.08)  # every plan from its knot 1
+    assert len(caught) == 1 and "docs/robot.md" in str(caught[0].message)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        go(Mpc(), duration=.08)  # zero latency: every plan from its knot 0
 
 
 @pytest.mark.parametrize("latency", [Fixed(.025), Measured()])

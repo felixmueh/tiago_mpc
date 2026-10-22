@@ -67,6 +67,7 @@ class Mpc:
         pass
 
 
+@pytest.mark.filterwarnings("ignore:a plan took effect")  # the reach's 10 ms latency
 @pytest.mark.parametrize("name", ["reach", "figure8"])
 def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
     if name == "reach":

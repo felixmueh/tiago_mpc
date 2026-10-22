@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import gc
 import math
 from typing import Any
+import warnings
 
 import numpy as np
 
@@ -106,8 +107,10 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
     The last tick, which sees the task done or the time up, sends no command but
     reaches the callbacks. Garbage collection pauses while it runs: a full
     collection over the buffered ticks takes several milliseconds.
+    The first plan that takes effect a knot interval or more after its state, so
+    that its knot 0 never runs, raises a warning, once per run (docs/robot.md).
     """
-    due, plan, pending = Schedule(update_period), None, None
+    due, plan, pending, warned = Schedule(update_period), None, None, False
     plant.start()  # startup checks on a fresh state
     # Paused for the whole run: full collections took 7-10 ms at 500 Hz. It must be
     # enabled in between (e.g. collecting at safe points); to be discussed (todo.org).
@@ -134,6 +137,11 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
                 end = done or t - start >= duration - _TOLERANCE
             command = None
             if plan is not None and not end:
+                if new is not None and not warned and plan.index(t - plan.t0) >= 1:
+                    warned = True
+                    warnings.warn(f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, at "
+                                  f"least one knot ({1e3 * plan.dt:g} ms): its knot 0 never runs, and "
+                                  "sample_knot may diverge (docs/robot.md, Latency; warned once per run)")
                 command = guard(law(plan, t, s), plan, t)
                 plant.apply(command)
             tick = Tick(t, s, command, plan, new is not None)
