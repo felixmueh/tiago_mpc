@@ -14,13 +14,14 @@ order, and `inputs/` holds one NPZ per task.
 ```
 
 - **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`) with the
-  flange as end-effector frame (`PARAMS` in `run.py`). Each case runs once, in order, in its own `examples/reach_sim.py` process, writing to a
-  fresh directory under `_expr_data/`. The runner takes the shared GPU locks.
+  flange as end-effector frame (`PARAMS` in `run.py`). Each case runs once, in
+  order: `reach` from `experiments/reach.py` with its own MPC worker, writing to
+  a fresh directory under `_expr_data/`. The runner takes the shared GPU locks.
 - **Outcomes:** arrival (position error at most 5 cm and joint-speed L1 at most
   1 rad/s within 8 simulated seconds) and simulated physical-limit compliance
   are reported separately. A timeout, limit violation or numerical failure
   keeps its output and the other cases continue; a shared setup failure stops
   the run. There is no torque clipping or retry.
 - **Analysis:** `analyze.py` needs no GPU. It checks each case's initial state,
-  recomputes joint, speed and torque limit excesses from all saved plant
-  samples, and writes a case table, a plot and a short report next to the run.
+  recomputes joint, speed and torque limit excesses from all saved command
+  ticks, and writes a case table, a plot and a short report next to the run.

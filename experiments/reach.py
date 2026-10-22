@@ -55,8 +55,8 @@ class Reach:
         return float(np.linalg.norm(fk(q, self.ee_frame) - self.target_m))
 
     def done(self, state, t):
-        return (self.distance(state.q) <= self.position_tol_m
-                and np.abs(state.qd).sum() <= self.speed_l1_tol_rad_s)
+        return bool(self.distance(state.q) <= self.position_tol_m
+                    and np.abs(state.qd).sum() <= self.speed_l1_tol_rad_s)
 
 
 def limit_excess(trajectory):
