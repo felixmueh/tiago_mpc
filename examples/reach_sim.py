@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import importlib.metadata
 import json
 from pathlib import Path
@@ -105,8 +104,7 @@ def main():
                               measured_source="MPCController.step wall_s",
                               previous_control_during_solve=True, initial_control="zero torque"),
                   orientation="unconstrained", collisions="not checked",
-                  end_effector_frame=ee_frame,
-                  urdf_sha256=hashlib.sha256(URDF.read_bytes()).hexdigest())
+                  end_effector_frame=ee_frame)
     times, states, controls, errors, solve_us, wall_s, row_viol = [], [], [], [], [], [], []
     work, charged_s, update_s, solve_start_s = [], [], [], []
     predicted_states, prediction_errors = [], []
@@ -118,7 +116,6 @@ def main():
         gpu_path = setup.gpu_urdf_path
         state_signs = np.tile(signs, 2)
         result["gpu_joint_coordinate_signs"] = signs.tolist()
-        result["gpu_urdf_sha256"] = hashlib.sha256(gpu_path.read_bytes()).hexdigest()
         result["joint_names"] = list(model.names)[1:]
         result["model_step_max_abs_errors"] = setup.details["model_step_max_abs_errors"]
         print("GATO/Pinocchio model checks passed", flush=True)
@@ -147,8 +144,7 @@ def main():
             if (x_start.shape != (14,) or q_goal.shape != (7,) or target.shape != (3,)
                     or not all(np.isfinite(a).all() for a in (x_start, q_goal, target, reference))):
                 raise ValueError("Invalid frozen input")
-            result.update(mode="frozen_random_reach", input_file=str(args.input.resolve()),
-                          input_sha256=hashlib.sha256(args.input.read_bytes()).hexdigest())
+            result.update(mode="frozen_random_reach", input_file=str(args.input.resolve()))
         for q in (x_start[:7], q_goal):
             if np.any(q < model.lowerPositionLimit) or np.any(q > model.upperPositionLimit):
                 raise ValueError("Start/target witness outside joint limits")

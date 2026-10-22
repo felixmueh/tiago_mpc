@@ -126,63 +126,19 @@ independent simulated limit checks.
 Exit status is nonzero on timeout, execution error or a simulated limit violation.
 Failed outputs are retained; the script does not retry.
 
-## Frozen random100 experiment
+## random100: 100 random reaches
 
-`experiments/random100/` includes the exact 100 random initial states and goal
-inputs recovered from the historical experiment branch, with hashes and order.
-These are random-posture starts, distinct from the comfortable-start cone
-dataset. Run them with the current modern GATO/ADMM configuration:
+`experiments/random100/` runs 100 fixed random-posture starts with one position
+goal each, in simulation only. See [its README](experiments/random100/README.md).
 
-```bash
-.venv/bin/python experiments/random100/run.py --dry-run
-.venv/bin/python experiments/random100/run.py
-```
-
-See `experiments/random100/README.md` for the explicit differences from the old
-solver experiment. New outputs live under `_expr_data/`.
-Arrival and physical-limit compliance are reported separately.
-
-The historical promoted ADMM-only configuration used running/terminal position
-weights 4/800: **84/100 arrivals and 100/100 sampled physical-limit passes**,
-compared with 69/100 arrivals and 100/100 limit passes for the retained soft+ADMM
-profile. Felix has since selected **4/8** for both reaching and tracking; that
-new reaching terminal weight passed one bounded comfortable-start sanity reach
-at the historical flange:
-71.891 mm initial displacement reached the 5 cm arrival threshold in 0.270 s,
-with sampled raw limits passing. The historical 100-case outcome does not
-qualify the changed default, and this short check does not establish broad
-reaching reliability or precise settling. The same frozen inputs
-ran once in original order for each cohort. There were 16 gained arrivals and
-one lost arrival; the selected diagnostic pilot overlaps the 100, so these
-counts are not independent holdout evidence. Its raw results were deleted at
-Felix's request during cleanup on 2026-10-21; these are historical summaries.
-
-The selected historical profile was `zero_soft_state_rho10.json` at application
-commit `c3f226b`, based on `e45c441`. That experiment checkout and branch were
-removed after its decisions were integrated. Current reaching retains its N32/10 ms
-settings, .1 rad planning margin and native N32 ADMM PCG policy, with terminal
-position weight changed from 800 to 8. Preview is .31 s. See `VERIFICATION.md`
-for historical scope and verification.
-
-Both commands above select `configs/reaching.json` when `--config` is omitted.
-The runner's dry-run prints full effective solver, controller and bound settings;
-runs copy the selected JSON and pass that snapshot to every case. Explicit
-`--config` files retain their original partial-override semantics against the
-frozen legacy base, so historical profiles reproduce their old settings:
-
-```bash
-.venv/bin/python experiments/random100/run.py --dry-run \
-  --config experiments/configuration_study/profiles/n32_dt10ms_sqp5_margins_terminal10.json
-```
-
-To reproduce the original 30 ms/terminal80 example, pass an explicit JSON file
-containing `{}`. To customize the new defaults, copy `configs/reaching.json`
-and edit that complete file. The historical configuration-study profiles retain their original settings.
+`examples/reach_sim.py` and the random100 runner select `configs/reaching.json`
+when `--config` is omitted. An explicit `--config` file is resolved against an
+old base configuration, not the current defaults; to vary the defaults, copy the
+complete `configs/reaching.json` and edit it.
 
 Both simulation examples share model preparation, configuration, controller
 construction and limit setup with the ROS worker. Their simulation loops and
-the ROS I/O/safety processes remain separate. Small compatibility imports and
-wrappers in `examples/` keep existing experiment scripts and the viewer working.
+the ROS I/O/safety processes remain separate.
 
 Both examples accept `--solve-time-mode fixed|measured`:
 

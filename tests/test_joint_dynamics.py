@@ -44,4 +44,4 @@ def test_receipt_records_effective_instance_widths_not_only_compiled_identity(tm
         second = model_receipt(solver, "arm", directory / "arm.urdf")
         assert first["joint_friction_smoothing_rad_s"] == original.tolist()
         assert second["joint_friction_smoothing_rad_s"] == widths.tolist()
-        assert first["module_sha256"] == second["module_sha256"]
+        assert first["module_path"] == second["module_path"]

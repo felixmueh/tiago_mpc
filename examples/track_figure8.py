@@ -3,7 +3,6 @@
 from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import importlib.metadata
 import json
 from pathlib import Path
@@ -68,7 +67,6 @@ def main():
         shutil.copyfile(source, out/source.name)
     shutil.copyfile(args.config, out/"protocol.json")
     result = dict(status="setup", losses=args.losses, configuration=settings,
-        protocol_sha256=hashlib.sha256(args.config.read_bytes()).hexdigest(),
         repository_commit=git("rev-parse", "HEAD"), repository_status=git("status", "--short"),
         gato_commit=git("rev-parse", "HEAD", cwd=ROOT/"external/gato"),
         gato_status=git("status", "--short", cwd=ROOT/"external/gato"),
@@ -81,8 +79,7 @@ def main():
         predictor_integration="upstream constant acceleration (named trapezoidal); native plant uses RK4 substeps",
         orientation="unconstrained", collisions="not checked", end_effector_frame=EE_FRAME,
         initial_warm_start="state hold, zero actuator torque; identical across cohorts",
-        torque_convention="Saved applied torque is actuator torque; passive resisting torque is subtracted internally in ABA at every RK4 stage.",
-        original_urdf_sha256=hashlib.sha256(URDF.read_bytes()).hexdigest())
+        torque_convention="Saved applied torque is actuator torque; passive resisting torque is subtracted internally in ABA at every RK4 stage.")
     times, states, xyzs, refs, controls, passive, solve_us, wall_s, work, row_viol = [], [], [], [], [], [], [], [], [], []
     reference_horizons, planned_xu = [], []
     charged_s, update_s, solve_start_s = [], [], []
@@ -102,7 +99,6 @@ def main():
         result.update(q_start_rad=q0.tolist(), start_xyz_m=start_xyz.tolist(), gpu_joint_coordinate_signs=signs.tolist(),
             effective_configuration=effective, generator_adapter=setup.details["generator_adapter"],
             effective_solver_params=effective["solver_params"],
-            gpu_urdf_sha256=hashlib.sha256(setup.gpu_urdf_path.read_bytes()).hexdigest(),
             model_checks=setup.details["model_step_max_abs_errors"])
         result["model_receipt"] = model_receipt(solver, setup.details["plant_name"], setup.gpu_urdf_path)
         (out/"model_receipt.json").write_text(json.dumps(result["model_receipt"], indent=2)+"\n")

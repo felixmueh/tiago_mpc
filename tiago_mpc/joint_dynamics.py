@@ -1,7 +1,6 @@
 """Explicit hard-sign plant and smooth GATO predictor passive joint laws."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -98,9 +97,5 @@ def model_receipt(solver, name, gpu_path):
     return dict(plant_name=name, codegen_key=entry["codegen_key"],
         joint_friction_smoothing_rad_s=(None if solver.joint_friction_smoothing is None
                                        else solver.joint_friction_smoothing.tolist()),
-        prediction_urdf_sha256=hashlib.sha256(Path(gpu_path).read_bytes()).hexdigest(),
-        header_path=str(directory/"grid.cuh"),
-        header_sha256=hashlib.sha256((directory/"grid.cuh").read_bytes()).hexdigest(),
-        limits_header_sha256=hashlib.sha256((directory/"limits.cuh").read_bytes()).hexdigest(),
-        native_source_id=solver.lib.NATIVE_SOURCE_ID,
-        module_path=str(binary), module_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+        prediction_urdf=str(gpu_path), header_path=str(directory/"grid.cuh"),
+        native_source_id=solver.lib.NATIVE_SOURCE_ID, module_path=str(binary))

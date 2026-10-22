@@ -3,7 +3,6 @@
 import argparse
 from collections import Counter
 import csv
-import hashlib
 import json
 from pathlib import Path
 import textwrap
@@ -27,7 +26,7 @@ def main():
     config = json.loads((out / "configuration.json").read_text())
     rows = saved["cases"]
     if len(config["task_ids"]) != 100:
-        raise ValueError("Use the configuration-study summarizer for selected diagnostic subsets")
+        raise ValueError("analyze.py expects a complete 100-case run, not a --pairs subset")
     if [r["task_id"] for r in rows] != config["task_ids"]:
         raise ValueError("Incomplete cohort or changed task order")
     model = pin.buildModelFromUrdf(str(ROOT / "models/tiago_right/tiago_right_arm.urdf"))
@@ -38,8 +37,6 @@ def main():
     for row in rows:
         task = row["task_id"]
         file = out / "inputs" / f"random_{task:05d}.npz"
-        if hashlib.sha256(file.read_bytes()).hexdigest() != row["input_sha256"]:
-            raise ValueError(f"Task input hash differs: {task}")
         with np.load(file) as inputs, np.load(out / f"pair_{task:05d}/trajectory.npz") as raw:
             t, x, u = raw["time_s"], raw["state"], raw["applied_torque_nm"]
             if len(t) == 0 or x.shape != (len(t), 14) or len(u) != len(t)-1:

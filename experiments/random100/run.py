@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 import argparse
 import csv
 import fcntl
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -16,12 +15,8 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-sys.path.insert(0, str(ROOT / "examples"))
-from reaching_config import load_configuration
-
-
-def digest(p):
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+sys.path.insert(0, str(ROOT))
+from tiago_mpc.configuration import load_configuration
 
 
 def aggregate(out, rows, expected):
@@ -60,8 +55,6 @@ def main():
     for task in ids:
         name = f"random_{task:05d}.npz"
         file = HERE / "inputs" / name
-        if digest(file) != manifest["files"][name]["sha256"]:
-            raise ValueError(f"Frozen input changed: {name}")
         with np.load(file, allow_pickle=False) as a:
             if a["initial_state"].shape != (14,) or a["reference"].shape != (1, 192):
                 raise ValueError(f"Invalid task dimensions: {name}")
@@ -69,14 +62,10 @@ def main():
                 raise ValueError(f"Nonconstant or inconsistent position target: {name}")
     config = dict(input_source_commit=manifest["source_commit"], task_ids=ids,
                   end_effector_frame="arm_right_tool_joint",
-                  input_manifest_sha256=digest(HERE / "manifest.json"),
                   application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-                  driver_sha256=digest(ROOT / "examples/reach_sim.py"),
                   configuration_overrides=settings,
                   effective_configuration=effective,
                   configuration_file=str(config_path.resolve()),
-                  configuration_sha256=digest(config_path),
-                  config_resolver_sha256=digest(ROOT / "examples/reaching_config.py"),
                   cohort=config_path.stem+"-position-only-fixed-clock-8s",
                   differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, public runtime overrides recorded in configuration_overrides and per-case effective settings. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/position goals/order; no original goal posture is used as a trajectory seed.")
     if args.dry_run:
@@ -96,7 +85,6 @@ def main():
     shutil.copyfile(__file__, out / "run.py")
     shutil.copyfile(HERE / "manifest.json", out / "input_manifest.json")
     shutil.copyfile(config_path, out / "config.json")
-    shutil.copyfile(ROOT / "examples/reaching_config.py", out / "reaching_config.py")
     shutil.copytree(HERE / "inputs", out / "inputs")
     rows = []
     for index, task in enumerate(ids):

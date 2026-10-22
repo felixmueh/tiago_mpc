@@ -9,8 +9,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "examples"))
-from reaching_config import DEFAULT_CONFIG, load_configuration
+sys.path.insert(0, str(ROOT))
+from tiago_mpc.configuration import DEFAULT_CONFIG, load_configuration
 
 LEGACY_SOLVER = dict(max_sqp_iters=5, max_pcg_iters=120, pcg_tol=.001,
                      solve_ratio=1., mu=10., rho=.01, adapt_rho=True, linsys=None,
@@ -37,31 +37,6 @@ class ReachingConfigurationTests(unittest.TestCase):
             joint_margin_rad=.1, velocity_fraction=.8, effort_fraction=.85))
         self.assertEqual(effective['save_plan_steps'], 5)
 
-    def test_every_explicit_study_profile_keeps_historical_base(self):
-        for path in sorted((ROOT / 'experiments/configuration_study/profiles').glob('*.json')):
-            with self.subTest(profile=path.name):
-                settings = json.loads(path.read_text())
-                _, _, effective = load_configuration(path)
-                self.assertEqual(effective['solver_params'], {
-                    **LEGACY_SOLVER, **settings.get('solver_params', {})})
-                self.assertEqual(effective['N'], settings.get('N', 32))
-                self.assertEqual(effective['dt_s'], settings.get('dt_s', .03))
-                options = settings.get('controller', {})
-                self.assertEqual(effective['controller']['limits_kw'], {
-                    **LEGACY_ADMM, **options.get('limits_kw', {})})
-                self.assertEqual(effective['controller']['warm_start'], options.get('warm_start', 'shift'))
-                self.assertEqual(effective['controller']['reset_rho_each_step'], options.get('reset_rho_each_step', True))
-                bounds = settings.get('limit_bounds', {})
-                expected_bounds = {'joint_margin_rad': .1, 'velocity_fraction': None,
-                                   'effort_fraction': None, **bounds}
-                if 'velocity_fraction' not in bounds:
-                    expected_bounds['compiled_velocity_offset_rad_s'] = .1
-                if 'effort_fraction' not in bounds:
-                    expected_bounds['compiled_effort_offset_nm'] = .1
-                self.assertEqual(effective['limit_bounds'], expected_bounds)
-                expected_policy = options.get('admm_linsys') or ('bdsv_factor' if effective['N'] >= 64 else 'pcg')
-                self.assertEqual(effective['controller']['admm_linsys'], expected_policy)
-
     def test_explicit_empty_config_reproduces_original_example(self):
         data = ROOT / '_expr_data/config-tests'
         data.mkdir(parents=True, exist_ok=True)
@@ -85,7 +60,6 @@ class ReachingConfigurationTests(unittest.TestCase):
         self.assertEqual(config['effective_configuration'], load_configuration()[2])
         self.assertEqual(len(config['task_ids']), 100)
         self.assertEqual(config['end_effector_frame'], 'arm_right_tool_joint')
-        self.assertTrue(config['configuration_sha256'])
 
     def test_random100_copies_default_and_passes_snapshot_to_child(self):
         spec = importlib.util.spec_from_file_location('random100_run', ROOT / 'experiments/random100/run.py')
@@ -112,8 +86,6 @@ class ReachingConfigurationTests(unittest.TestCase):
                 self.assertEqual(runner.main(), 0)
             recorded = json.loads((out / 'configuration.json').read_text())
             self.assertEqual(recorded['effective_configuration'], load_configuration()[2])
-            self.assertEqual((out / 'reaching_config.py').read_bytes(),
-                             (ROOT / 'examples/reaching_config.py').read_bytes())
 
 
 if __name__ == '__main__':
