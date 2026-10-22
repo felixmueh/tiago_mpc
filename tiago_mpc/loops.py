@@ -99,8 +99,8 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
     """Run task on plant until task.done(state, t) or for duration seconds.
 
     The task's t is counted from the first state's time: execution time for done
-    and the duration, the state's time for its reference. Returns whether the task
-    is done. Ticks are command_period apart; a late tick skips the missed ones.
+    and the duration, the state's time for at. Returns whether the task is done.
+    Ticks are command_period apart; a late tick skips the missed ones.
     The last tick, which sees the task done or the time up, sends no command but
     reaches the callbacks. Garbage collection pauses while it runs: a full
     collection over the buffered ticks takes several milliseconds.
@@ -122,8 +122,7 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
             if new is not None:
                 plan, pending = new, None
             if pending is None and not end and due(t):
-                mpc.request(s, task.reference(s.t - start, mpc.N, mpc.dt),
-                            task.updates(s.t - start) if hasattr(task, "updates") else None)
+                mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
                 pending = Pending(mpc, t, latency)
                 if (now := pending.ready(t)) is not None:  # zero latency: this tick
                     new, plan, pending = now, now, None

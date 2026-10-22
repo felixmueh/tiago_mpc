@@ -82,9 +82,10 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
 
 ## Writing an experiment
 
-An experiment is a task (a frozen dataclass with `reference(t, n, dt)` and
-`done(state, t)`) and a function that takes the assembled plant and MPC and
-hands them to `run_experiment` (`experiments/common.py`) with its own metrics.
+An experiment is a task (a frozen dataclass with `at(t, n, dt)`, the reference
+and solver updates at t, and `done(state, t)`) and a function that takes the
+assembled plant and MPC and hands them to `run_experiment`
+(`experiments/common.py`) with its own metrics.
 `run_experiment` records the run, sets its status (done, timeout, interrupted or
 error), saves it and exports the replay. `main` picks the plant and the
 parameters through `launch`. Whoever creates the plant and the MPC closes them.
@@ -113,10 +114,10 @@ mpc.close()
   `PlantInterface`, `MpcInterface` and `TaskInterface` declare.
 - `SimPlant(friction=...)` sets the **plant's** losses, `MpcParams.friction`
   the **predictor's**; the run records both.
-- **Per-solve solver changes** come from the task's optional `updates(t)`,
-  named in `UPDATES` (`mpc.py`). **Your own loop** can use `Mpc` (the
-  `MpcProcess` interface plus the raw GATO `controller`), `run` and `Record`
-  directly, without `run_experiment`.
+- **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
+  (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
+  the raw GATO `controller`), `run` and `Record` directly, without
+  `run_experiment`.
 
 ## On the robot
 

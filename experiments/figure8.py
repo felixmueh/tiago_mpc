@@ -41,10 +41,10 @@ class Figure8:
         xyz[:, 1] += self.y_amplitude_m*np.sin(2*phase)
         return xyz
 
-    def reference(self, t, n, dt):
+    def at(self, t, n, dt):
         out = np.zeros((n, 6), dtype=np.float32)  # orientation unconstrained
         out[:, :3] = self.path(t + np.arange(n)*dt)
-        return out
+        return out, None
 
     def done(self, state, t):
         return t >= self.period_s - 1e-9  # absorbs the rounding of summed command periods

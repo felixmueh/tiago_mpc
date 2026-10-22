@@ -37,7 +37,7 @@ def export_replay(record):
                        joint_names=RIGHT_ARM_JOINTS, time_basis=record.plant.settings["clock"],
                        torque_nm=command[sent] if sent.any() else None,
                        torque_time_s=time_s[sent] if sent.any() else None,
-                       reference_xyz_m=np.array([record.task.reference(t, 2, dt)[0, :3] for t in time_s]),
+                       reference_xyz_m=np.array([record.task.at(t, 2, dt)[0][0, :3] for t in time_s]),
                        reference_time_s=time_s, reference_frame=ROOT_FRAME, plans=plans,
                        end_effector_frame=record.params.ee_frame, label=record.out.name)
 

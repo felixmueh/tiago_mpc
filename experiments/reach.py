@@ -30,10 +30,10 @@ class Reach:
     speed_l1_tol_rad_s: float = 1.
     timeout_s: float = 8.
 
-    def reference(self, t, n, dt):
+    def at(self, t, n, dt):
         out = np.zeros((n, 6), dtype=np.float32)  # orientation unconstrained
         out[:, :3] = self.target_m
-        return out
+        return out, None
 
     def distance(self, q):
         return float(np.linalg.norm(fk(q, self.ee_frame) - self.target_m))

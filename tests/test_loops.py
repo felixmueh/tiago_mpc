@@ -74,8 +74,8 @@ class Mpc:
 class Task:
     done_at: float = math.inf
 
-    def reference(self, t, n, dt):
-        return np.zeros((n, 6))
+    def at(self, t, n, dt):
+        return np.zeros((n, 6)), None
 
     def done(self, state, t):
         return t >= self.done_at - 1e-9
@@ -197,8 +197,8 @@ def test_each_loop_refuses_a_plant_on_the_other_clock():
 
 def test_task_updates_reach_the_request_and_the_schedule_sets_the_control_rate():
     class Updating(Task):
-        def updates(self, t):
-            return {"cost_weights": {"q_cost": t}}
+        def at(self, t, n, dt):
+            return np.zeros((n, 6)), {"cost_weights": {"q_cost": t}}
 
     mpc = Mpc()
     go(mpc, Updating(), duration=.06, update_period=.02)

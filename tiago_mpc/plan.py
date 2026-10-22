@@ -113,14 +113,13 @@ class MpcInterface(Protocol):
 
 
 class TaskInterface(Protocol):
-    """A frozen dataclass; t counts from the run's first state. reference: the (n, 6)
-    end-effector reference at the n knots dt apart from t; done: whether it is met.
-
-    A task may add updates(t) -> dict: named solver changes (mpc.UPDATES) for the
-    request at t. A protocol cannot declare an optional method; run looks it up."""
+    """A frozen dataclass; t counts from the run's first state. at: the (n, 6)
+    end-effector reference at the n knots dt apart from t and the named solver updates
+    (mpc.UPDATES) for the request at t, None when it changes nothing; done: whether
+    it is met."""
     __dataclass_fields__: ClassVar[dict[str, Any]]  # a dataclass: Record saves its fields
 
-    def reference(self, t: float, n: int, dt: float) -> np.ndarray: ...
+    def at(self, t: float, n: int, dt: float) -> tuple[np.ndarray, dict[str, Any] | None]: ...
     def done(self, state: State, t: float) -> bool: ...
 
 

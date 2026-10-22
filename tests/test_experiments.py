@@ -21,10 +21,10 @@ def test_figure8_reference_includes_edge_clearance_and_leaves_orientation_free()
     expected = np.tile(task.start_m, (len(times), 1))
     expected[:, 0] += .02 + .5*.28*(1-np.cos(phase))
     expected[:, 1] += .09*np.sin(2*phase)
-    reference = task.reference(1.3, 7, .002)
+    reference, updates = task.at(1.3, 7, .002)
     np.testing.assert_allclose(reference[:, :3], expected, atol=2e-8)
-    assert reference.dtype == np.float32 and not reference[:, 3:].any()
-    assert f8.Figure8(start_m=(.5, .1, .2)).reference(6., 2, .01)[0, 0] == pytest.approx(.66)
+    assert reference.dtype == np.float32 and not reference[:, 3:].any() and updates is None
+    assert f8.Figure8(start_m=(.5, .1, .2)).at(6., 2, .01)[0][0, 0] == pytest.approx(.66)
 
 
 def test_figure8_is_done_at_its_period_despite_summed_command_periods():
