@@ -173,6 +173,7 @@ def test_first_request_resets_and_warms_up_once_and_dt_elapsed_follows_state_tim
     m = Mpc(replace(PARAMS, warmup=2))
     for t in (1., 1.013, 1.02):
         m.request(state(t, scale=t), REFERENCE)
+        m.result()
     kinds = [event[0] for event in controller.events]
     assert kinds == ["reset", "warmup", "warmup", "step", "step", "step"]
     np.testing.assert_array_equal(controller.events[0][1][:7], state().q * SIGNS)
@@ -192,6 +193,16 @@ def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller
     with pytest.raises(KeyError, match="posture_cost"):
         m.request(state(2.), REFERENCE, {"posture_cost": 1.})
     assert len(controller.events) == 5
+
+
+def test_a_request_raises_while_the_previous_plan_is_unread(controller):
+    m = Mpc(PARAMS)
+    m.request(state(), REFERENCE)
+    with pytest.raises(RuntimeError, match="pending"):
+        m.request(state(2.), REFERENCE)
+    assert m.result().t0 == 1. and m.result() is None
+    m.request(state(2.), REFERENCE)
+    assert [event[0] for event in controller.events] == ["reset", "step", "step"]
 
 
 @pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite", "effort"])

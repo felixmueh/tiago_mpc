@@ -2,8 +2,9 @@
 
 Experiments override the defaults with dataclasses.replace, for example
 replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). Mpc and MpcProcess
-share one interface: request(state, reference, updates=None), result(block=False)
--> Plan or None, N, dt and close().
+share one interface: request(state, reference, updates=None), which raises while
+the previous request's plan is unread, result(block=False) -> Plan or None, N, dt
+and close().
 """
 from __future__ import annotations
 
@@ -219,6 +220,8 @@ class Mpc:
 
     def request(self, state, reference, updates=None):
         _known(updates)
+        if self._plan is not None:
+            raise RuntimeError("an MPC request is pending")
         self._plan = self._solve(state, reference, updates)
 
     def result(self, block=False):
