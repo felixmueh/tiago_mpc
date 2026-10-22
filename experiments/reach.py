@@ -77,15 +77,17 @@ def solve_summary(trajectory):
                              for k in ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows")})
 
 
-def reach(plant, run=run_simulation, task=Reach(), params=TIAGO, law=sample_knot, out=None):
+def reach(plant, run=run_simulation, task=Reach(), params=TIAGO, law=sample_knot, out=None,
+          command_period=None, update_period=None):
+    """command_period and update_period default to the knot interval params.dt_s."""
     if task.ee_frame != params.ee_frame:
         raise ValueError("the task and the MPC must track the same frame")
     record = Record(out, task=task, params=params, plant=plant)
     mpc = None
     try:
         mpc = MpcWorker(params)
-        arrived = run(plant, mpc, task, law, callbacks=[record], command_period=params.dt_s,
-                      update_period=params.dt_s, duration=task.timeout_s)
+        arrived = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
+                      update_period=update_period or params.dt_s, duration=task.timeout_s)
         trajectory = record.trajectory()
         distance = np.array([task.distance(q) for q in trajectory["state"][:, :7]])
         excess = limit_excess(trajectory)
@@ -118,9 +120,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plant", choices=("sim",), default="sim")
     parser.add_argument("--latency", type=latency, default=Fixed(), help="seconds per solve, or 'measured'")
+    parser.add_argument("--command-period", type=float, help="seconds (default: the knot interval)")
+    parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
     parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/reach/)")
     args = parser.parse_args(argv)
-    record = reach(SimPlant(substep=.003), run=partial(run_simulation, latency=args.latency), out=args.output)
+    record = reach(SimPlant(substep=.003), run=partial(run_simulation, latency=args.latency), out=args.output,
+                   command_period=args.command_period, update_period=args.update_period)
     print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},
                      indent=2, default=str))
     print(f"Saved {record.out}")

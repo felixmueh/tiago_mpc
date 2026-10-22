@@ -62,13 +62,15 @@ def metrics(error):
                 p95_m=float(np.percentile(error, 95)), max_m=float(np.max(error)))
 
 
-def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sample_knot, out=None):
+def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sample_knot, out=None,
+            command_period=None, update_period=None):
+    """command_period and update_period default to the knot interval params.dt_s."""
     record = Record(out, task=task, params=params, plant=plant)
     mpc = None
     try:
         mpc = MpcWorker(params)
-        run(plant, mpc, task, law, callbacks=[record], command_period=params.dt_s,
-            update_period=params.dt_s, duration=task.period_s)
+        run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
+            update_period=update_period or params.dt_s, duration=task.period_s)
         trajectory = record.trajectory()
         t = trajectory["time_s"]
         xyz = np.array([fk(q, params.ee_frame) for q in trajectory["state"][:, :7]])
@@ -96,10 +98,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plant", choices=("sim",), default="sim")
     parser.add_argument("--latency", type=latency, default=Fixed(), help="seconds per solve, or 'measured'")
+    parser.add_argument("--command-period", type=float, help="seconds (default: the knot interval)")
+    parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
     parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/figure8/)")
     args = parser.parse_args(argv)
     plant = SimPlant(substep=1e-4, friction=urdf_friction())
-    record = figure8(plant, run=partial(run_simulation, latency=args.latency), out=args.output)
+    record = figure8(plant, run=partial(run_simulation, latency=args.latency), out=args.output,
+                     command_period=args.command_period, update_period=args.update_period)
     print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},
                      indent=2, default=str))
     print(f"Saved {record.out}")

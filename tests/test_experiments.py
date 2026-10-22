@@ -36,9 +36,8 @@ def test_reach_is_done_within_both_tolerances():
 
 class Mpc:
     """Gravity-holding plans from each requested state."""
-    N, dt = 4, .01
-
     def __init__(self, params):
+        self.N, self.dt = params.N, params.dt_s
         model = pin.buildModelFromUrdf(str(rc.URDF))
         self.model, self.data, self.plan = model, model.createData(), None
         self.details = dict(effort_limits=model.effortLimit.tolist())
@@ -87,3 +86,21 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, monkeypatch,
         assert metadata["joint_names"] == list(JOINT_NAMES) and len(metadata["predictions"]) == summary["plans"]
         assert metadata["time_basis"] == "simulation"
     assert record.out == tmp_path / name
+
+
+def test_reach_commands_every_tick_and_updates_every_third(tmp_path, monkeypatch):
+    requests = []
+
+    class Counting(Mpc):
+        def request(self, state, reference, updates=None):
+            requests.append(state.t)
+            super().request(state, reference, updates)
+
+    monkeypatch.setattr(rc, "MpcWorker", Counting)
+    params = replace(rc.TIAGO, N=8)  # 10 ms knots, 70 ms plans
+    rc.reach(SimPlant(substep=.002), task=rc.Reach(timeout_s=.06), params=params, out=tmp_path / "r",
+             command_period=.002, update_period=.006)
+    with np.load(tmp_path / "r" / "trajectory.npz") as saved:
+        np.testing.assert_allclose(saved["time_s"], np.arange(31) * .002, atol=1e-12)
+        assert np.isfinite(saved["command"][:-1]).all()  # a command at every tick but the last
+    np.testing.assert_allclose(requests, np.arange(10) * .006, atol=1e-12)  # every third tick
