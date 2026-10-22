@@ -27,8 +27,8 @@ The canonical current robot description is Felix's simulator URDF,
 All canonical full and reduced mesh references resolve by basename to the
 included assets. Both full-model visual and collision geometry load with finite
 geometry after resolving source URIs against that directory. Package/file
-references remain unchanged in the canonical source; the reaching example resolves its reduced
-model references against the included directory in a generated runtime copy.
+references remain unchanged in the canonical source; the MPC setup resolves the reduced
+model's references against the included directory in a generated runtime copy.
 A separate generated GPU-coordinate URDF reflects joint 6's axis/limits;
 the adapter maps position, velocity and torque signs at the solver boundary.
 
@@ -52,9 +52,9 @@ The full simulator models retain their existing frames and exact bytes from
 before this change. The viewer derives the additional TCP from the reduced URDF
 when needed. Replay exports identify `end_effector_frame`; missing metadata
 means the historical flange. Old absolute XYZ goals must not be relabeled as
-grasp-center goals. The frozen-input reach check rejects a changed target frame;
-the historical random100 runner explicitly passes `--ee-frame arm_right_tool_joint`
-to preserve its frozen goals. New tasks use the grasp center by default.
+grasp-center goals. random100 selects the flange for its frozen goals, and
+`reach()` rejects a task whose frame differs from the MPC's. New tasks use the
+grasp center by default.
 
 ## Actual arm joint parameters — Felix, 2026-10-21
 
@@ -79,9 +79,8 @@ It is not folded into link inertias. Supplied kp/kd are deliberately omitted:
 they belong to a different controller.
 
 URDF friction/damping fields also require explicit runtime enablement. Ordinary
-reaching still ignores passive joint torques. Existing friction-study protocols
-explicitly supply their own historical coefficients and override generated copies;
-updating these canonical files does not change old protocols, raw runs or figures.
+reaching still ignores passive joint torques. Updating these canonical files does
+not change old raw runs or figures.
 Use a new identified protocol/output when testing the actual values. Existing
 no-friction qualification is not a qualification of the newly supplied losses.
 
@@ -96,8 +95,8 @@ The script uses the preserved canonical source, patches the fourteen arm
 joints, adds/checks the reduced arm's grasp frame, and does not repeat the
 already verified gripper reduction. It is idempotent and
 updates the ordinary `manifest.json` identities for the three URDFs and included
-meshes. The example verifies those assets before codegen. Run CPU model checks
-with `.venv/bin/python -m unittest discover -s tests -v`. CPU checks cover
+meshes. The MPC setup verifies those assets before codegen. Run the CPU model
+checks with `.venv/bin/python -m pytest -q tests/test_models.py`. They cover
 coefficient values, metadata behavior, unchanged kinematics/inertias,
 mesh completeness, finite STL vertices and full geometry loading.
 

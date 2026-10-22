@@ -9,4 +9,4 @@ git submodule update --init --recursive
 unset PYTHONPATH
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-echo 'Ready: .venv/bin/python examples/reach_sim.py'
+echo 'Ready: .venv/bin/python experiments/reach.py'
