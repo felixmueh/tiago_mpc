@@ -10,8 +10,8 @@ import pytest
 from experiments import figure8 as f8, reach as rc
 from tiago_mpc.loops import Fixed, run_simulation
 from tiago_mpc.plan import Plan, State
-from tiago_mpc.record import JOINT_NAMES
 from tiago_mpc.sim import SimPlant
+from tiago_mpc.tiago import ARM_URDF, Q_START, RIGHT_ARM_JOINTS, fk, urdf_friction
 
 
 def test_figure8_reference_includes_edge_clearance_and_leaves_orientation_free():
@@ -28,19 +28,18 @@ def test_figure8_reference_includes_edge_clearance_and_leaves_orientation_free()
 
 
 def test_reach_is_done_within_both_tolerances():
-    task = rc.Reach(tuple(rc.fk(rc.Q_CHECK) + [.04, 0., 0.]))
-    assert task.done(State(0., rc.Q_CHECK, np.full(7, .1)), 0.)
-    assert not task.done(State(0., rc.Q_CHECK, np.full(7, .2)), 0.)
-    assert not replace(task, position_tol_m=.03).done(State(0., rc.Q_CHECK, np.zeros(7)), 0.)
+    task = rc.Reach(tuple(fk(Q_START) + [.04, 0., 0.]))
+    assert task.done(State(0., Q_START, np.full(7, .1)), 0.)
+    assert not task.done(State(0., Q_START, np.full(7, .2)), 0.)
+    assert not replace(task, position_tol_m=.03).done(State(0., Q_START, np.zeros(7)), 0.)
 
 
 class Mpc:
     """Gravity-holding plans from each requested state."""
     def __init__(self, params):
         self.N, self.dt = params.N, params.dt_s
-        model = pin.buildModelFromUrdf(str(rc.URDF))
+        model = pin.buildModelFromUrdf(str(ARM_URDF))
         self.model, self.data, self.plan = model, model.createData(), None
-        self.details = dict(effort_limits=model.effortLimit.tolist())
 
     def request(self, state, reference, updates=None):
         u = pin.rnea(self.model, self.data, state.q, np.zeros(7), np.zeros(7))
@@ -68,7 +67,7 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, monkeypatch,
                           run=partial(run_simulation, latency=Fixed(.01)))
     else:
         task = f8.Figure8(period_s=.05)
-        record = f8.figure8(SimPlant(substep=1e-4, friction=f8.urdf_friction()), task=task,
+        record = f8.figure8(SimPlant(substep=1e-4, friction=urdf_friction()), task=task,
                             params=params, out=tmp_path / name)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     assert summary["status"] == ("timeout" if name == "reach" else "completed")
@@ -83,7 +82,7 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, monkeypatch,
         assert saved["plan_states"].shape[1:] == (4, 14) and saved["plan_sqp"].sum() == summary["plans"]
     with np.load(tmp_path / name / "replay.npz") as replay:
         metadata = json.loads(str(replay["metadata_json"]))
-        assert metadata["joint_names"] == list(JOINT_NAMES) and len(metadata["predictions"]) == summary["plans"]
+        assert metadata["joint_names"] == list(RIGHT_ARM_JOINTS) and len(metadata["predictions"]) == summary["plans"]
         assert metadata["time_basis"] == "simulation"
     assert record.out == tmp_path / name
 

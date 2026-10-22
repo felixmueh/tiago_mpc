@@ -17,17 +17,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-# Joint order is part of the ROS/model boundary. Keep it synchronized with
-# the reduced right-arm model and any application safety monitor.
-RIGHT_ARM_JOINTS = (
-    "arm_right_1_joint",
-    "arm_right_2_joint",
-    "arm_right_3_joint",
-    "arm_right_4_joint",
-    "arm_right_5_joint",
-    "arm_right_6_joint",
-    "arm_right_7_joint",
-)
+from .tiago import RIGHT_ARM_JOINTS
 
 DEFAULT_JOINT_STATES_TOPIC = "/joint_states"
 DEFAULT_SEA_STATE_TOPIC = "/arm_right_sea_state_broadcaster_controller/sea_joint_states"

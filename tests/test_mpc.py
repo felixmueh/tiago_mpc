@@ -5,18 +5,21 @@ import pickle
 import queue
 import threading
 from types import SimpleNamespace as NS
+from unittest.mock import Mock
 
 import gato
 import numpy as np
+import pinocchio as pin
 import pytest
 
 from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
+from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO, MpcInProcess, MpcParams, MpcWorker
 from tiago_mpc.plan import Plan, State
+from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, limits, urdf_friction
 
-URDF_COULOMB = [1.66, 1.15, 1.16, 0.912, 1.25, 0.473, 0.56]
-URDF_VISCOUS = [4.7, 9.69, 5.3, 4.2, 3.66, 2.95, 2.95]
+URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
 SOLVER = dict(max_sqp_iters=5, max_pcg_iters=120, pcg_tol=.001, solve_ratio=1., mu=10., rho=.01,
               adapt_rho=True, linsys=None, q_cost=4., qd_cost=.05, u_cost=1e-4, N_cost=8.,
               q_lim_cost=0., vel_lim_cost=0., ctrl_lim_cost=0., exact_hessian=False)
@@ -29,7 +32,8 @@ EXPECTED = {
     "figure8": dict(
         N=32, dt=.01, solver=dict(SOLVER, mu=1., qd_cost=.01, u_cost=1e-6),
         controller=dict(CONTROLLER, limits_kw=dict(CONTROLLER["limits_kw"], rho_q=.1, rho_qd=.03)),
-        friction=dict(coulomb_nm=URDF_COULOMB, viscous_nm_s_per_rad=URDF_VISCOUS, width=.03)),
+        friction=dict(coulomb_nm=list(URDF_FRICTION.coulomb_nm),
+                      viscous_nm_s_per_rad=list(URDF_FRICTION.viscous_nm_s_per_rad), width=.03)),
 }
 
 
@@ -65,16 +69,38 @@ def test_effective_solver_settings_are_unchanged(monkeypatch, name, params):
     monkeypatch.setattr(gato, "MPCController", controller, raising=False)
     monkeypatch.setattr(mpc, "register_robot", register)
     monkeypatch.setattr(mpc, "check_model", lambda *args: [])
-    setup = mpc.build_controller(params)
-    bounds, model, signs = seen.pop("bounds"), setup.model, setup.signs
+    _, signs = mpc.build_controller(params)
+    bounds, raw = seen.pop("bounds"), limits()
     assert seen == EXPECTED[name]
-    lo = (model.lowerPositionLimit + .1) * signs
-    hi = (model.upperPositionLimit - .1) * signs
+    lo = (raw.lower + .1) * signs
+    hi = (raw.upper - .1) * signs
     np.testing.assert_array_equal(bounds[0][0], np.minimum(lo, hi))
     np.testing.assert_array_equal(bounds[0][1], np.maximum(lo, hi))
-    np.testing.assert_array_equal(bounds[1][1], .8 * model.velocityLimit)
-    np.testing.assert_array_equal(bounds[2][1], .85 * model.effortLimit)
-    assert setup.details["params"] == asdict(params)
+    np.testing.assert_array_equal(bounds[1][1], .8 * raw.velocity)
+    np.testing.assert_array_equal(bounds[2][1], .85 * raw.effort)
+
+
+def test_tracking_registers_smooth_losses_and_reaching_stays_loss_free(monkeypatch):
+    calls = []
+    monkeypatch.setattr(gato, "register_robot", lambda *args, **kwargs: calls.append((args, kwargs)))
+    for params in (TIAGO, FIGURE8):
+        mpc.register_robot("test", "arm.urdf", n_points=params.N, ee_frame="tcp", friction=params.friction)
+    assert calls[0] == (("test", "arm.urdf"), dict(N=[32], ee_frame="tcp", jobs=1))
+    assert calls[1] == (("test", "arm.urdf"),
+                        dict(N=[32], ee_frame="tcp", jobs=1, joint_friction_smoothing=.03))
+
+
+def test_smooth_model_check_uses_requested_flange_frame():
+    model = pin.buildModelFromUrdf(str(ARM_URDF))
+    # Stop after FK: this regression tests frame selection, not CUDA dynamics.
+    reached_dynamics = RuntimeError("FK check passed")
+    solver = Mock()
+    solver.ee_pos.return_value = fk(Q_START, FLANGE_FRAME)
+    solver.sim_forward.side_effect = reached_dynamics
+    with pytest.raises(RuntimeError, match="FK check passed"):
+        mpc.check_model(solver, model, model.createData(), FLANGE_FRAME, np.ones(7),
+                        Friction([1.] * 7, [1.] * 7, .03))
+    solver.sim_forward.assert_called_once()
 
 
 def test_selected_current_bounds_map_native_joint_box_and_limit_fractions():
@@ -97,7 +123,7 @@ def test_budget_must_be_finite_and_positive(budget):
 
 # Both Mpc twins around a fake GATO controller: N = 3 knots, 10 ms.
 SIGNS = np.array([1., 1., 1., 1., 1., -1., 1.])
-N, DT, EFFORT = 3, .01, 26.
+N, DT = 3, .01
 PARAMS = replace(TIAGO, N=N, dt_s=DT, budget_s=.004)
 REFERENCE = np.tile([.3, -.2, .1, 0., 0., 0.], (N, 1)).astype(np.float32)
 
@@ -134,9 +160,7 @@ class Controller:
 def controller(monkeypatch):
     """Every Mpc built in this process (also MpcWorker on threads) gets this controller."""
     controller = Controller()
-    details = dict(N=N, dt_s=DT, effort_limits=[EFFORT] * 7)
-    monkeypatch.setattr(mpc, "build_controller", lambda params: NS(
-        controller=controller, model=None, data=None, frame_id=None, signs=SIGNS, details=details))
+    monkeypatch.setattr(mpc, "build_controller", lambda params: (controller, SIGNS))
     return controller
 
 
@@ -194,7 +218,7 @@ def test_every_knot_is_checked(controller, bad):
     elif bad in ("t0", "dt"):
         fields[bad] += .001
     elif bad == "effort":
-        fields["torques"][-1, 3] = EFFORT + .1  # only the last knot exceeds the raw effort limit
+        fields["torques"][-1, 3] = 26.1  # only the last knot exceeds joint 4's raw effort limit
     plan = Plan(**fields)
     if bad == "nonfinite":  # only an unpickled plan skips Plan's own check
         object.__setattr__(plan, "torques", np.full((N - 1, 7), np.nan))
@@ -243,7 +267,7 @@ def worker(controller, monkeypatch):
 
 def test_worker_result_waits_for_its_reply(worker, controller):
     w = worker()
-    assert w.details["N"] == N and (w.N, w.dt) == (N, DT)
+    assert (w.N, w.dt) == (N, DT)
     assert w.result() is None  # nothing requested
     controller.gate = threading.Event()
     w.request(state(), REFERENCE)

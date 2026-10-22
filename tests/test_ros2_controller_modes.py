@@ -4,7 +4,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from tiago_mpc.ros2 import TiagoRightArmClient, RIGHT_ARM_JOINTS
+from tiago_mpc.ros2 import TiagoRightArmClient
+from tiago_mpc.tiago import RIGHT_ARM_JOINTS
 
 POSITION = "arm_right_controller"
 GRAVITY = "arm_right_gravity_compensation_controller"

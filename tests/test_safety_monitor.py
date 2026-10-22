@@ -23,9 +23,9 @@ import numpy as np
 import pinocchio as pin
 
 from tiago_mpc import safety as s
+from tiago_mpc.tiago import FULL_URDF, Q_START, RIGHT_ARM_JOINTS
 
 
-HIGH_CLEARANCE_ARM = [-.39, -1.73, -.38, -2.35, 0., -1.21, .04]
 REVIEWED_SOURCE = s.DEFAULT_COLLISION_URDF_PATH.with_name(
     s.DEFAULT_COLLISION_URDF_PATH.stem + '_reviewed_source.urdf')
 
@@ -42,9 +42,9 @@ def structure(node, *, ignore_collisions=False):
 
 def make_state(model, seq=1):
     positions = {name: 0. for name in model.state_updated_joint_names}
-    positions.update(dict(zip(s.RIGHT_ARM_JOINTS, HIGH_CLEARANCE_ARM)))
+    positions.update(dict(zip(RIGHT_ARM_JOINTS, map(float, Q_START))))
     return s.SafetyCheckState(
-        q=np.asarray(HIGH_CLEARANCE_ARM), qd=np.zeros(7), stamp_sec=1.,
+        q=Q_START.copy(), qd=np.zeros(7), stamp_sec=1.,
         received_monotonic_sec=time.monotonic(), seq=seq,
         joint_positions=positions,
         joint_velocities={name: 0. for name in positions},
@@ -83,7 +83,7 @@ class CollisionPortTests(unittest.TestCase):
     def test_default_policy_preserved(self):
         settings = s.CollisionSafetySettings()
         self.assertTrue(settings.enabled)
-        self.assertEqual(settings.controlled_joint_names, s.RIGHT_ARM_JOINTS)
+        self.assertEqual(settings.controlled_joint_names, RIGHT_ARM_JOINTS)
         self.assertEqual(settings.min_distance_m, .04)
         self.assertEqual(settings.check_timeout_sec, .05)
         self.assertEqual(settings.max_monitored_geometry_speed_m_s, 1.)
@@ -127,7 +127,7 @@ class CollisionPortTests(unittest.TestCase):
         self.assertTrue(np.all(m.geometry_radii_m > 0))
 
     def test_active_model_preserves_all_canonical_noncollision_metadata(self):
-        active, canonical = xml_tree(s.DEFAULT_COLLISION_URDF_PATH), xml_tree(s.DEFAULT_URDF_PATH)
+        active, canonical = xml_tree(s.DEFAULT_COLLISION_URDF_PATH), xml_tree(FULL_URDF)
         self.assertEqual(len(active.findall('link')), 70)
         self.assertEqual(len(active.findall('joint')), 69)
         self.assertEqual(len(active.findall('joint/mimic')), 10)
@@ -150,7 +150,7 @@ class CollisionPortTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(REVIEWED_SOURCE.read_bytes()).hexdigest(), expected)
         active = {link.get('name'): link for link in xml_tree(s.DEFAULT_COLLISION_URDF_PATH).findall('link')}
         reviewed = {link.get('name'): link for link in xml_tree(REVIEWED_SOURCE).findall('link')}
-        canonical = {link.get('name'): link for link in xml_tree(s.DEFAULT_URDF_PATH).findall('link')}
+        canonical = {link.get('name'): link for link in xml_tree(FULL_URDF).findall('link')}
         for name, link in active.items():
             expected_link = reviewed.get(name, canonical[name])
             self.assertEqual([structure(c) for c in link.findall('collision')],
@@ -172,7 +172,7 @@ class CollisionPortTests(unittest.TestCase):
             pairs = [pair for pair in geometry.collisionPairs if index in (pair.first, pair.second)]
             self.assertEqual(len(pairs), len(monitored))
             self.assertTrue(all(pair.first in monitored or pair.second in monitored for pair in pairs))
-        canonical = xml_tree(s.DEFAULT_URDF_PATH)
+        canonical = xml_tree(FULL_URDF)
         new_links = {name.removesuffix('_0') for name in expected}
         joints = [joint for joint in canonical.findall('joint')
                   if joint.find('child').get('link') in new_links]
@@ -182,7 +182,7 @@ class CollisionPortTests(unittest.TestCase):
     def test_current_and_reviewed_mesh_geometry_is_finite(self):
         import hppfcl
         loader = hppfcl.MeshLoader()
-        meshes = [*sorted(s.DEFAULT_URDF_PATH.parent.glob('meshes/*.stl')),
+        meshes = [*sorted(FULL_URDF.parent.glob('meshes/*.stl')),
                   *sorted(s.DEFAULT_COLLISION_URDF_PATH.parent.glob('meshes/*.stl'))]
         self.assertEqual(len(meshes), 53)
         for path in meshes:
@@ -212,23 +212,23 @@ class CollisionPortTests(unittest.TestCase):
 
     def test_position_velocity_limits_and_controlled_joint_filter(self):
         state = self.named()
-        name = s.RIGHT_ARM_JOINTS[0]
+        name = RIGHT_ARM_JOINTS[0]
         joint = self.model.model.joints[self.model.model.getJointId(name)]
         upper = self.model.model.upperPositionLimit[joint.idx_q]
         state.position[name] = upper + .01
         state.velocity[name] = self.model.model.velocityLimit[joint.idx_v] + .01
-        violations = s.check_joint_limits(self.model.model, state, joint_names=s.RIGHT_ARM_JOINTS)
+        violations = s.check_joint_limits(self.model.model, state, joint_names=RIGHT_ARM_JOINTS)
         self.assertEqual([v.kind for v in violations], ['position_upper', 'velocity'])
         state.position[name] = upper - .005
         state.velocity[name] = 0.
         self.assertTrue(s.check_joint_limits(self.model.model, state,
-                        position_margin=.01, joint_names=s.RIGHT_ARM_JOINTS))
+                        position_margin=.01, joint_names=RIGHT_ARM_JOINTS))
         self.assertFalse(s.check_joint_limits(self.model.model, state,
                          joint_names=['arm_left_1_joint']))
 
     def test_speed_bound_contains_finite_difference_point_velocity(self):
         state = self.named()
-        state.velocity.update(dict(zip(s.RIGHT_ARM_JOINTS, [.1, -.2, .3, -.1, .1, .1, -.2])))
+        state.velocity.update(dict(zip(RIGHT_ARM_JOINTS, [.1, -.2, .3, -.1, .1, .1, -.2])))
         q, v = s.state_to_qv(self.model.model, state)
         reports = s.compute_collision_body_speeds(self.model, q, v)
         dt = 1e-7
@@ -261,13 +261,13 @@ class CollisionPortTests(unittest.TestCase):
         state = make_state(self.model)
         checker = s._SafetyChecker(settings=mechanics_settings(
             max_monitored_geometry_speed_m_s=1e-9), initial_state=state)
-        state.joint_velocities[s.RIGHT_ARM_JOINTS[0]] = .1
+        state.joint_velocities[RIGHT_ARM_JOINTS[0]] = .1
         # Isolate classification/order from a separate collision-margin failure.
         with patch.object(s, 'compute_collision_margin_violation', return_value=None):
             with self.assertRaises(s._SafetyFault) as caught:
                 checker.check(state)
         self.assertEqual(caught.exception.fault_kind, 'collision_body_speed')
-        state.joint_positions[s.RIGHT_ARM_JOINTS[0]] = 100.
+        state.joint_positions[RIGHT_ARM_JOINTS[0]] = 100.
         with self.assertRaises(s._SafetyFault) as caught:
             checker.check(state)
         self.assertEqual(caught.exception.fault_kind, 'joint_limit')

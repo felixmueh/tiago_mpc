@@ -9,9 +9,9 @@ from experiments import figure8 as f8, reach as rc
 from test_loops import Mpc, Task
 from tiago_mpc import robot
 from tiago_mpc.loops import run_robot
-from tiago_mpc.model_runtime import Q_CHECK
-from tiago_mpc.ros2 import ArmState, RIGHT_ARM_JOINTS
+from tiago_mpc.ros2 import ArmState
 from tiago_mpc.safety import CollisionSafetySettings
+from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS
 
 BODY = ("torso_lift_joint", "head_1_joint", "wheel_front_left_joint")
 
@@ -39,7 +39,7 @@ class Arm:
     def spin_once(self, timeout_sec=0.):
         self.clock.now += 1e-5
         self.seq += 1
-        q = np.array(Q_CHECK, dtype=np.float32)
+        q = np.array(Q_START, dtype=np.float32)
         positions = {**dict(zip(RIGHT_ARM_JOINTS, map(float, q))), "torso_lift_joint": .2,
                      "head_1_joint": 0., "wheel_front_left_joint": float("nan")}
         s = ArmState(q=q, qd=np.zeros(7, dtype=np.float32), stamp_sec=1000 + self.clock.now,

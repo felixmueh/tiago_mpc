@@ -14,13 +14,12 @@ import os
 import time
 
 import numpy as np
-import pinocchio as pin
 
 from .loops import LEASE_S
-from .model_runtime import Q_CHECK, URDF
 from .plan import State
-from .ros2 import RIGHT_ARM_JOINTS, TiagoRightArmClient
+from .ros2 import TiagoRightArmClient
 from .safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState
+from .tiago import Q_START, RIGHT_ARM_JOINTS, limits
 
 
 @dataclass(frozen=True)
@@ -62,9 +61,6 @@ class RosPlant:
                  sea_absolute=False):
         if not safety.enabled or tuple(safety.controlled_joint_names) != RIGHT_ARM_JOINTS:
             raise ValueError("the robot needs the safety worker on the controlled right-arm joints")
-        model = pin.buildModelFromUrdf(str(URDF))
-        self.lower, self.upper = model.lowerPositionLimit, model.upperPositionLimit
-        self.velocity = model.velocityLimit
         self.execute, self.checks, self.safety = execute, checks, safety
         self.settings = dict(clock="wall", execute=execute, sea_absolute=sea_absolute,
                              checks=asdict(checks), safety=asdict(safety),
@@ -163,12 +159,12 @@ class RosPlant:
             raise RuntimeError("joint state stale or invalid receipt time")
         if not math.isfinite(s.stamp_sec):
             raise RuntimeError("invalid ROS state stamp")
-        q, qd = np.asarray(s.q), np.asarray(s.qd)
+        q, qd, raw = np.asarray(s.q), np.asarray(s.qd), limits()
         if q.shape != (7,) or qd.shape != (7,) or not np.isfinite(np.r_[q, qd]).all():
             raise RuntimeError("invalid controlled joint feedback")
-        if np.any(q < self.lower) or np.any(q > self.upper):
+        if np.any(q < raw.lower) or np.any(q > raw.upper):
             raise RuntimeError("measured joint position exceeds physical limits")
-        if np.any(np.abs(qd) > self.velocity):
+        if np.any(np.abs(qd) > raw.velocity):
             raise RuntimeError("measured joint velocity exceeds physical limits")
         if s.seq < self._seq:
             raise RuntimeError("joint-state sequence reversed")
@@ -193,7 +189,7 @@ class RosPlant:
 
     def _ready(self, s):
         """At rest at the comfortable pose, and this state checked by the safety worker."""
-        if np.max(np.abs(np.asarray(s.q) - Q_CHECK)) > self.checks.start_rad:
+        if np.max(np.abs(np.asarray(s.q) - Q_START)) > self.checks.start_rad:
             raise RuntimeError("position the arm at comfortable_high_clearance first; there is no automatic reset")
         if np.sum(np.abs(s.qd)) > self.checks.start_speed_l1_rad_s:
             raise RuntimeError("arm is moving too quickly to start effort control")

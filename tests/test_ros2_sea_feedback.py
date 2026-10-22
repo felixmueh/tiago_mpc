@@ -8,9 +8,10 @@ import numpy as np
 import pytest
 
 from tiago_mpc import ros2 as ros
+from tiago_mpc.tiago import RIGHT_ARM_JOINTS
 
 
-def message(stamp, q=0., *, names=ros.RIGHT_ARM_JOINTS):
+def message(stamp, q=0., *, names=RIGHT_ARM_JOINTS):
     q = np.broadcast_to(q, (len(names),)).astype(float)
     sec = int(stamp)
     return NS(name=list(names), absolute_position=q.tolist(), position=(q + .2).tolist(),
@@ -37,7 +38,7 @@ def client(monkeypatch):
 
 def test_irregular_source_dt_name_order_and_unfiltered_position():
     estimator = ros.SeaAbsoluteVelocityEstimator(tau_sec=.01)
-    names = tuple(reversed(ros.RIGHT_ARM_JOINTS))
+    names = tuple(reversed(RIGHT_ARM_JOINTS))
     base = np.arange(7, dtype=float)
     speed = np.arange(1, 8, dtype=float)
     assert estimator.update(message(10., base, names=names), 1.) is None
@@ -109,14 +110,14 @@ def test_gap_requires_two_new_samples(client, gap_kind):
 
 def test_full_body_merge_and_raw_channels_in_history(client):
     arm = client.arm
-    body_names = (*ros.RIGHT_ARM_JOINTS, "torso_lift_joint", "wheel_right_joint")
+    body_names = (*RIGHT_ARM_JOINTS, "torso_lift_joint", "wheel_right_joint")
     body = message(2., .4, names=body_names)
     body.velocity[-1] = float("nan")  # Normal unused wheel state on this robot.
     arm._on_joint_state(body)
     arm._on_sea_state(message(3., 1.))
     assert arm.latest_state() is None  # No fabricated startup velocity.
     client.clock.now = 1.02
-    arm._on_sea_state(message(3.02, 1.04, names=tuple(reversed(ros.RIGHT_ARM_JOINTS))))
+    arm._on_sea_state(message(3.02, 1.04, names=tuple(reversed(RIGHT_ARM_JOINTS))))
     state = arm.latest_state()
     np.testing.assert_allclose(state.q, 1.04)
     np.testing.assert_allclose(state.qd, 2.)
@@ -124,7 +125,7 @@ def test_full_body_merge_and_raw_channels_in_history(client):
     assert state.received_monotonic_sec == 1.
     assert state.joint_positions["torso_lift_joint"] == pytest.approx(.6)
     assert np.isnan(state.joint_velocities["wheel_right_joint"])
-    assert all(state.joint_positions[name] == 1.04 for name in ros.RIGHT_ARM_JOINTS)
+    assert all(state.joint_positions[name] == 1.04 for name in RIGHT_ARM_JOINTS)
     metadata = state.feedback_metadata
     np.testing.assert_allclose(metadata["sea_motor_position"], 1.24)
     np.testing.assert_allclose(metadata["sea_absolute_position"], state.q)
@@ -200,7 +201,7 @@ def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client
     monkeypatch.setattr(robot.time, "monotonic", lambda: client.clock.now)
     safety_state = robot.safety_state
     arm = client.arm
-    names = (*ros.RIGHT_ARM_JOINTS, "torso_lift_joint")
+    names = (*RIGHT_ARM_JOINTS, "torso_lift_joint")
     arm._on_joint_state(message(1., 0., names=names))
     arm._on_sea_state(message(1.))
     client.clock.now = 1.01

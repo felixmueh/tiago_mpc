@@ -18,10 +18,10 @@ import sys
 from gato import SolverParams
 import numpy as np
 
-from .joint_dynamics import Friction, register_robot
-from .model_runtime import EE_FRAME, check_model, runtime_urdf
+from .dynamics import Friction, passive_torque
 from .plan import Plan
 from .plant_cache import cache_root, plant_name
+from .tiago import GRASP_FRAME, Q_REACH, Q_START, fk, limits, runtime_urdf
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ class MpcParams:
         max_sqp_iters=5, max_pcg_iters=120, pcg_tol=1e-3, mu=10., rho=.01,
         q_cost=4., qd_cost=.05, u_cost=1e-4, N_cost=8.,
         q_lim_cost=0., vel_lim_cost=0., ctrl_lim_cost=0.)
-    ee_frame: str = EE_FRAME
+    ee_frame: str = GRASP_FRAME
     warm_start: str = "shift"
     reset_rho_each_step: bool = True
     admm_linsys: str = "pcg"
@@ -93,54 +93,115 @@ def set_bounds(solver, model, signs, params):
         solver.set_row_group_bounds(group, -fraction * raw, fraction * raw)
 
 
-@dataclass
-class MpcSetup:
-    controller: object
-    model: object
-    data: object
-    frame_id: int
-    signs: np.ndarray
-    urdf_path: Path
-    gpu_urdf_path: Path
-    details: dict
+def register_robot(name, urdf_path, *, n_points, ee_frame, friction):
+    """Use public GATO registration; passive prediction is explicitly opt-in."""
+    import gato
+    if friction is None:
+        gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame, jobs=1)
+        return
+    if friction.width_rad_s is None:
+        raise ValueError("GATO prediction supports smooth Coulomb friction; hard sign is plant-only")
+    gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame,
+                        jobs=1, joint_friction_smoothing=friction.width_rad_s)
 
 
 def build_controller(params: MpcParams):
-    """Build/check once; callers retain ownership of timing, state and I/O."""
+    """Build and check the GATO controller; returns it and the GPU coordinate signs."""
     cache_dir = cache_root()  # exports GATO_CACHE_DIR before GATO compiles or loads
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]
     import gato
     import pinocchio as pin
 
     friction, ee_frame, n = params.friction, params.ee_frame, params.N
-    path, gpu_path, signs, names, reference_frame = runtime_urdf(cache_dir, friction)
+    path, gpu_path, signs = runtime_urdf(cache_dir, friction)
     model = pin.buildModelFromUrdf(str(path))
-    expected_names = tuple(f"arm_right_{i}_joint" for i in range(1, 8))
-    if (model.nq, model.nv) != (7, 7) or tuple(model.names)[1:] != expected_names or names != expected_names:
-        raise ValueError("Expected seven native right-arm joints in order")
     data = model.createData()
-    frame_id = model.getFrameId(ee_frame)
-    if frame_id >= model.nframes:
+    if model.getFrameId(ee_frame) >= model.nframes:
         raise ValueError(f"Missing end-effector frame {ee_frame}")
     plant = plant_name(gpu_path, ee_frame, friction)
-    adapter = register_robot(plant, gpu_path, n_points=n, ee_frame=ee_frame, friction=friction)
+    register_robot(plant, gpu_path, n_points=n, ee_frame=ee_frame, friction=friction)
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=n, dt=params.dt_s,
                        plant_type=plant, params=params.solver)
-    errors = check_model(solver, model, data, frame_id, signs, friction)
+    check_model(solver, model, data, ee_frame, signs, friction)
     controller = gato.MPCController(
         solver, limits="admm", linsys="pcg", warm_start=params.warm_start,
         reset_rho_each_step=params.reset_rho_each_step, admm_linsys=params.admm_linsys,
         limits_kw=asdict(params.admm))
     set_bounds(solver, model, signs, params)
-    details = dict(N=n, dt_s=params.dt_s, params=asdict(params),
-        reference_frame=reference_frame, end_effector_frame=ee_frame,
-        joint_names=list(names), gpu_joint_coordinate_signs=signs.tolist(), generator_adapter=adapter,
-        joint_friction_smoothing_rad_s=(None if solver.joint_friction_smoothing is None
-                                       else solver.joint_friction_smoothing.tolist()),
-        q_lower=model.lowerPositionLimit.tolist(), q_upper=model.upperPositionLimit.tolist(),
-        velocity_limits=model.velocityLimit.tolist(), effort_limits=model.effortLimit.tolist(),
-        model_step_max_abs_errors=errors, plant_name=plant, cache_dir=str(cache_dir))
-    return MpcSetup(controller, model, data, frame_id, signs, path, gpu_path, details)
+    return controller, signs
+
+
+def check_model(solver, model, data, ee_frame, signs, friction=None):
+    """The GPU model against Pinocchio's native one: FK and one dynamics step at two poses."""
+    import pinocchio as pin
+    if friction is not None:
+        return _check_dissipative_model(solver, model, data, ee_frame, signs, friction)
+
+    from gato.common import rk4
+
+    for q in (Q_START, Q_REACH):
+        expected = fk(q, ee_frame)
+        if not np.allclose(solver.ee_pos(q * signs), expected, atol=1e-5, rtol=1e-4):
+            raise ValueError("GATO/Pinocchio end-effector frames disagree")
+        v = np.array([0.10, -0.08, 0.06, -0.04, 0.02, -0.07, 0.03])
+        u = pin.rnea(model, data, q, v, np.zeros(7)) + np.linspace(-0.3, 0.3, 7)
+        state_signs = np.tile(signs, 2)
+        gpu = np.asarray(solver.sim_forward((np.r_[q, v] * state_signs)[None],
+                                            (u * signs)[None], 0.003))[0] * state_signs
+        q_next, v_next = rk4(model, data, q, v, u, 0.003)
+        error = float(np.max(np.abs(gpu - np.r_[q_next, v_next])))
+        if not np.isfinite(gpu).all() or error > 2e-3:
+            raise ValueError(f"GATO/Pinocchio one-step disagreement: {error:.6g}")
+    solver.reset()
+
+
+def _check_dissipative_model(solver, model, data, ee_frame, signs, friction):
+    """Value/A-block checks against the same constant-acceleration predictor step."""
+    import pinocchio as pin
+
+    q = Q_START.copy()
+    v = np.array([.3, -.35, .4, -.45, .5, -.55, .6])
+    u = pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, friction)
+    x = np.r_[q, v]; ss = np.tile(signs, 2)
+    def native_predictor(state, h):
+        qn, vn = state[:7], state[7:]
+        acceleration = pin.aba(model, data, qn, vn, u-passive_torque(vn, friction)).copy()
+        return np.r_[qn+vn*h+.5*acceleration*h*h, vn+acceleration*h]
+    expected_ee = fk(q, ee_frame)
+    actual_ee = np.asarray(solver.ee_pos(q*signs))
+    np.testing.assert_allclose(actual_ee, expected_ee, atol=1e-5, rtol=1e-4)
+    for h in (.001, solver.dt):
+        expected = native_predictor(x, h)
+        actual = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], h))[0]*ss
+        np.testing.assert_allclose(actual, expected, atol=2e-3, rtol=1e-3)
+    xu = np.tile(np.r_[x*ss, u*signs], solver.N)[:-7]
+    kkt = solver.debug_setup_kkt(xu[None], (x*ss)[None], np.zeros((1, solver.N*6)))
+    analytic_gpu = np.asarray(kkt["A"])[0].reshape(solver.N, 14, 14)[0].T
+    analytic_native = ss[:, None]*analytic_gpu*ss[None, :]
+    fd = np.empty((14, 14)); epsilon = 1e-5
+    for j in range(14):
+        delta = np.eye(14)[j]*epsilon
+        plus, minus = x+delta, x-delta
+        fp, fm = native_predictor(plus, solver.dt), native_predictor(minus, solver.dt)
+        fd[:, j] = (fp-fm)/(2*epsilon)
+    np.testing.assert_allclose(analytic_native, fd, atol=2e-3, rtol=1e-2)
+    if friction.width_rad_s is not None:
+        # A cheap extra preflight for new widths: the maximum tanh slope is at rest.
+        v = np.zeros(7)
+        u = pin.rnea(model, data, q, v, np.zeros(7)).copy()
+        x = np.r_[q, v]
+        actual = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], solver.dt))[0]*ss
+        expected = native_predictor(x, solver.dt)
+        np.testing.assert_allclose(actual, expected, atol=2e-3, rtol=1e-3)
+        xu = np.tile(np.r_[x*ss, u*signs], solver.N)[:-7]
+        kkt = solver.debug_setup_kkt(xu[None], (x*ss)[None], np.zeros((1, solver.N*6)))
+        analytic_gpu = np.asarray(kkt["A"])[0].reshape(solver.N, 14, 14)[0].T
+        analytic_native = ss[:, None]*analytic_gpu*ss[None, :]
+        for j in range(14):
+            delta = np.eye(14)[j]*epsilon
+            fd[:, j] = (native_predictor(x+delta, solver.dt)-native_predictor(x-delta, solver.dt))/(2*epsilon)
+        np.testing.assert_allclose(analytic_native, fd, atol=2e-3, rtol=1e-2)
+    solver.reset()
 
 
 # Named solver changes, applied before a solve in either Mpc. Each persists in the
@@ -172,7 +233,7 @@ def _checked(mpc, plan, t):
         raise RuntimeError("MPC plan has an unexpected knot interval")
     if (plan.states.shape != (mpc.N, 14) or plan.torques.shape != (mpc.N - 1, 7)
             or not np.isfinite(plan.states).all() or not np.isfinite(plan.torques).all()
-            or np.any(np.abs(plan.torques) > mpc.details["effort_limits"])):
+            or np.any(np.abs(plan.torques) > limits().effort)):
         raise RuntimeError("invalid MPC plan or raw effort limit exceeded")
     return plan
 
@@ -186,9 +247,8 @@ class MpcInProcess:
     """
 
     def __init__(self, params):
-        setup = build_controller(params)
+        self.controller, self.signs = build_controller(params)
         self.params, self.N, self.dt = params, params.N, params.dt_s
-        self.controller, self.signs, self.details = setup.controller, setup.signs, setup.details
         self._previous_t = self._plan = None
 
     def request(self, state, reference, updates=None):
@@ -254,7 +314,7 @@ class MpcWorker:
         self._process.start()
         self._pending = None  # the outstanding request's state time
         try:
-            self.details = self._reply(block=True)
+            self._reply(block=True)  # ready
         except BaseException:
             self.close()
             raise
@@ -302,10 +362,10 @@ class MpcWorker:
 
 
 def _serve(params, requests, replies):
-    """The worker: build, reply with the details (or the error), then one plan per request."""
+    """The worker: build, reply None when ready (or the error), then one plan per request."""
     try:
         mpc = MpcInProcess(params)
-        replies.put(mpc.details)
+        replies.put(None)
         while (item := requests.get()) is not None:
             replies.put(mpc._solve(*item))
     except Exception as exc:

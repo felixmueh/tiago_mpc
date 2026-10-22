@@ -5,16 +5,18 @@ from collections import Counter
 import csv
 import json
 from pathlib import Path
+import sys
 import textwrap
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import pinocchio as pin
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT))
+from tiago_mpc.tiago import limits
 
 
 def main():
@@ -29,7 +31,7 @@ def main():
         raise ValueError("analyze.py expects a complete 100-case run, not a --pairs subset")
     if [r["task_id"] for r in rows] != config["task_ids"]:
         raise ValueError("Incomplete cohort or changed task order")
-    model = pin.buildModelFromUrdf(str(ROOT / "models/tiago_right/tiago_right_arm.urdf"))
+    raw = limits()
     audits = []
     total_work = Counter()
     inner_modes = Counter()
@@ -47,9 +49,9 @@ def main():
             finite = bool(np.isfinite(x).all() and np.isfinite(u).all())
             if not finite or np.any(np.diff(t) <= 0):
                 raise ValueError(f"Nonfinite retained trajectory or invalid clock: {task}")
-            q_ex = np.maximum(model.lowerPositionLimit-x[:, :7], x[:, :7]-model.upperPositionLimit)
-            v_ex = np.abs(x[:, 7:])-model.velocityLimit
-            u_ex = np.abs(u)-model.effortLimit if len(u) else np.zeros((0, 7))
+            q_ex = np.maximum(raw.lower-x[:, :7], x[:, :7]-raw.upper)
+            v_ex = np.abs(x[:, 7:])-raw.velocity
+            u_ex = np.abs(u)-raw.effort if len(u) else np.zeros((0, 7))
             maxima = {k: float(max(0, a.max(initial=0))) for k, a in
                       (("joint", q_ex), ("speed", v_ex), ("torque", u_ex))}
             complete = row["status"] in ("arrived", "timeout")

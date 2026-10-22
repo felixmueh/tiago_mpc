@@ -4,6 +4,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from tiago_mpc import ros2
+from tiago_mpc.tiago import RIGHT_ARM_JOINTS
 
 
 class GuardFailure(RuntimeError):
@@ -197,8 +198,8 @@ def test_topic_wait_propagates_guard_failure(rpc):
 
 def test_public_active_owner_inspection_uses_existing_validation_without_switch(rpc):
     position = NS(state='active', claimed_interfaces=[
-        f'{joint}/position' for joint in ros2.RIGHT_ARM_JOINTS])
-    rpc.arm.joint_names = ros2.RIGHT_ARM_JOINTS
+        f'{joint}/position' for joint in RIGHT_ARM_JOINTS])
+    rpc.arm.joint_names = RIGHT_ARM_JOINTS
     rpc.arm.effort_controller = ros2.DEFAULT_EFFORT_CONTROLLER
     calls = []
     def inventory(timeout):

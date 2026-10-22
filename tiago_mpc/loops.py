@@ -16,6 +16,7 @@ import numpy as np
 
 from .laws import sample_knot
 from .plan import Tick
+from .tiago import limits
 
 LEASE_S = .1  # a plan may be commanded at most this long after its state's time
 _TOLERANCE = 1e-9  # absorbs the rounding of summed periods
@@ -75,7 +76,7 @@ class Pending:
         return self.plan if now >= self.at - _TOLERANCE else None
 
 
-def guard(command, plan, t, effort):
+def guard(command, plan, t):
     """The command, if finite and within the raw effort limits, while the plan's lease lasts.
 
     The lease ends at t0 + min(100 ms, the plan's length), so no plan is commanded
@@ -83,8 +84,8 @@ def guard(command, plan, t, effort):
     """
     if t >= plan.t0 + min(LEASE_S, len(plan.torques) * plan.dt):
         raise RuntimeError("MPC command lease expired")
-    command = np.asarray(command, dtype=float)
-    if command.shape != np.shape(effort) or not np.isfinite(command).all() or np.any(np.abs(command) > effort):
+    command, effort = np.asarray(command, dtype=float), limits().effort
+    if command.shape != effort.shape or not np.isfinite(command).all() or np.any(np.abs(command) > effort):
         raise RuntimeError("invalid command or raw effort limit exceeded")
     return command
 
@@ -98,7 +99,6 @@ def run(plant, mpc, task, law=sample_knot, safety=None, callbacks=(), *,
     reaches the callbacks. Garbage collection pauses while it runs: a full
     collection over the buffered ticks takes several milliseconds.
     """
-    effort = np.asarray(mpc.details["effort_limits"], dtype=float)
     due, plan, pending = Schedule(update_period), None, None
     plant.start()  # startup checks on a fresh state
     gc.disable()
@@ -123,7 +123,7 @@ def run(plant, mpc, task, law=sample_knot, safety=None, callbacks=(), *,
                     new, plan, pending = now, now, None
             command = None
             if plan is not None and not end:
-                command = guard(law(plan, s.t, s), plan, s.t, effort)
+                command = guard(law(plan, s.t, s), plan, s.t)
                 plant.apply(command)
             tick = Tick(s, command, plan, new is not None)
             for callback in callbacks:

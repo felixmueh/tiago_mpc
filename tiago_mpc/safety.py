@@ -22,11 +22,10 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from .ros2 import RIGHT_ARM_JOINTS
+from .tiago import FULL_URDF, RIGHT_ARM_JOINTS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_URDF_PATH = REPO_ROOT / "models" / "tiago_pro" / "tiago_pro.urdf"
 DEFAULT_COLLISION_URDF_PATH = (
     REPO_ROOT / "models" / "safety" / "collision_alpha_wrap_a3_o25_cap001"
     / "tiago_pro_collision_alpha_wrap_a3_o25_cap001.urdf"
@@ -510,16 +509,16 @@ def _resolved_collision_urdf(
     tree = ET.parse(source)
     roots = [source.parent, *(Path(p).resolve() for p in (package_dirs or ()))]
     if source == DEFAULT_COLLISION_URDF_PATH.resolve():
-        roots.append(DEFAULT_URDF_PATH.parent)
+        roots.append(FULL_URDF.parent)
     for mesh in tree.findall(".//mesh"):
         filename = mesh.get("filename", "")
         relative = filename.removeprefix("package://").removeprefix("file://")
         candidates = [root / relative for root in roots]
-        if (source in (DEFAULT_COLLISION_URDF_PATH.resolve(), DEFAULT_URDF_PATH.resolve())
+        if (source in (DEFAULT_COLLISION_URDF_PATH.resolve(), FULL_URDF.resolve())
                 and filename.startswith(("package://", "file://"))):
             # Canonical PAL URIs are preserved in checked-in sources. The
             # existing packaged assets use a flat, unique mesh basename layout.
-            candidates = [DEFAULT_URDF_PATH.parent / "meshes" / Path(relative).name]
+            candidates = [FULL_URDF.parent / "meshes" / Path(relative).name]
         resolved = next((path.resolve() for path in candidates if path.is_file()), None)
         if resolved is None:
             raise FileNotFoundError(f"collision URDF mesh not found: {filename} ({source})")
@@ -538,7 +537,7 @@ def _resolved_collision_urdf(
 
 def build_tiago_collision_model(
     *,
-    urdf_path: str | Path = DEFAULT_URDF_PATH,
+    urdf_path: str | Path = FULL_URDF,
     package_dirs: Sequence[str | Path] | None = None,
     state_fixed_joint_names: Iterable[str] = TIAGO_RUNTIME_STATE_FIXED_JOINT_NAMES,
     reference_positions: Mapping[str, float] | None = None,

@@ -14,14 +14,14 @@ import traceback
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from experiments.reach import arguments, fk, launch, limit_excess, solve_summary
-from tiago_mpc.joint_dynamics import urdf_friction
+from experiments.reach import arguments, launch, limit_excess, solve_summary
+from experiments.replay import export_replay
 from tiago_mpc.laws import sample_knot
 from tiago_mpc.loops import run_simulation
-from tiago_mpc.model_runtime import Q_CHECK
 from tiago_mpc.mpc import TIAGO, MpcWorker
 from tiago_mpc.record import Record
 from tiago_mpc.sim import SimPlant
+from tiago_mpc.tiago import Q_START, fk, urdf_friction
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class Figure8:
     It starts edge_clearance_m ahead (+x) of start_m, by default the comfortable
     pose's position of the default end-effector frame.
     """
-    start_m: tuple[float, float, float] = tuple(map(float, fk(Q_CHECK)))
+    start_m: tuple[float, float, float] = tuple(map(float, fk(Q_START)))
     x_span_m: float = .28
     y_amplitude_m: float = .09
     edge_clearance_m: float = .02
@@ -92,6 +92,7 @@ def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sampl
             mpc.close()
         plant.close()
         record.save()
+        export_replay(record)
     return record
 
 

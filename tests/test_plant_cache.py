@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 
 from tiago_mpc import plant_cache
-from tiago_mpc.joint_dynamics import Friction
-from tiago_mpc.model_runtime import runtime_urdf
+from tiago_mpc.dynamics import Friction
+from tiago_mpc.tiago import runtime_urdf
 
 LOSSES = Friction([1.] * 7, [.5] * 7, .03)
 

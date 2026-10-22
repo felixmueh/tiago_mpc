@@ -7,9 +7,10 @@ import numpy as np
 import pytest
 
 from tiago_mpc import ros2 as ros
+from tiago_mpc.tiago import RIGHT_ARM_JOINTS
 
 
-def message(stamp=1., *, names=ros.RIGHT_ARM_JOINTS, offset=0.):
+def message(stamp=1., *, names=RIGHT_ARM_JOINTS, offset=0.):
     n = len(names)
     values = (np.arange(n) + offset).tolist()
     return NS(name=list(names), position=values, velocity=[-.1] * n,
@@ -136,7 +137,7 @@ def test_replayed_joint_message_does_not_refresh_age_or_sequence(transport):
 
 def test_named_order_native_coordinates_and_full_body_are_retained(transport):
     arm = transport.new()
-    names = ('torso_lift_joint', *reversed(ros.RIGHT_ARM_JOINTS), 'wheel_right_joint')
+    names = ('torso_lift_joint', *reversed(RIGHT_ARM_JOINTS), 'wheel_right_joint')
     msg = message(names=names)
     msg.velocity[-1] = float('nan')
     arm._on_joint_state(msg)
@@ -172,7 +173,7 @@ def test_effort_and_trajectory_preserve_joint_order_native_signs(transport):
     effort = transport.publications[1][1][-1]
     trajectory = transport.publications[0][1][-1]
     assert effort.data == values
-    assert trajectory.joint_names == list(ros.RIGHT_ARM_JOINTS)
+    assert trajectory.joint_names == list(RIGHT_ARM_JOINTS)
     assert trajectory.points[0].positions == values
     assert trajectory.points[0].time_from_start.nanosec == 250_000_000
     arm.publish_position_trajectory_points([values, values], dt=.01)
@@ -201,7 +202,7 @@ def test_loop_process_imports_no_ros_compiled_gato_or_pinocchio_for_the_mpc():
     result = subprocess.run([sys.executable, '-c',
         'import sys\n'
         'import tiago_mpc.ros2, tiago_mpc.loops, tiago_mpc.mpc, tiago_mpc.record\n'
-        'import tiago_mpc.plan, tiago_mpc.laws\n'
+        'import tiago_mpc.plan, tiago_mpc.laws, tiago_mpc.tiago, experiments.replay\n'
         'assert "rclpy" not in sys.modules and "pinocchio" not in sys.modules\n'
         'import tiago_mpc.sim, tiago_mpc.robot\n'
         'assert "rclpy" not in sys.modules\n'

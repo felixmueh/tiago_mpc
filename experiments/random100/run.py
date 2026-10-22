@@ -18,12 +18,12 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
-from experiments.reach import Reach, fk, reach
+from experiments.reach import Reach, reach
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.sim import SimPlant
+from tiago_mpc.tiago import FLANGE_FRAME, fk
 
-FLANGE = "arm_right_tool_joint"  # the historical tasks track the flange
-PARAMS = replace(TIAGO, ee_frame=FLANGE)
+PARAMS = replace(TIAGO, ee_frame=FLANGE_FRAME)  # the historical tasks track the flange
 
 
 def aggregate(out, rows, expected):
@@ -65,7 +65,7 @@ def main():
                 raise ValueError(f"Invalid task dimensions: {name}")
             if not np.allclose(a["reference"].reshape(32, 6)[:, :3], a["target_xyz"], atol=1e-6):
                 raise ValueError(f"Nonconstant or inconsistent position target: {name}")
-            if not np.allclose(a["target_xyz"], fk(a["source_goal_q"], FLANGE), atol=1e-5, rtol=1e-4):
+            if not np.allclose(a["target_xyz"], fk(a["source_goal_q"], FLANGE_FRAME), atol=1e-5, rtol=1e-4):
                 raise ValueError(f"Target differs from the goal posture's flange position: {name}")
             # The historical seed matches the state-hold, zero-torque warm start.
             if not np.allclose(a["first_seed"].ravel(), np.tile(np.r_[a["initial_state"], np.zeros(7)], 32)[:-7],
@@ -102,7 +102,7 @@ def main():
             x0, target = a["initial_state"], tuple(map(float, a["target_xyz"]))
         start = time.perf_counter()
         try:
-            reach(SimPlant(x0[:7], x0[7:], substep=.003), task=Reach(target, ee_frame=FLANGE),
+            reach(SimPlant(x0[:7], x0[7:], substep=.003), task=Reach(target, ee_frame=FLANGE_FRAME),
                   params=PARAMS, out=case)
         except Exception:
             traceback.print_exc()

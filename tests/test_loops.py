@@ -9,8 +9,6 @@ from tiago_mpc.laws import hold_first
 from tiago_mpc.loops import Fixed, Measured, Schedule, guard, run, run_robot, run_simulation
 from tiago_mpc.plan import Plan, State
 
-EFFORT = np.full(7, 50.)
-
 
 class Plant:
     def __init__(self):
@@ -35,8 +33,6 @@ class Plant:
 class Mpc:
     """Plans whose knot k has torque k + 1. delay: result() calls before a reply;
     replies: how many requests get one (later ones hang)."""
-    details = dict(effort_limits=EFFORT.tolist())
-
     def __init__(self, N=11, dt=.01, delay=0, replies=math.inf, wall=0.):
         self.N, self.dt, self.delay, self.replies, self.wall = N, dt, delay, replies, wall
         self.requests, self.waiting, self.dead = [], None, False
@@ -168,12 +164,12 @@ def test_schedule_skips_missed_slots():
 
 def test_guard_rejects_nonfinite_and_excess_commands():
     plan = Plan(0., .01, np.zeros((32, 14)), np.ones((31, 7)))
-    np.testing.assert_array_equal(guard(np.ones(7), plan, .099, EFFORT), np.ones(7))
-    for bad in (np.r_[np.ones(6), np.nan], np.r_[np.ones(6), 51.], np.ones(6)):
+    np.testing.assert_array_equal(guard(np.ones(7), plan, .099), np.ones(7))
+    for bad in (np.r_[np.ones(6), np.nan], np.r_[np.ones(6), 26.1], np.ones(6)):  # joint 7: 26 Nm
         with pytest.raises(RuntimeError, match="effort"):
-            guard(bad, plan, 0., EFFORT)
+            guard(bad, plan, 0.)
     with pytest.raises(RuntimeError, match="expired"):
-        guard(np.ones(7), plan, .1, EFFORT)
+        guard(np.ones(7), plan, .1)
 
 
 def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):

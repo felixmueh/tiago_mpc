@@ -13,9 +13,9 @@ from gato.common import rk4
 import numpy as np
 import pinocchio as pin
 
-from .joint_dynamics import plant_rk4
-from .model_runtime import Q_CHECK, URDF
+from .dynamics import plant_rk4
 from .plan import State
+from .tiago import ARM_URDF, Q_START
 
 
 class SimPlant:
@@ -25,8 +25,8 @@ class SimPlant:
     model and data are the Pinocchio handles.
     """
 
-    def __init__(self, q=Q_CHECK, qd=None, *, substep, friction=None, realtime=False):
-        self.model = pin.buildModelFromUrdf(str(URDF))
+    def __init__(self, q=Q_START, qd=None, *, substep, friction=None, realtime=False):
+        self.model = pin.buildModelFromUrdf(str(ARM_URDF))
         self.data = self.model.createData()
         self.friction, self.substep, self.realtime = friction, substep, realtime
         self.settings = dict(friction=friction and asdict(friction), substep_s=substep,

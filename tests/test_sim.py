@@ -4,8 +4,9 @@ import numpy as np
 import pytest
 
 from tiago_mpc import sim
-from tiago_mpc.joint_dynamics import plant_rk4, urdf_friction
+from tiago_mpc.dynamics import plant_rk4
 from tiago_mpc.sim import SimPlant
+from tiago_mpc.tiago import urdf_friction
 
 U = np.linspace(-1., 1., 7)
 
