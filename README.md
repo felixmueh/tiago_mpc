@@ -154,23 +154,21 @@ Both examples accept `--solve-time-mode fixed|measured`:
 - `measured` charges `MPCController.step`'s complete reported wall time,
   including host work, rather than native kernel timing.
 
-Each solve returns a plan: one torque per knot. By default (`--command-mode
-playback`) the plant applies knot k = floor((t − t₀)/dt) at time t, where t₀
-is the time of the state the plan was computed from: a zero-order hold per knot,
-as GATO's transcription assumes. `--command-mode first` keeps the earlier
-command, the plan's first torque held until the next plan, for comparison with
-earlier runs. With the control period equal to dt and zero latency both modes
-are bitwise identical. During charged time the previous plan continues
-(initially zero torque); the new plan then plays from the offset of the
-charged time. Past a plan's last knot, which only long charged solves reach,
-the plant holds the final knot and flags it (`applied_past_plan_end`,
-`plant_steps_past_plan_end`). `--control-period-s` sets the nominal time
-between solves; it defaults to the knot interval `dt_s` and may differ from it.
+Each solve returns a plan: one torque per knot. The execution controller
+samples it: the plant applies the control of knot k = floor((t − t₀)/dt) at
+time t, where t₀ is the time of the state the plan was computed from, a
+zero-order hold per knot, as GATO's transcription assumes. With the control
+update period equal to dt and zero latency this is the plan's first torque in
+each interval. During charged time the previous plan continues (initially zero
+torque); the new plan then runs from the offset of the charged time. A charged
+solve longer than the whole plan would need a torque past its last knot; the
+run then ends with an error. `--control-update-period-s` sets the nominal time
+between control updates; it defaults to the knot interval `dt_s` and may differ from it.
 Overruns extend the interval to the charged solve time. References follow the
 resulting simulated timestamps; no wall-clock sleeping is used. Setup, plotting
 and logging time are not charged. The upstream warm-start shift is unchanged:
 GATO shifts by one knot per solve whatever `dt_elapsed` says (it only scores
-hypotheses), so a control period other than dt starts each solve from a
+hypotheses), so a control update period other than dt starts each solve from a
 misaligned guess. Histories record solve-start times, charged latency and actual
 update intervals alongside native/controller timings, and per plant substep the
 applied torque, its knot and its plan's start time.

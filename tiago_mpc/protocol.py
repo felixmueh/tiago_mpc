@@ -82,7 +82,7 @@ class SolveReply:
     finished_monotonic_sec: float
     expires_monotonic_sec: float
     # The plan: knot torques u_0..u_{N-2} in native coordinates and their
-    # interval. It starts at source_received_monotonic_sec (playback.Plan).
+    # interval. It starts at source_received_monotonic_sec (plan.Plan).
     torques_native: np.ndarray | None = None
     dt_s: float = math.nan
     stats: dict = field(default_factory=dict)

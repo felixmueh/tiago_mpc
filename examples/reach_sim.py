@@ -26,7 +26,7 @@ from tiago_mpc.model_runtime import (URDF, EE_FRAME, Q_CHECK, Q_DELTA_CHECK,
                                      ee_position, runtime_urdf as prepare_urdf,
                                      check_model as check_predictor)
 from tiago_mpc.plant_cache import cache_root
-from tiago_mpc.playback import MODES, Plan, knot_torques
+from tiago_mpc.plan import Plan, knot_torques
 from tiago_mpc.simulation import control_intervals, control_segments
 from tiago_mpc.joint_dynamics import plant_rk4
 
@@ -64,12 +64,10 @@ def main():
     p.add_argument("--solve-time-mode", choices=("fixed", "measured"), default="fixed",
                    help="charge fixed latency or measured controller wall time to the plant")
     p.add_argument("--solve-time-s", type=float, default=0., help="fixed solve latency in seconds (default zero)")
-    p.add_argument("--control-period-s", type=float, help="nominal seconds between solves (default: the knot interval dt_s)")
-    p.add_argument("--command-mode", choices=MODES, default="playback",
-                   help="play each plan back by knot (default), or hold its first torque as before")
+    p.add_argument("--control-update-period-s", type=float, help="nominal seconds between control updates (default: the knot interval dt_s)")
     args = p.parse_args()
     try:
-        control_intervals(1. if args.control_period_s is None else args.control_period_s, 0.,
+        control_intervals(1. if args.control_update_period_s is None else args.control_update_period_s, 0.,
                           mode=args.solve_time_mode, fixed_s=args.solve_time_s)
     except ValueError as exc:
         p.error(str(exc))
@@ -81,7 +79,7 @@ def main():
     except (ValueError, TypeError) as exc:
         p.error(str(exc))
     n_points, knot_dt = effective["N"], effective["dt_s"]
-    period = knot_dt if args.control_period_s is None else args.control_period_s
+    update_period_s = knot_dt if args.control_update_period_s is None else args.control_update_period_s
     plant_losses = settings.get("joint_dynamics")
     controller_options = effective["controller"]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -90,7 +88,7 @@ def main():
     shutil.copyfile(__file__, out / "reach_sim.py")
     shutil.copyfile(config_path, out / "config.json")
     for name in ("configuration.py", "controller.py", "model_runtime.py", "joint_dynamics.py",
-                 "simulation.py", "playback.py"):
+                 "simulation.py", "plan.py"):
         shutil.copyfile(ROOT / "tiago_mpc" / name, out / name)
     result = dict(status="started", execution_stage="setup", mode="hold" if args.hold else "reach",
                   repository_commit=git("rev-parse", "HEAD") if (ROOT / ".git").exists()
@@ -110,14 +108,12 @@ def main():
                   prediction_joint_dynamics=effective["prediction_joint_dynamics"],
                   timing=dict(mode=args.solve_time_mode, fixed_s=args.solve_time_s,
                               measured_source="MPCController.step wall_s",
-                              control_period_s=period, command_mode=args.command_mode,
-                              previous_plan_during_solve=True, initial_control="zero torque",
-                              past_plan_end="playback holds the final knot, flagged per plant step"),
+                              control_update_period_s=update_period_s,
+                              previous_plan_during_solve=True, initial_control="zero torque"),
                   orientation="unconstrained", collisions="not checked",
                   end_effector_frame=ee_frame)
     times, states, controls, errors, solve_us, wall_s, row_viol = [], [], [], [], [], [], []
     work, charged_s, update_s, solve_start_s = [], [], [], []
-    applied_knots, applied_plan_starts, past_plan_end = [], [], []
     predicted_states, prediction_errors = [], []
     exit_code = 1
     try:
@@ -207,12 +203,12 @@ def main():
                                     torque_nm=np.asarray(step.u, dtype=float)*signs, xu=step.solve.xu)
                 raise FloatingPointError("Nonfinite torque or predicted trajectory")
             # The plan starts at the time of the state it was computed from.
-            plan = Plan(t, knot_dt, knot_torques(step.xu_best, signs), args.command_mode)
-            intervals = control_intervals(period, step.wall_s, mode=args.solve_time_mode,
+            plan = Plan(t, knot_dt, knot_torques(step.xu_best, signs))
+            intervals = control_intervals(update_period_s, step.wall_s, mode=args.solve_time_mode,
                                           fixed_s=args.solve_time_s, remaining_s=args.timeout-t)
             charged_s.append(intervals.charged_s); update_s.append(intervals.elapsed_s)
             interval_start = t
-            for source, knot, applied_u, duration, beyond in control_segments(previous_plan, plan, intervals):
+            for applied_u, duration in control_segments(previous_plan, plan, intervals):
                 interval_end = t + duration
                 while t < interval_end - 1e-12:
                     h = min(SIM_DT_S, interval_end-t)
@@ -226,8 +222,6 @@ def main():
                         raise FloatingPointError("Nonfinite simulated state")
                     t += h
                     controls.append(applied_u.copy()); times.append(t); states.append(x.copy())
-                    applied_knots.append(knot); past_plan_end.append(beyond)
-                    applied_plan_starts.append(np.nan if source is None else source.start_s)
                     errors.append(float(np.linalg.norm(ee_position(model, data, q, fid)-target)))
             # Snap to the update boundary instead of accumulating RK4 rounding.
             t = min(interval_start + intervals.elapsed_s, args.timeout)
@@ -256,7 +250,6 @@ def main():
                       max_distance_m=max(errors), max_limit_excess=excess,
                       limits_pass=limits_pass, solve_calls=len(solve_us),
                       max_abs_torque_nm=float(np.max(np.abs(u_array))),
-                      plant_steps_past_plan_end=int(np.sum(past_plan_end)),
                       work_totals={k:sum(w[k] for w in work) for k in
                                    ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows")},
                       solve_time_median_ms=float(np.median(solve_us)/1000))
@@ -272,10 +265,7 @@ def main():
                             planned_row_violation=row_viol, predicted_next_state=predicted_states,
                             solve_start_s=solve_start_s, charged_solve_time_s=charged_s,
                             control_interval_s=update_s,
-                            prediction_error_qv=prediction_errors,
-                            applied_knot=np.asarray(applied_knots, dtype=int),
-                            applied_plan_start_s=np.asarray(applied_plan_starts, dtype=float),
-                            applied_past_plan_end=np.asarray(past_plan_end, dtype=bool))
+                            prediction_error_qv=prediction_errors)
         (out / "summary.json").write_text(json.dumps(result, indent=2, allow_nan=False)+"\n")
         print(json.dumps(result, indent=2), flush=True)
         print(f"Saved {out}", flush=True)

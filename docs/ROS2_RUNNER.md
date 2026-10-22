@@ -101,30 +101,30 @@ predictor (width .03 rad/s). Physical feedback is measured; no simulated plant
 or passive torque is applied in the ROS I/O process. Reaching retains its own
 loss-free predictor default. No ROS tracking qualification is claimed.
 Orientation remains unconstrained.
-The I/O loop still uses its explicit 10 ms default, independently of the
+The command loop still uses its explicit 10 ms `command_period_sec` default, independently of the
 predictor's knot interval (10 ms for both tasks since 2026-10-22; 2 ms for
 tracking before). The runner never assumes that the two are equal.
 References follow measured ROS timestamps and the existing one-knot warm-start
 shift remains unchanged. The worker smoke below does not qualify this complete
 ROS timing loop.
 
-## Plan playback
+## Sampling the plan
 
 The worker replies with the whole plan: the native knot torques u₀…u₍N−2₎ and
 their interval dt. Every knot is validated on receipt (finite, within the raw
 effort limits); a plan whose lease would outlive its last knot is rejected. At
-each I/O tick the runner publishes the knot due at that tick,
-k = floor((now − t₀)/dt), where t₀ is the parent's monotonic receipt time of the
-plan's state (`tiago_mpc/playback.py`, shared with the simulation). Each torque
-passes the guards below before publication and is logged with its knot and
-evaluation time. The receiver holds it until the next tick, so I/O slower than
-the knots samples the plan once per tick. `--command-mode first` publishes the
-plan's first torque at every tick instead, as before.
+each command tick the execution controller sends the control of the knot due at
+that tick, k = floor((now − t₀)/dt), a zero-order hold per knot, where t₀ is the
+parent's monotonic receipt time of the plan's state (`tiago_mpc/plan.py`,
+shared with the simulation). Each torque passes the guards below before
+publication and is logged with its knot. The robot's onboard controllers hold it
+until the next tick, so a command period longer than the knots samples the plan
+once per tick.
 
-Solves are scheduled once per knot, at the I/O tick nearest each knot boundary,
+Solves are scheduled once per knot, at the command tick nearest each knot boundary,
 at most once per tick and with one outstanding request; missed slots are
-skipped. With 2 ms I/O and 10 ms knots this solves every fifth tick; with 10 ms
-I/O and 2 ms knots, every tick. `dt_elapsed` is the time between consecutive
+skipped. With a 2 ms command period and 10 ms knots this solves every fifth tick; with
+a 10 ms command period and 2 ms knots, every tick. `dt_elapsed` is the time between consecutive
 requests' states, as in simulation; GATO uses it only to score hypotheses and
 shifts its warm start by one knot per solve, so solves more than one knot
 apart start from a misaligned guess.
@@ -132,7 +132,7 @@ apart start from a misaligned guess.
 ## Leases, safety and handback
 
 Results carry source sequence/receipt time, task generation and their original
-expiry. Receiving or republishing never renews a lease. Defaults are a 10 ms I/O
+expiry. Receiving or republishing never renews a lease. Defaults are a 10 ms command
 period and 100 ms state/command age limits, explicitly named in `RunnerConfig`.
 Before every nonzero publication the runner checks native physical q/qd/u limits,
 freshness, MPC liveness, safety and expiry. It rejects invalid results without

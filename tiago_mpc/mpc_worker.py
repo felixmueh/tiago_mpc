@@ -8,7 +8,7 @@ import time
 
 import numpy as np
 
-from .playback import knot_torques
+from .plan import knot_torques
 from .protocol import SolveReply, SolveRequest, WorkerReady
 
 
@@ -69,8 +69,9 @@ class MpcEngine:
             self._generation = request.task.generation
         step = self.controller.step(x_gpu, reference,
                                     dt_elapsed=request.dt_elapsed_s, budget_s=self.budget_s)
-        # The whole plan leaves the worker; the runner plays it back by knot.
-        # TODO(torque command): what remains deferred is noted in tiago_mpc/runner.py.
+        # The whole plan leaves the worker; the execution controller samples it by knot.
+        # TODO(torque command, Felix 2026-10-22): what remains deferred is noted in
+        # tiago_mpc/runner.py.
         plan = np.asarray(step.xu_best, dtype=float).reshape(-1)
         if plan.size != self.n * 21 - 7 or not np.isfinite(plan).all():
             raise FloatingPointError("Nonfinite or malformed MPC trajectory")

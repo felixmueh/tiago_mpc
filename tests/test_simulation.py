@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from tiago_mpc.playback import Plan, PlanEnded, knot_torques
+from tiago_mpc.plan import Plan, PlanEnded, knot_torques
 from tiago_mpc.simulation import control_intervals, control_segments
 
 
@@ -42,75 +42,72 @@ def test_simulation_end_clips_old_or_new_control_without_overshoot():
 @pytest.mark.parametrize("kwargs", [
     {"fixed_s": -.001}, {"fixed_s": math.nan}, {"fixed_s": math.inf},
     {"solve_wall_s": -.001}, {"solve_wall_s": math.nan},
-    {"period_s": 0}, {"period_s": math.inf},
+    {"update_period_s": 0}, {"update_period_s": math.inf},
     {"remaining_s": -.001}, {"remaining_s": math.nan}, {"mode": "adaptive"},
 ])
 def test_invalid_timing_is_rejected(kwargs):
-    args = {"period_s": .01, "solve_wall_s": .002, **kwargs}
+    args = {"update_period_s": .01, "solve_wall_s": .002, **kwargs}
     with pytest.raises(ValueError):
         control_intervals(**args)
 
 
-def plan(start, dt=.002, knots=5, mode="playback"):
-    return Plan(start, dt, 1. + np.arange(knots)[:, None] * np.ones(2), mode)
+def plan(start, dt=.002, knots=5):
+    return Plan(start, dt, 1. + np.arange(knots)[:, None] * np.ones(2))
 
 
-def test_playback_indexes_knots_from_the_state_time_with_a_zero_order_hold():
+def test_control_at_indexes_knots_from_the_state_time_with_a_zero_order_hold():
     item = plan(10.)
     assert item.end_s == pytest.approx(10.01)
-    assert item.command(10.)[0] == 0
-    assert item.command(10.0019)[0] == 0
+    assert item.control_at(10.)[0] == 0
+    assert item.control_at(10.0019)[0] == 0
     # 10 + 3 * .002 rounds below the boundary; it still selects knot 3.
-    assert item.command(10. + 3 * .002)[0] == 3
-    np.testing.assert_array_equal(item.command(10.0099)[1], [5., 5.])
+    assert item.control_at(10. + 3 * .002)[0] == 3
+    np.testing.assert_array_equal(item.control_at(10.0099)[1], [5., 5.])
     with pytest.raises(PlanEnded):
-        item.command(10.01)
+        item.control_at(10.01)
     with pytest.raises(ValueError):
-        item.command(9.999)
-    knot, torque = plan(10., mode="first").command(10.009)
-    assert knot == 0 and np.array_equal(torque, item.torques[0])
+        item.control_at(9.999)
 
 
-def test_segments_split_a_control_period_at_knot_boundaries():
-    # 10 ms control period, 2 ms knots, from offset 3 ms.
-    segments = plan(0.).segments(.003, .006)
-    assert [k for k, *_ in segments] == [1, 2, 3, 4]
-    assert [d for _, _, d, _ in segments] == pytest.approx([.001, .002, .002, .001])
-    assert sum(d for _, _, d, _ in segments) == pytest.approx(.006)
-    assert not any(past for *_, past in segments)
-    [(knot, torque, duration, past)] = plan(0., mode="first").segments(.003, .006)
-    assert (knot, duration, past) == (0, .006, False) and np.array_equal(torque, [1., 1.])
-    assert plan(0.).segments(.003, 0.) == []
+def test_controls_over_split_a_control_update_at_knot_boundaries():
+    # 10 ms control update, 2 ms knots, from offset 3 ms.
+    pieces = plan(0.).controls_over(.003, .006)
+    assert [torque[0] for torque, _ in pieces] == [2., 3., 4., 5.]
+    assert [d for _, d in pieces] == pytest.approx([.001, .002, .002, .001])
+    assert sum(d for _, d in pieces) == pytest.approx(.006)
+    assert plan(0.).controls_over(.003, 0.) == []
 
 
-def test_period_equal_to_knot_interval_applies_knot_zero_for_exactly_dt():
+def test_update_equal_to_knot_interval_applies_knot_zero_for_exactly_dt():
     item = plan(.03, dt=.01)
-    [(knot, torque, duration, past)] = item.segments(0., .01)
-    assert (knot, duration, past) == (0, .01, False)
+    [(torque, duration)] = item.controls_over(0., .01)
+    assert duration == .01
     np.testing.assert_array_equal(torque, item.torques[0])
 
 
-def test_past_the_last_knot_the_simulation_holds_it_and_flags_it():
+def test_a_span_past_the_last_knot_raises():
     item = plan(0., knots=3)  # 6 ms plan
-    segments = item.segments(.004, .006)
-    assert [(k, past) for k, _, _, past in segments] == [(2, False), (2, True)]
-    assert [d for _, _, d, _ in segments] == pytest.approx([.002, .004])
-    np.testing.assert_array_equal(segments[-1][1], item.torques[-1])
-    # Starting past the end, the whole span holds the final knot.
-    assert [(k, past) for k, _, _, past in item.segments(.008, .002)] == [(2, True)]
+    assert sum(d for _, d in item.controls_over(.004, .002)) == pytest.approx(.002)
+    with pytest.raises(PlanEnded):
+        item.controls_over(.004, .006)
+    with pytest.raises(PlanEnded):
+        item.controls_over(.008, .002)
 
 
 def test_control_segments_continue_the_previous_plan_while_solving():
     previous, new = plan(0.), plan(.01, knots=7)
     intervals = control_intervals(.01, 0., fixed_s=.003)
+    with pytest.raises(PlanEnded):  # the charged 3 ms start at 10 ms, past the 10 ms plan
+        control_segments(previous, new, intervals)
+    previous = plan(0., knots=7)
     segments = control_segments(previous, new, intervals)
-    assert [(source is new, k, past) for source, k, _, _, past in segments] == [
-        (False, 4, True), (True, 1, False), (True, 2, False), (True, 3, False), (True, 4, False)]
-    assert sum(d for *_, d, _ in segments) == pytest.approx(.01)
+    assert [torque[0] for torque, _ in segments] == [6., 7., 2., 3., 4., 5.]
+    assert [d for _, d in segments] == pytest.approx([.002, .001, .001, .002, .002, .002])
+    assert sum(d for _, d in segments) == pytest.approx(.01)
     first = control_segments(None, new, intervals)
-    assert first[0][:2] == (None, -1) and not np.any(first[0][2]) and first[0][3] == .003
+    assert not np.any(first[0][0]) and first[0][1] == .003
     # Without latency the previous plan is not applied at all.
-    assert [k for _, k, *_ in control_segments(previous, new, control_intervals(.01, 0.))] == [0, 1, 2, 3, 4]
+    assert [t[0] for t, _ in control_segments(previous, new, control_intervals(.01, 0.))] == [1., 2., 3., 4., 5.]
 
 
 def test_knot_torques_take_every_knot_and_cross_the_sign_boundary():
@@ -125,7 +122,7 @@ def test_knot_torques_take_every_knot_and_cross_the_sign_boundary():
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"dt_s": 0.}, {"dt_s": math.nan}, {"start_s": math.inf}, {"mode": "smooth"},
+    {"dt_s": 0.}, {"dt_s": math.nan}, {"start_s": math.inf},
     {"torques": np.zeros((0, 7))}, {"torques": np.full((2, 7), np.nan)}, {"torques": np.zeros(7)},
 ])
 def test_invalid_plans_are_rejected(kwargs):

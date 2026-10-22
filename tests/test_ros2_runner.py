@@ -315,23 +315,25 @@ def test_reference_phase_is_time_based_and_orientation_unconstrained():
     assert np.all(ref.horizon(6., 2, .01)[:, 3:] == 0)
 
 
-@pytest.mark.parametrize("io_s,dt_s", [(.002, .01), (.01, .002)])
-def test_io_ticks_publish_the_due_knot_of_plans_whose_interval_differs(monkeypatch, tmp_path, io_s, dt_s):
+@pytest.mark.parametrize("command_s,dt_s", [(.002, .01), (.01, .002)])
+def test_command_ticks_publish_the_due_knot_of_plans_whose_interval_differs(monkeypatch, tmp_path, command_s, dt_s):
     monkeypatch.setitem(LIMITS, "dt_s", dt_s)
-    rig = make_rig(monkeypatch, r.RunnerConfig(io_period_sec=io_s, duration_sec=.2))
+    rig = make_rig(monkeypatch, r.RunnerConfig(command_period_sec=command_s, duration_sec=.2))
     rig.faults.never_arrive = True
-    result = rig.runner.run(tmp_path / "playback", execute=True)
+    result = rig.runner.run(tmp_path / "ticks", execute=True)
     assert result["status"] == "timeout" and result["restored"] is True
-    events = [json.loads(line) for line in (tmp_path / "playback/events.jsonl").read_text().splitlines()]
+    events = [json.loads(line) for line in (tmp_path / "ticks/events.jsonl").read_text().splitlines()]
     published = [e for e in events if e["event"] == "effort_publish" and "knot" in e]
+    commands = {e["source_seq"]: e for e in events if e["event"] == "command"}
     assert len(published) == sum(np.any(u) for _, u in rig.publications)
     plan = knot_plan()
     for event in published:
-        offset = event["evaluated_monotonic_sec"] - event["plan_start_monotonic_sec"]
+        command = commands[event["source_seq"]]
+        offset = event["monotonic_sec"] - command["plan_start_monotonic_sec"]
         assert event["knot"] == int(np.floor(offset / dt_s + 1e-9))
         np.testing.assert_array_equal(event["torque_nm"], plan[event["knot"]])
-        assert event["evaluated_monotonic_sec"] < event["expires_monotonic_sec"]
-    # Plans are played: later knots are published, not only u_0.
+        assert event["monotonic_sec"] < command["expiry"]
+    # Plans are sampled: later knots are published, not only u_0.
     assert {e["knot"] for e in published} - {0}
     # One solve per 10 ms in both cases: per knot with fast I/O, per tick with slow I/O.
     receipts = np.array([q.state.received_monotonic_sec for q in rig.requests])
@@ -340,20 +342,11 @@ def test_io_ticks_publish_the_due_knot_of_plans_whose_interval_differs(monkeypat
     assert rig.requests[0].dt_elapsed_s is None
     np.testing.assert_allclose([q.dt_elapsed_s for q in rig.requests[1:]], np.diff(receipts))
     # Every nonzero publication ends no later than its plan's lease.
-    leases = {e["plan_start_monotonic_sec"]: e["expires_monotonic_sec"] for e in published}
-    assert all(lease <= start + (LIMITS["N"] - 1) * dt_s for start, lease in leases.items())
+    assert all(c["expiry"] <= c["plan_start_monotonic_sec"] + (LIMITS["N"] - 1) * dt_s
+               for c in commands.values())
 
 
-def test_first_mode_keeps_publishing_the_first_knot(monkeypatch, tmp_path):
-    monkeypatch.setitem(LIMITS, "dt_s", .002)
-    rig = make_rig(monkeypatch, r.RunnerConfig(duration_sec=.1, command_mode="first"))
-    rig.faults.never_arrive = True
-    assert rig.runner.run(tmp_path / "first", execute=True)["status"] == "timeout"
-    nonzero = [u for _, u in rig.publications if np.any(u)]
-    assert nonzero and all(np.array_equal(u, knot_plan()[0]) for u in nonzero)
-
-
-def test_guard_never_plays_a_plan_past_its_end(rig, monkeypatch):
+def test_guard_never_samples_a_plan_past_its_end(rig, monkeypatch):
     monkeypatch.setitem(LIMITS, "dt_s", .002)
     snapshot = state(rig.clock)
     guard = r.RuntimeGuard(r.RunnerConfig(), snapshot, LIMITS)
@@ -368,6 +361,3 @@ def test_guard_never_plays_a_plan_past_its_end(rig, monkeypatch):
         guard.command(plan, start + .062)
 
 
-def test_runner_rejects_unknown_command_mode():
-    with pytest.raises(ValueError):
-        r.RunnerConfig(command_mode="smooth")

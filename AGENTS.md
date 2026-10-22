@@ -49,9 +49,9 @@ simulation and the ROS worker through normal package imports. Keep setup in
 do not add dynamic example imports or duplicate setup in callers.
 Simulation supports `fixed` (configurable seconds, default zero) and `measured`
 (complete controller-step wall time) solve latency. Continue the previous plan
-during the charge, starting with zero torque; play the new plan for the
+during the charge, starting with zero torque; run the new plan for the
 remaining nominal period, and extend overruns to the charged duration
-(plan playback below). Record
+(plan sampling below). Record
 simulated solve-start/update/latency times. Reference phase follows simulated
 time. This is simulation-only and does not change ROS leases or safety gates.
 Logs remain in `/workspace/tiago_mpc-ros2-review-fixes/_expr_data/ros2-review-fixes/`.
@@ -142,7 +142,7 @@ Felix selected running end-effector XYZ cost **4** and terminal XYZ cost **8**.
 `configs/tracking.json` owns tracking settings: qd_cost=.01, u_cost=1e-6,
 all three soft-limit costs zero (ADMM-only limits), actual right-arm losses,
 tanh predictor width .03 rad/s, hard-sign plant, N32 and .1 ms RK4 plant; the
-knot interval is 10 ms since 2026-10-22 (plan playback below), 2 ms before.
+knot interval is 10 ms since 2026-10-22 (plan sampling below), 2 ms before.
 The separate 24 s 4/8 tracking check completed (26.536 mm full-cycle RMS;
 sampled executed and planned raw limits passed); old 8/1600 results do not
 qualify 4/8. Keep armature inactive
@@ -158,23 +158,23 @@ settings remain task-specific and unchanged. The historical 84/100 cohort used
 Neither qualifies the new friction-enabled reaching default or broad reaching
 and settling behavior. Do not rerun or relabel the frozen historical cohort.
 
-## Plan playback — Felix, 2026-10-22
+## Plan sampling — Felix, 2026-10-22
 
-Simulation and the ROS runner apply each MPC plan by knot from the time t₀ of
-the state it was computed from: knot k = floor((t − t₀)/dt), a zero-order hold
-per knot (`tiago_mpc/playback.py`; on ROS t₀ is the parent's monotonic receipt
-time). `first` (hold u₀ until the next plan) stays selectable for comparison;
-playback is the default and reproduces it bitwise at control period = dt and
-zero latency. Never assume that the knot interval equals the control or I/O
-period: simulation has `--control-period-s` (default `dt_s`), ROS solves once
-per knot at the nearest I/O tick, at most once per tick, with
-`RunnerConfig.io_period_sec` unchanged. GATO shifts its warm start by one knot
+In simulation and on ROS the execution controller samples each MPC plan by knot
+from the time t₀ of the state it was computed from: the control of knot
+k = floor((t − t₀)/dt), a zero-order hold per knot (`tiago_mpc/plan.py`; on ROS
+t₀ is the parent's monotonic receipt time). At control update period = dt and
+zero latency this is the plan's first torque. Never assume that the knot
+interval equals the control update or command period: simulation has
+`--control-update-period-s` (default `dt_s`), ROS solves once per knot at the
+nearest command tick, at most once per tick, with
+`RunnerConfig.command_period_sec` unchanged. GATO shifts its warm start by one knot
 per solve regardless of `dt_elapsed`. On ROS, every knot is validated on
 receipt, every published torque passes the guards, nothing is clipped, leases
 are never renewed and end no later than the plan, so the lease expires (fault)
-before a plan could run out. In simulation, playback past the last knot holds
-it and flags each such substep. Applied torques are recorded per plant substep
-and per publication. Tracking's default knot interval is 10 ms (N32, .1 ms
+before a plan could run out. In simulation, a torque due past the last knot
+(possible only for a charged solve longer than the plan) raises PlanEnded and ends
+the run. Applied torques are recorded per plant substep and per publication. Tracking's default knot interval is 10 ms (N32, .1 ms
 plant step); 2 ms tracking checks do not qualify it. Smoothing, local feedback,
 a PAL real-time controller and separate simulation/robot control modes remain
 deferred (TODO above `publish_checked` in `tiago_mpc/runner.py`).

@@ -21,7 +21,7 @@ from tiago_mpc.joint_dynamics import validate, passive_torque, plant_rk4, model_
 from tiago_mpc.model_runtime import URDF, EE_FRAME, Q_CHECK, ee_position, runtime_urdf
 from tiago_mpc.plant_cache import cache_root
 from tiago_mpc.protocol import figure8_reference as reference
-from tiago_mpc.playback import MODES, Plan, knot_torques
+from tiago_mpc.plan import Plan, knot_torques
 from tiago_mpc.simulation import control_intervals, control_segments
 DEFAULT_PROTOCOL = ROOT/"configs/tracking.json"
 
@@ -47,12 +47,10 @@ def main():
     parser.add_argument("--solve-time-mode", choices=("fixed", "measured"), default="fixed",
                         help="charge fixed latency or measured controller wall time to the plant")
     parser.add_argument("--solve-time-s", type=float, default=0., help="fixed solve latency in seconds (default zero)")
-    parser.add_argument("--control-period-s", type=float, help="nominal seconds between solves (default: the knot interval dt_s)")
-    parser.add_argument("--command-mode", choices=MODES, default="playback",
-                        help="play each plan back by knot (default), or hold its first torque as before")
+    parser.add_argument("--control-update-period-s", type=float, help="nominal seconds between control updates (default: the knot interval dt_s)")
     args = parser.parse_args()
     try:
-        control_intervals(1. if args.control_period_s is None else args.control_period_s, 0.,
+        control_intervals(1. if args.control_update_period_s is None else args.control_update_period_s, 0.,
                           mode=args.solve_time_mode, fixed_s=args.solve_time_s)
     except ValueError as exc:
         parser.error(str(exc))
@@ -62,16 +60,16 @@ def main():
     prediction_losses = effective["prediction_joint_dynamics"] if args.losses == "smooth-predictor" else None
     effective["prediction_joint_dynamics"] = prediction_losses
     n, dt, sim_dt, duration = (settings["N"], settings["dt_s"], settings["sim_dt_s"], settings["duration_s"])
-    period = dt if args.control_period_s is None else args.control_period_s
+    update_period_s = dt if args.control_update_period_s is None else args.control_update_period_s
     if (int(n) != n or n < 2 or not np.isfinite([dt, sim_dt, duration]).all()
             or min(dt, sim_dt, duration) <= 0 or sim_dt > dt):
         raise ValueError("Invalid tracking dimensions/times")
-    if abs(round(duration/period)*period-duration) > 1e-10:
+    if abs(round(duration/update_period_s)*update_period_s-duration) > 1e-10:
         raise ValueError("Duration must contain complete controller intervals")
     args.output.mkdir(parents=True, exist_ok=False); out = args.output
     for source in (Path(__file__), *(ROOT/"tiago_mpc"/name for name in
             ("configuration.py", "controller.py", "model_runtime.py", "joint_dynamics.py", "simulation.py",
-             "protocol.py", "playback.py"))):
+             "protocol.py", "plan.py"))):
         shutil.copyfile(source, out/source.name)
     shutil.copyfile(args.config, out/"protocol.json")
     result = dict(status="setup", losses=args.losses, configuration=settings,
@@ -82,9 +80,8 @@ def main():
         plant_joint_dynamics=plant_losses, prediction_joint_dynamics=prediction_losses,
         timing=dict(mode=args.solve_time_mode, fixed_s=args.solve_time_s,
                     measured_source="MPCController.step wall_s",
-                    control_period_s=period, command_mode=args.command_mode,
-                    previous_plan_during_solve=True, initial_control="zero torque",
-                    past_plan_end="playback holds the final knot, flagged per plant step"),
+                    control_update_period_s=update_period_s,
+                    previous_plan_during_solve=True, initial_control="zero torque"),
         reference_alignment="At solve time t controller reference knots are t+k*dt, k=0..N-1; state errors use reference at the same state timestamp, including t=0 and t=24s.",
         predictor_integration="upstream constant acceleration (named trapezoidal); native plant uses RK4 substeps",
         orientation="unconstrained", collisions="not checked", end_effector_frame=EE_FRAME,
@@ -93,7 +90,6 @@ def main():
     times, states, xyzs, refs, controls, passive, solve_us, wall_s, work, row_viol = [], [], [], [], [], [], [], [], [], []
     reference_horizons, planned_xu = [], []
     charged_s, update_s, solve_start_s = [], [], []
-    applied_knots, applied_plan_starts, past_plan_end = [], [], []
     exit_code = 1
     try:
         setup = build_controller(effective)
@@ -142,8 +138,8 @@ def main():
                 np.savez_compressed(out/"failure_solve.npz", state=x, reference=horizon, xu=step.solve.xu, torque_nm=u)
                 raise FloatingPointError("Nonfinite predicted trajectory or actuator torque")
             # The plan starts at the time of the state it was computed from.
-            plan = Plan(t, dt, knot_torques(step.xu_best, signs), args.command_mode)
-            intervals = control_intervals(period, step.wall_s, mode=args.solve_time_mode,
+            plan = Plan(t, dt, knot_torques(step.xu_best, signs))
+            intervals = control_intervals(update_period_s, step.wall_s, mode=args.solve_time_mode,
                                           fixed_s=args.solve_time_s, remaining_s=duration-t)
             segments = control_segments(previous_plan, plan, intervals)
             if args.stop_on_raw_limit and any(np.any(np.abs(s[2]) > model.effortLimit+1e-5) for s in segments):
@@ -155,13 +151,11 @@ def main():
             work.append({key:int(np.sum(getattr(stats, key))) for key in ("sqp_iters", "pcg_iters", "admm_iters", "admm_linsys_iters")})
             charged_s.append(intervals.charged_s); update_s.append(intervals.elapsed_s)
             interval_start = t
-            for source, knot, applied_u, span, beyond in segments:
+            for applied_u, span in segments:
                 interval_end = t+span
                 while t < interval_end-1e-12:
                     h = min(sim_dt, interval_end-t)
                     passive.append(passive_torque(x[7:], plant_losses)); controls.append(applied_u.copy())
-                    applied_knots.append(knot); past_plan_end.append(beyond)
-                    applied_plan_starts.append(np.nan if source is None else source.start_s)
                     q, v = plant_rk4(model, data, x[:7], x[7:], applied_u, h, plant_losses); x = np.r_[q, v]
                     if not np.isfinite(x).all():
                         raise FloatingPointError("Nonfinite native plant state")
@@ -186,7 +180,6 @@ def main():
             solve_calls=len(solve_us), solve_time_median_ms=float(np.median(solve_us)/1000),
             controller_wall_median_ms=float(np.median(wall_s)*1000),
             max_abs_actuator_torque_nm=float(np.max(np.abs(torque_array))),
-            plant_steps_past_plan_end=int(np.sum(past_plan_end)),
             work_totals={key:sum(w[key] for w in work) for key in work[0]})
         exit_code = 0 if result["limits_pass"] else 1
     except Exception:
@@ -199,10 +192,7 @@ def main():
             reference_xyz_m=refs, applied_actuator_torque_nm=controls, passive_resisting_torque_nm=passive,
             solve_time_us=solve_us, controller_wall_s=wall_s, planned_row_violation=row_viol,
             reference_horizon=reference_horizons, planned_xu=planned_xu,
-            solve_start_s=solve_start_s, charged_solve_time_s=charged_s, control_interval_s=update_s,
-            applied_knot=np.asarray(applied_knots, dtype=int),
-            applied_plan_start_s=np.asarray(applied_plan_starts, dtype=float),
-            applied_past_plan_end=np.asarray(past_plan_end, dtype=bool))
+            solve_start_s=solve_start_s, charged_solve_time_s=charged_s, control_interval_s=update_s)
         if times:
             import matplotlib
             matplotlib.use("Agg")

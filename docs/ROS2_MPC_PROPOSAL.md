@@ -87,10 +87,10 @@ therefore cannot be assumed to keep running during that solve.
    a ROS timestamp from a monotonic timestamp. Reset on simulation clock resets
    or task replacement rather than continuing the previous reference phase.
 
-This first runner uses the first returned effort, not delayed playback of the
-whole plan. Trajectory playback or prediction through communication delay can
-be added later, with an explicit plan epoch and replay semantics. Neither is
-provided automatically by `MPCController`.
+This proposal assumed the first returned effort; the runner now samples the
+whole plan by knot (`docs/ROS2_RUNNER.md`). Prediction through communication
+delay can be added later, with an explicit plan epoch. It is not provided
+automatically by `MPCController`.
 
 The historical ADMM-only N32/10 ms reaching configuration achieved
 84/100 arrivals and 100/100 sampled physical-limit passes in internal simulation.
