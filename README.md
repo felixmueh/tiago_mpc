@@ -79,6 +79,13 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
   the charge; no new request is made while a plan is pending. Until the first
   command, `SimPlant` holds its start state, as PAL's position controller holds
   the arm until effort control starts.
+- **Solve time and warm-up:** `MpcParams.max_sqp_time_s` (10 ms) stops a solve's
+  SQP iterations by wall time, within `solver.max_sqp_iters` (5). It is for the
+  wall clock: the simulation mains (`launch`) and random100 set it to None.
+  Before the first tick, `run` calls `mpc.warmup` with the started plant's state,
+  the arm still held: with `MpcParams.warmup` (default), GATO's warm-up solve
+  (the solver's own iteration limit, no time limit) seeds the first solve, and
+  its time counts against no plan's lease.
 - **Rates:** `--command-period` sets the command rate, `--update-period` the
   control rate; both default to the knot interval `dt_s` (10 ms) and may differ
   from it. `--duration S` ends a run after at most S seconds.
@@ -109,7 +116,8 @@ from tiago_mpc.loops import Fixed, run_simulation
 from tiago_mpc.mpc import TIAGO, Mpc
 from tiago_mpc.sim import SimPlant
 
-mpc = Mpc.compile(replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)))  # in this process; MpcProcess: its own
+params = replace(TIAGO, solver=TIAGO.solver.replace(mu=1.), max_sqp_time_s=None)  # simulation clock
+mpc = Mpc.compile(params)  # in this process; MpcProcess: its own
 record = reach(SimPlant(substep=.003), mpc, run=partial(run_simulation, latency=Fixed(.005)),
                task=Reach(position_tol_m=.02), law=hold_first)
 mpc.close()

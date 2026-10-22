@@ -4,8 +4,9 @@ Experiments override the defaults with dataclasses.replace, for example
 replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). compile_binary compiles GATO's
 module for the params (minutes, once per variant), find_binary finds it, Mpc and
 MpcProcess load it; Mpc.compile(params) does both. They share one interface:
-request(state, reference, updates=None), which raises while the previous request's
-plan is unread, result(block=False) -> Plan or None, N, dt, params and close().
+warmup(state, reference), request(state, reference, updates=None), which raises while
+the previous request's plan is unread, result(block=False) -> Plan or None, N, dt,
+params and close().
 """
 from __future__ import annotations
 
@@ -57,14 +58,19 @@ class MpcParams:
     velocity_fraction: float = .8
     effort_fraction: float = .85
     friction: Friction | None = None  # predictor friction; None is loss-free
-    warmup: int = 0  # warm-up solves from the first request's state, before its plan
-    budget_s: float | None = None  # SQP wall budget per solve (MPCController.step); None: max_sqp_iters
+    # Wall time for a solve's SQP iterations (MPCController.step's budget_s), within
+    # solver.max_sqp_iters; None: no time limit. Wall clock only: simulations set None.
+    max_sqp_time_s: float | None = .01
+    warmup: bool = True  # Mpc.warmup runs GATO's warm-up solve before the first plan
 
     def __post_init__(self):
         if self.N < 2 or not math.isfinite(self.dt_s) or self.dt_s <= 0:
             raise ValueError("N must be >=2 and dt_s finite and positive")
-        if self.budget_s is not None and (not math.isfinite(self.budget_s) or self.budget_s <= 0):
-            raise ValueError("budget_s must be finite and positive")
+        if not isinstance(self.solver.max_sqp_iters, int) or self.solver.max_sqp_iters < 1:
+            raise ValueError("solver.max_sqp_iters must be a positive integer")
+        time = self.max_sqp_time_s
+        if time is not None and (not math.isfinite(time) or time <= 0):
+            raise ValueError("max_sqp_time_s must be finite and positive, or None")
         if self.friction is not None and self.friction.width_rad_s is None:
             raise ValueError("GATO predicts smooth Coulomb friction only; hard sign is plant-only")
 
@@ -278,16 +284,18 @@ class Mpc:
     """The GATO controller in this process: request solves, result returns the plan.
 
     binary is the GATO module for params (find_binary, compile_binary); Mpc loads exactly
-    it and never compiles. The first request resets the controller from its state (and
-    runs the warm-up solves); later requests never reset it. A fresh controller needs a
-    new Mpc, or controller.reset. ``controller`` is the raw GATO MPCController, ``step``
-    the raw GATO result of the latest solve (MPCController.step; None before the first).
+    it and never compiles. warmup resets the controller from its state and runs the
+    warm-up solve; without one, the first request resets it from its state. Later
+    requests never reset it. A fresh controller needs a new Mpc, or controller.reset.
+    ``controller`` is the raw GATO MPCController, ``step`` the raw GATO result of the
+    latest solve (MPCController.step; None before the first).
     """
 
     def __init__(self, params: MpcParams, binary: Path | None):
         self.controller, self.signs = load_controller(params, binary)
         self.params, self.N, self.dt = params, params.N, params.dt_s
         self.step: Any = None
+        self._reset = False  # the controller has been reset from a state
         self._previous_t: float | None = None
         self._plan: Plan | None = None
 
@@ -295,6 +303,15 @@ class Mpc:
     def compile(cls, params: MpcParams, use_cache: bool = True) -> Mpc:
         """Mpc on compile_binary(params, use_cache)."""
         return cls(params, compile_binary(params, use_cache))
+
+    def warmup(self, state: State, reference: np.ndarray) -> None:
+        """With params.warmup, reset the controller from state and run GATO's warm-up solve
+        (MPCController.warmup, the solver's own limits, no time limit); else nothing."""
+        if self.params.warmup:
+            x = self._x(state)
+            self.controller.reset(x)
+            self.controller.warmup(x, reference)
+            self._reset = True
 
     def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
         _known(updates)
@@ -309,23 +326,25 @@ class Mpc:
     def close(self) -> None:
         pass
 
-    def _solve(self, state, reference, updates):
+    def _x(self, state):
+        """The native state in GPU coordinates."""
         q, qd = np.asarray(state.q, dtype=float), np.asarray(state.qd, dtype=float)
         if q.shape != (7,) or qd.shape != (7,) or not np.isfinite(np.r_[q, qd]).all():
             raise ValueError("Measured state must contain seven finite native positions/velocities")
-        state_signs = np.tile(self.signs, 2)
-        x = np.r_[q, qd] * state_signs
+        return np.r_[q, qd] * np.tile(self.signs, 2)
+
+    def _solve(self, state, reference, updates):
+        x = self._x(state)
         for name, value in (updates or {}).items():
             UPDATES[name](self, value)
-        if self._previous_t is None:
+        if not self._reset:
             self.controller.reset(x)
-            for _ in range(self.params.warmup):
-                self.controller.warmup(x, reference)
+            self._reset = True
         # GATO uses dt_elapsed only to score hypotheses (none here).
         dt_elapsed = None if self._previous_t is None else state.t - self._previous_t
         self._previous_t = state.t
         self.step = step = self.controller.step(x, reference, dt_elapsed=dt_elapsed,
-                                                budget_s=self.params.budget_s)
+                                                budget_s=self.params.max_sqp_time_s)
         xu = np.asarray(step.xu_best, dtype=float).reshape(-1)
         if xu.size != self.N * 21 - 7:
             raise ValueError("Malformed GATO trajectory")
@@ -340,7 +359,8 @@ class Mpc:
             admm_linsys=int(np.sum(raw.admm_linsys_iters)) if raw.admm_linsys_iters is not None else 0,
             admm_linsys_mode=step.admm_linsys,
             row_viol=None if step.row_viol is None else np.array(step.row_viol))
-        return Plan(state.t, self.dt, knots[:, :14] * state_signs, knots[:-1, 14:] * self.signs, stats)
+        states = knots[:, :14] * np.tile(self.signs, 2)
+        return Plan(state.t, self.dt, states, knots[:-1, 14:] * self.signs, stats)
 
 
 _SPAWN = mp.get_context("spawn")
@@ -372,11 +392,19 @@ class MpcProcess:
         """This process compiles (compile_binary), the MPC process loads the module."""
         return cls(params, compile_binary(params, use_cache))
 
+    def warmup(self, state: State, reference: np.ndarray) -> None:
+        """Mpc.warmup in the MPC process; returns when it is done."""
+        if self._pending is not None:
+            raise RuntimeError("an MPC request is pending")
+        if self.params.warmup:
+            self._requests.put(("warmup", state, reference))
+            self._reply(block=True)
+
     def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
         _known(updates)
         if self._pending is not None:
             raise RuntimeError("an MPC request is pending")
-        self._requests.put((state, reference, updates))
+        self._requests.put(("_solve", state, reference, updates))
         self._pending = state.t
 
     def result(self, block: bool = False) -> Plan | None:
@@ -415,11 +443,13 @@ class MpcProcess:
 
 
 def _serve(params, binary, requests, replies):
-    """The process: load, reply None when ready (or the error), then one plan per request."""
+    """The process: load, reply None when ready (or the error), then one reply per
+    request: a plan, or None after the warm-up."""
     try:
         mpc = Mpc(params, binary)
         replies.put(None)
         while (item := requests.get()) is not None:
-            replies.put(mpc._solve(*item))
+            method, *args = item
+            replies.put(getattr(mpc, method)(*args))
     except Exception as exc:
         replies.put(f"{type(exc).__name__}: {exc}")

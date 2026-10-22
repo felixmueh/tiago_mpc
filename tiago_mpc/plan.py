@@ -100,13 +100,15 @@ class PlantInterface(Protocol):
 
 
 class MpcInterface(Protocol):
-    """Mpc and MpcProcess (mpc.py): plans of N knots dt apart. request raises while the
-    previous plan is unread; result returns a plan once, None while it is pending, and
-    raises if the solve failed."""
+    """Mpc and MpcProcess (mpc.py): plans of N knots dt apart. warmup prepares the
+    solver from a state before the first request and returns when done (nothing when
+    params.warmup is off); request raises while the previous plan is unread; result
+    returns a plan once, None while it is pending, and raises if the solve failed."""
     params: MpcParams
     N: int
     dt: float
 
+    def warmup(self, state: State, reference: np.ndarray) -> None: ...
     def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None: ...
     def result(self, block: bool = False) -> Plan | None: ...
     def close(self) -> None: ...

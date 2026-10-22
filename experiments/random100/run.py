@@ -22,7 +22,8 @@ from tiago_mpc.mpc import TIAGO, MpcProcess, compile_binary
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import FLANGE_FRAME, ROOT, fk
 
-PARAMS = replace(TIAGO, ee_frame=FLANGE_FRAME)  # the historical tasks track the flange
+PARAMS = replace(TIAGO, ee_frame=FLANGE_FRAME,  # the historical tasks track the flange
+                 max_sqp_time_s=None)  # no wall-time limit on the simulation clock
 
 
 def aggregate(out, rows, expected):

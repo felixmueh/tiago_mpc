@@ -170,7 +170,8 @@ def test_selected_current_bounds_map_native_joint_box_and_limit_fractions():
     np.testing.assert_allclose(rows[2][1], .85 * model.effortLimit)
 
 
-@pytest.mark.parametrize("change", [*(dict(budget_s=b) for b in (0., -1., np.nan, np.inf)),
+@pytest.mark.parametrize("change", [*(dict(max_sqp_time_s=b) for b in (0., -1., np.nan, np.inf)),
+                                    *(dict(solver=TIAGO.solver.replace(max_sqp_iters=n)) for n in (0, 2.5)),
                                     dict(friction=URDF_FRICTION)])  # hard sign: plant only
 def test_invalid_params_are_refused(change):
     with pytest.raises(ValueError):
@@ -180,7 +181,7 @@ def test_invalid_params_are_refused(change):
 # Both Mpc twins around a fake GATO controller: N = 3 knots, 10 ms.
 SIGNS = np.array([1., 1., 1., 1., 1., -1., 1.])
 N, DT = 3, .01
-PARAMS = replace(TIAGO, N=N, dt_s=DT, budget_s=.004)
+PARAMS = replace(TIAGO, N=N, dt_s=DT, max_sqp_time_s=.004)
 BINARY = Path("bsqpN3_fake.so")  # load_controller is faked
 REFERENCE = np.tile([.3, -.2, .1, 0., 0., 0.], (N, 1)).astype(np.float32)
 
@@ -242,17 +243,28 @@ def test_native_coordinates_cross_only_the_gpu_boundary(controller):
     assert m.result() is None  # one plan per request
 
 
-def test_first_request_resets_and_warms_up_once_and_dt_elapsed_follows_state_times(controller):
-    m = Mpc(replace(PARAMS, warmup=2), BINARY)
+def test_after_a_warmup_requests_never_reset_and_dt_elapsed_follows_state_times(controller):
+    m = Mpc(PARAMS, BINARY)
+    m.warmup(state(.5, scale=2.), REFERENCE)
     for t in (1., 1.013, 1.02):
         m.request(state(t, scale=t), REFERENCE)
         m.result()
     kinds = [event[0] for event in controller.events]
-    assert kinds == ["reset", "warmup", "warmup", "step", "step", "step"]
-    np.testing.assert_array_equal(controller.events[0][1][:7], state().q * SIGNS)
+    assert kinds == ["reset", "warmup", "step", "step", "step"]
+    for event in controller.events[:2]:
+        np.testing.assert_array_equal(event[1][:7], state(scale=2.).q * SIGNS)
     steps = [event for event in controller.events if event[0] == "step"]
     assert [event[3] for event in steps] == [None, pytest.approx(.013), pytest.approx(.007)]
-    assert all(event[4] == .004 for event in steps)
+    assert all(event[4] == .004 for event in steps)  # max_sqp_time_s
+
+
+def test_a_disabled_warmup_does_nothing_and_the_first_request_resets(controller):
+    m = Mpc(replace(PARAMS, warmup=False), BINARY)
+    m.warmup(state(.5, scale=2.), REFERENCE)
+    assert not controller.events
+    m.request(state(), REFERENCE)
+    assert [event[0] for event in controller.events] == ["reset", "step"]
+    np.testing.assert_array_equal(controller.events[0][1][:7], state().q * SIGNS)
 
 
 def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller):
@@ -347,6 +359,20 @@ def test_process_result_waits_for_its_reply(process, controller):
     controller.gate.set()
     plan = p.result(block=True)
     assert plan.t0 == 1. and plan.torques.shape == (N - 1, 7)
+
+
+def test_process_warmup_runs_in_the_worker_before_it_returns(process, controller):
+    p = process()
+    p.warmup(state(.5), REFERENCE)
+    assert [event[0] for event in controller.events] == ["reset", "warmup"]
+    p.request(state(), REFERENCE)
+    with pytest.raises(RuntimeError, match="pending"):
+        p.warmup(state(), REFERENCE)
+    assert p.result(block=True).t0 == 1.
+    assert [event[0] for event in controller.events] == ["reset", "warmup", "step"]
+    off = process(replace(PARAMS, warmup=False))
+    off.warmup(state(), REFERENCE)
+    assert off._requests.empty() and len(controller.events) == 3
 
 
 def test_process_rejects_a_reply_for_another_state(process, controller):

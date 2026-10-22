@@ -46,7 +46,11 @@ class Mpc:
     def __init__(self, N=11, dt=.01, delay=0, replies=math.inf, wall=0.):
         self.params, self.N, self.dt = None, N, dt
         self.delay, self.replies, self.wall = delay, replies, wall
-        self.requests, self.waiting, self.dead = [], None, False
+        self.warmups, self.requests, self.waiting, self.dead = [], [], None, False
+
+    def warmup(self, state, reference):
+        assert not self.requests and reference.shape == (self.N, 6)
+        self.warmups.append(state.t)
 
     def request(self, state, reference, updates=None):
         assert self.waiting is None, "a request is pending"
@@ -94,8 +98,9 @@ def commanded(ticks):
 
 
 def test_zero_latency_commands_each_plan_at_its_own_tick():
-    plant, ticks, done = go(Mpc(), duration=.03)
-    assert not done and plant.calls == ["start", "stop"]
+    mpc = Mpc()
+    plant, ticks, done = go(mpc, duration=.03)
+    assert not done and plant.calls == ["start", "stop"] and mpc.warmups == [0.]
     assert commanded(ticks) == [(0., 1.), (.01, 1.), (.02, 1.)]
     assert [k.new for k in ticks] == [True, True, True, False]
     assert ticks[-1].command is None and ticks[-1].t == pytest.approx(.03)
@@ -215,6 +220,19 @@ def test_after_a_short_blocking_solve_the_command_goes_out_at_the_time_after_it(
     _, ticks, _ = go(Blocking(plant, .012), loop=run_robot, plant=plant, duration=.03, update_period=1.)
     assert commanded(ticks) == [(.012, 2.), (.022, 3.)]
     assert [round(t, 6) for t, _ in plant.applied] == [.012, .022]
+
+
+def test_the_warmup_runs_once_before_the_first_tick_and_counts_against_no_lease():
+    """A 150 ms warm-up on a wall-like clock; the first plan starts at the state after it."""
+    class Warming(Mpc):
+        def warmup(self, state, reference):
+            super().warmup(state, reference)
+            plant.t += .15
+
+    plant, mpc = Plant(kind="wall"), Warming(N=32)
+    _, ticks, _ = go(mpc, loop=run_robot, plant=plant, duration=.05)
+    assert mpc.warmups == [0.] and [round(t, 6) for t, _ in mpc.requests][:2] == [.15, .16]
+    assert commanded(ticks)[0] == (.15, 1.) and plant.calls == ["start", "stop"]
 
 
 def test_each_loop_refuses_a_plant_on_the_other_clock():

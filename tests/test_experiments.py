@@ -49,6 +49,9 @@ class Mpc:
         model = pin.buildModelFromUrdf(str(ARM_URDF))
         self.model, self.data, self.plan = model, model.createData(), None
 
+    def warmup(self, state, reference):
+        pass
+
     def request(self, state, reference, updates=None):
         u = pin.rnea(self.model, self.data, state.q, np.zeros(7), np.zeros(7))
         stats = dict(solve_time_us=1., wall_s=.001, sqp=1, pcg=2, admm=3, admm_linsys=4,

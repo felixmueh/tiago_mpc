@@ -100,6 +100,8 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
 
     The task's t is counted from the first state's time: execution time for done
     and the duration, the state's time for at. Returns whether the task is done.
+    Before the first tick, mpc.warmup runs from the started plant's state, so its
+    time counts against no plan's lease.
     Ticks are command_period apart; a late tick skips the missed ones.
     The last tick, which sees the task done or the time up, sends no command but
     reaches the callbacks. Garbage collection pauses while it runs: a full
@@ -111,6 +113,7 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
     # enabled in between (e.g. collecting at safe points); to be discussed (todo.org).
     gc.disable()
     try:
+        mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])  # the arm is still held
         start = deadline = None
         while True:
             s, t = plant.state(), plant.now()  # measurement and execution time

@@ -3,6 +3,7 @@ exports it; arguments and launch are the command line of their mains."""
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from functools import partial
 import json
 from pathlib import Path
@@ -111,6 +112,7 @@ def launch(args, experiment, sim_plant, params):
     plant.stop()) unless --execute is confirmed; returns the Record or None."""
     if args.plant == "sim":
         plant, run = sim_plant(), partial(run_simulation, latency=args.latency)
+        params = replace(params, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
     else:
         if args.execute:
             print("Needs a stationary base and grippers and the arm at rest at comfortable_high_clearance;\n"
