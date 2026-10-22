@@ -45,8 +45,7 @@ class Record:
             repository_status=_git("status", "--short"),
             gato_commit=_git("rev-parse", "HEAD", cwd=ROOT / "external/gato"),
             versions={k: importlib.metadata.version(k) for k in ("gato-mpc", "grid-rbd", "pin", "numpy")},
-            params=asdict(params), plant=dict(type=type(plant).__name__, **plant.settings),
-            task=dict(type=type(task).__name__, **asdict(task)))
+            params=asdict(params), task=dict(type=type(task).__name__, **asdict(task)))
 
     def __call__(self, tick):
         self.ticks.append(tick)
@@ -72,7 +71,8 @@ class Record:
     def save(self):
         trajectory = self.trajectory()
         np.savez_compressed(self.out / "trajectory.npz", **trajectory, **self.arrays)
-        self.summary.update(ticks=len(self.ticks), plans=len(trajectory["plan_t0_s"]))
+        self.summary.update(ticks=len(self.ticks), plans=len(trajectory["plan_t0_s"]),
+                            plant=dict(type=type(self.plant).__name__, **self.plant.settings))  # after stop()
         (self.out / "summary.json").write_text(json.dumps(self.summary, indent=2, default=_json) + "\n")
         if len(self.ticks) >= 2:
             self._replay(trajectory)
@@ -99,6 +99,8 @@ def _json(value):
         return value.tolist()
     if isinstance(value, np.generic):
         return value.item()
+    if isinstance(value, Path):
+        return str(value)
     raise TypeError(type(value).__name__)
 
 

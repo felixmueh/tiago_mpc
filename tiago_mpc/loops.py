@@ -9,6 +9,7 @@ simulated clock, Fixed(s) or Measured().
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gc
 import math
 
 import numpy as np
@@ -94,11 +95,13 @@ def run(plant, mpc, task, law=sample_knot, safety=None, callbacks=(), *,
 
     t is the time since the first state. Returns whether the task is done. The
     last tick, which sees the task done or the time up, sends no command but
-    reaches the callbacks.
+    reaches the callbacks. Garbage collection pauses while it runs: a full
+    collection over the buffered ticks takes several milliseconds.
     """
     effort = np.asarray(mpc.details["effort_limits"], dtype=float)
     due, plan, pending = Schedule(update_period), None, None
     plant.start()  # startup checks on a fresh state
+    gc.disable()
     try:
         start = plant.state().t
         while True:
@@ -129,7 +132,10 @@ def run(plant, mpc, task, law=sample_knot, safety=None, callbacks=(), *,
                 return done
             plant.advance(s.t + command_period)  # robot: wait; simulation: integrate
     finally:
-        plant.stop()  # zero torque and handback, first
+        try:
+            plant.stop()  # zero torque and handback, first
+        finally:
+            gc.enable()
 
 
 def run_robot(*args, **kw):

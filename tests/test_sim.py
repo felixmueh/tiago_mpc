@@ -40,3 +40,21 @@ def test_realtime_waits_for_the_wall_clock(monkeypatch):
     plant.advance(.01)
     assert slept == [pytest.approx(.006)]
     assert plant.settings["clock"] == "wall"
+
+
+def test_run_robot_on_a_realtime_simplant():
+    """The robot's loop on the wall clock, with gravity-holding plans from a fake Mpc."""
+    import time
+    from dataclasses import replace
+    from test_experiments import Mpc
+    from test_loops import Task
+    from tiago_mpc.loops import run_robot
+    from tiago_mpc.mpc import TIAGO
+
+    plant, ticks = SimPlant(substep=.003, realtime=True), []
+    q0, start = plant.q.copy(), time.monotonic()
+    assert not run_robot(plant, Mpc(replace(TIAGO, N=8)), Task(), callbacks=[ticks.append],
+                         command_period=.01, update_period=.01, duration=.2)
+    assert time.monotonic() - start >= .2 and len(ticks) == 21
+    assert all(k.command is not None and k.new for k in ticks[:-1])
+    np.testing.assert_allclose(plant.q, q0, atol=1e-3)

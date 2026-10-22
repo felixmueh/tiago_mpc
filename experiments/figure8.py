@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Horizontal figure-eight tracking: friction in the plant (hard sign) and the predictor (tanh)."""
+"""Horizontal figure-eight tracking (robot: checks only by default).
+
+In simulation with friction in the plant (hard sign) and the predictor (tanh)."""
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass, replace
 from functools import partial
 import json
@@ -13,10 +14,10 @@ import traceback
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from experiments.reach import fk, latency, limit_excess, solve_summary
+from experiments.reach import arguments, fk, launch, limit_excess, solve_summary
 from tiago_mpc.joint_dynamics import urdf_friction
 from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import Fixed, run_simulation
+from tiago_mpc.loops import run_simulation
 from tiago_mpc.model_runtime import Q_CHECK
 from tiago_mpc.mpc import TIAGO, MpcWorker
 from tiago_mpc.record import Record
@@ -95,16 +96,13 @@ def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sampl
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plant", choices=("sim",), default="sim")
-    parser.add_argument("--latency", type=latency, default=Fixed(), help="seconds per solve, or 'measured'")
-    parser.add_argument("--command-period", type=float, help="seconds (default: the knot interval)")
-    parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
-    parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/figure8/)")
-    args = parser.parse_args(argv)
-    plant = SimPlant(substep=1e-4, friction=urdf_friction())
-    record = figure8(plant, run=partial(run_simulation, latency=args.latency), out=args.output,
-                     command_period=args.command_period, update_period=args.update_period)
+    args = arguments(__doc__, argv)
+    task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
+    record = launch(args, partial(figure8, task=task, out=args.output, command_period=args.command_period,
+                                  update_period=args.update_period),
+                    lambda: SimPlant(substep=1e-4, friction=urdf_friction()))
+    if record is None:
+        return 0
     print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},
                      indent=2, default=str))
     print(f"Saved {record.out}")

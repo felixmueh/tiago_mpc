@@ -174,3 +174,29 @@ def test_guard_rejects_nonfinite_and_excess_commands():
             guard(bad, plan, 0., EFFORT)
     with pytest.raises(RuntimeError, match="expired"):
         guard(np.ones(7), plan, .1, EFFORT)
+
+
+def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
+    """The loop body with sample_knot, guard, a Reach task and Record; fake plant and Mpc
+    (a new plan at every tick). Measured: median 0.06 ms, p99 0.08 ms, max 0.1 ms."""
+    import time
+    from experiments.reach import Reach
+    from tiago_mpc.mpc import TIAGO
+    from tiago_mpc.record import Record
+
+    class Timed(Plant):
+        settings = dict(clock="simulation")
+
+        def advance(self, t):
+            stamps.append(time.perf_counter())
+            super().advance(t)
+
+    stamps, plant, task = [], Timed(), Reach(timeout_s=10.)
+    record = Record(tmp_path / "r", task=task, params=TIAGO, plant=plant)
+    run_simulation(plant, Mpc(N=32, dt=.002), task, callbacks=[record], command_period=.002,
+                   update_period=.002, duration=2.)
+    body = np.diff(stamps) * 1e3
+    print(f"tick body ms: median {np.median(body):.3f}, p99 {np.percentile(body, 99):.3f}, max {body.max():.3f}")
+    assert len(body) == 999 and all(k.command is not None for k in record.ticks[:-1])
+    # One late tick is allowed for a loaded machine; a full garbage collection gives several.
+    assert np.median(body) < .5 and np.percentile(body, 99) < 1. and np.sum(body > 2.) <= 1

@@ -192,10 +192,13 @@ def test_abs_position_is_sufficient_without_optional_motor_channel(client):
     assert arm.latest_state().feedback_metadata["sea_motor_position"] is None
 
 
-def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client):
+def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client, monkeypatch):
     import queue
-    from tiago_mpc.runner import RunnerConfig, RuntimeGuard, safety_state
+    from tiago_mpc import robot
     from tiago_mpc.safety import AsyncSafetyMonitor
+    monkeypatch.setattr(robot, "TiagoRightArmClient", lambda **kw: client.arm)
+    monkeypatch.setattr(robot.time, "monotonic", lambda: client.clock.now)
+    safety_state = robot.safety_state
     arm = client.arm
     names = (*ros.RIGHT_ARM_JOINTS, "torso_lift_joint")
     arm._on_joint_state(message(1., 0., names=names))
@@ -203,10 +206,9 @@ def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client
     client.clock.now = 1.01
     arm._on_sea_state(message(1.01))
     first = arm.latest_state()
-    limits = dict(q_lower=[-3.]*7, q_upper=[3.]*7, velocity_limits=[2.5]*7,
-                  effort_limits=[26.]*7, N=32, dt_s=.01)
-    guard = RuntimeGuard(RunnerConfig(), first, limits)
-    guard.state(first, client.clock.now)
+    plant = robot.RosPlant()
+    plant._initial = first
+    plant._check(first)
     client.clock.now = 1.02
     body = message(1.02, 0., names=names)
     body.position[-1] = .201  # New body configuration, below runtime drift cutoff.
@@ -217,7 +219,7 @@ def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client
     assert merged.received_monotonic_sec == first.arm_received_monotonic_sec
     assert safety_state(merged).seq > safety_state(first).seq
     assert safety_state(merged).joint_positions["torso_lift_joint"] == .201
-    guard.state(merged, client.clock.now)  # Equal arm stamp remains valid for this arm seq.
+    plant._check(merged)  # Equal arm stamp remains valid for this arm seq.
     monitor = AsyncSafetyMonitor.__new__(AsyncSafetyMonitor)
     monitor.timeout_sec, monitor._closed = .05, False
     monitor.safety_fault = monitor.safety_message = ""

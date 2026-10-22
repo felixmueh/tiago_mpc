@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One position reach from the comfortable pose (simulation; the robot comes later)."""
+"""One position reach from the comfortable pose, in simulation or on the robot (checks only by default)."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import cache, partial
 import json
 from pathlib import Path
+import signal
 import sys
 import traceback
 
@@ -15,10 +16,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pinocchio as pin
 from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import Fixed, Measured, run_simulation
+from tiago_mpc.loops import Fixed, Measured, run_robot, run_simulation
 from tiago_mpc.model_runtime import EE_FRAME, Q_CHECK, Q_DELTA_CHECK, URDF, ee_position
 from tiago_mpc.mpc import TIAGO, MpcWorker
 from tiago_mpc.record import Record
+from tiago_mpc.robot import RosPlant
 from tiago_mpc.sim import SimPlant
 
 
@@ -116,16 +118,62 @@ def latency(text):
     return Measured() if text == "measured" else Fixed(float(text))
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plant", choices=("sim",), default="sim")
-    parser.add_argument("--latency", type=latency, default=Fixed(), help="seconds per solve, or 'measured'")
+def arguments(description, argv):
+    """The options of the experiments' mains."""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--plant", choices=("sim", "robot"), default="sim")
+    parser.add_argument("--execute", action="store_true",
+                        help="robot: effort control after typed confirmation (default: checks only)")
+    parser.add_argument("--sea-absolute", action="store_true", help="robot: SEA absolute-position feedback")
+    parser.add_argument("--target", nargs=3, type=float, metavar=("X_M", "Y_M", "Z_M"),
+                        help="reach target or figure-eight start, metres in torso_lift_link (required with --execute)")
+    parser.add_argument("--latency", type=latency, default=Fixed(), help="sim: seconds per solve, or 'measured'")
     parser.add_argument("--command-period", type=float, help="seconds (default: the knot interval)")
     parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
-    parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/reach/)")
+    parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/<task>/)")
     args = parser.parse_args(argv)
-    record = reach(SimPlant(substep=.003), run=partial(run_simulation, latency=args.latency), out=args.output,
-                   command_period=args.command_period, update_period=args.update_period)
+    if args.target is not None and not np.isfinite(args.target).all():
+        parser.error("--target must be finite")
+    if args.execute and (args.plant != "robot" or args.target is None):
+        parser.error("--execute needs --plant robot and an explicit --target")
+    return args
+
+
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt(f"signal {signum}")
+
+
+def launch(args, experiment, sim_plant):
+    """experiment(plant, run=...) on args.plant. The robot only runs the startup checks
+    (plant.start() and plant.stop()) unless --execute is confirmed; returns the Record or None."""
+    if args.plant == "sim":
+        return experiment(sim_plant(), run=partial(run_simulation, latency=args.latency))
+    if args.execute:
+        print("Needs a stationary base and grippers and the arm at rest at comfortable_high_clearance;\n"
+              "there is no automatic reset. The effort receiver's command timeout is unverified.")
+        if input("Type EXECUTE to enable supervised effort control: ").strip() != "EXECUTE":
+            print("Cancelled before creating the ROS client.")
+            raise SystemExit(2)
+    signal.signal(signal.SIGTERM, _interrupt)  # stop and hand back as on Ctrl-C
+    plant = RosPlant(execute=args.execute, sea_absolute=args.sea_absolute)
+    if args.execute:
+        return experiment(plant, run=run_robot)
+    try:
+        plant.start()
+        plant.stop()
+    finally:
+        plant.close()
+    print(json.dumps(dict(status="checked", plant=plant.settings), indent=2, default=str))
+    return None
+
+
+def main(argv=None):
+    args = arguments(__doc__, argv)
+    task = Reach() if args.target is None else Reach(tuple(args.target))
+    record = launch(args, partial(reach, task=task, out=args.output, command_period=args.command_period,
+                                  update_period=args.update_period), lambda: SimPlant(substep=.003))
+    if record is None:
+        return 0
     print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},
                      indent=2, default=str))
     print(f"Saved {record.out}")

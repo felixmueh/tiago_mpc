@@ -195,15 +195,16 @@ def test_bad_durations_and_nonfinite_commands_are_rejected(transport, bad):
 def test_loop_process_imports_no_ros_compiled_gato_or_pinocchio_for_the_mpc():
     # The loop process holds MpcParams (gato's SolverParams), so it imports gato's
     # Python package; the CUDA build and solves stay in the MPC worker process.
-    # Only the simulated plant loads Pinocchio.
+    # Only the plants (and the safety model) load Pinocchio; only RosPlant() loads ROS.
     import subprocess
     from pathlib import Path
     result = subprocess.run([sys.executable, '-c',
         'import sys\n'
-        'import tiago_mpc.ros2, tiago_mpc.runner, tiago_mpc.loops, tiago_mpc.mpc, tiago_mpc.record\n'
+        'import tiago_mpc.ros2, tiago_mpc.loops, tiago_mpc.mpc, tiago_mpc.record\n'
         'import tiago_mpc.plan, tiago_mpc.laws\n'
         'assert "rclpy" not in sys.modules and "pinocchio" not in sys.modules\n'
-        'import tiago_mpc.sim\n'
+        'import tiago_mpc.sim, tiago_mpc.robot\n'
+        'assert "rclpy" not in sys.modules\n'
         'compiled = [m for m, v in list(sys.modules.items())\n'
         '            if str(getattr(v, "__file__", "")).endswith(".so") and "gato" in str(v.__file__).lower()]\n'
         'assert not compiled, compiled'],
