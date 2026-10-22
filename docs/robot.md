@@ -113,11 +113,14 @@ as `State.t` (a comment in `RosPlant.__init__`); not implemented.
   (TODO in `ros2.py`). SIGKILL or a host crash skips the handback; what the
   robot's onboard controllers then do is unknown.
 - On the wall clock the plan in use expires 100 ms after its state; if the
-  next plan arrives later, the run faults. The default reach with
-  `SimPlant(clock=Clock.wall())`, which holds the arm until the first command,
-  faulted this way after 0.14 and 0.19 s in two runs: every SQP iteration of every
-  solve hit the ADMM iteration cap (41–49 ms per solve), so each plan arrived
-  about when the previous one's lease ended; `--latency measured` faulted after
-  0.23 s (2026-10-22).
+  next plan arrives later, the run faults. With the 10 ms solve-time limit and
+  the warm-up (42 ms: five SQP iterations, each at the ADMM iteration cap), the
+  default reach with `SimPlant(clock=Clock.wall())` no longer hit this fault in
+  two runs, but moved away from the target (6 cm to 20–24 cm, joint-speed L1
+  10–13 rad/s) and faulted after 0.32 and 0.39 s on a plan above the raw effort
+  limit. All but three solves stopped on the time limit after one or two SQP
+  iterations at the ADMM cap, taking 8–25 ms. Without the time limit, `--latency measured` still faulted on
+  the lease after 0.22 s (every solve five SQP iterations at the ADMM cap,
+  39–48 ms) (2026-10-22).
 - Startup needs a real full-body posture that passes the safety worker; the
   comfortable arm with every other joint at zero fails it ([safety.md](safety.md)).
