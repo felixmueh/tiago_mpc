@@ -29,13 +29,12 @@ cd /workspace/tiago_mpc
 ```
 
 GATO is a Git submodule in `external/gato`, pinned to commit
-`fa585971b71d69a001fb2f055010bba5dcd86f6b`, upstream **GATO 0.1.2**
-(`bd60b24`) plus our smooth-joint-friction, runtime-width and optional SQP
-trajectory-capture contributions. Its dependencies
+`f7be8b75dae562400f84816883e7bb848b9874fa`, upstream **GATO 0.1.2**
+(`bd60b24`) plus our opt-in smooth-joint-friction and runtime-width contributions. Its dependencies
 pin `grid-rbd==0.5.3`. The first run generates TIAGo dynamics and compiles just the
 N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The
-contribution provides configurable passive prediction; the reaching and tracking
-application defaults both enable friction and viscous damping. The submodule uses the published
+contribution adds opt-in passive prediction; default-off reaching retains
+the existing rigid-body model. The submodule uses the published
 `felixmueh/GATO` fork; its exact commit is pinned above. These contributions are
 based on upstream 0.1.2, not historical `felix-devel`.
 
@@ -62,9 +61,8 @@ Zero soft-limit weights remain explicit in both default configurations. GRiD
 0.5.3 still evaluates their barrier expressions; it provides no public switch to
 skip that work. This update leaves those calculations and ADMM unchanged.
 The 0.1.2 validation repeated one full default tracking cycle (26.536 mm RMS)
-and one then-default loss-free reach (.270 s to the existing 5 cm arrival gate);
-sampled raw limits passed, including all returned tracking plans. These checks
-predate the current reaching friction default. See `VERIFICATION.md`.
+and one default reach (.270 s to the existing 5 cm arrival gate); sampled raw
+limits passed, including all returned tracking plans. See `VERIFICATION.md`.
 
 ## The example
 
@@ -83,8 +81,6 @@ predate the current reaching friction default. See `VERIFICATION.md`.
 - Arrival: position error at most 5 cm and joint-speed L1 at most 1 rad/s;
   timeout 8 simulated seconds, no dwell or final-approach stage.
 - Position only: the tool orientation is unconstrained.
-- Actual right-arm Coulomb friction and viscous damping in both models: hard-sign
-  plant, tanh predictor with 0.03 rad/s smoothing. Armature remains inactive.
 
 The canonical full model is the current simulator robot description; its
 original bytes are retained separately. The full model carries both arms' supplied parameters; the reduction carries
@@ -100,25 +96,18 @@ flange's +Z axis, between the finger pads at zero gripper posture. See
 same coordinate convention used by the historical TIAGo wrapper: upstream's
 fixed-arm adapter assumes zero topology-helper storage, whereas a directly
 registered signed-axis model needs nonzero helper storage and traps on launch.
-Startup checks compare end-effector FK and GPU predictor values/Jacobians with
-the corresponding native Pinocchio model, including the configured passive
-forces. Reaching and tracking default to friction and viscous damping in both
-the simulated plant and MPC predictor. The plant subtracts the hard-sign passive
-torque at each RK4 stage; the predictor uses the smooth tanh law. These are
-explicit runtime choices in each task configuration, beyond the URDF tags.
-For a loss-free reaching comparison, copy the complete configuration, remove
-`joint_dynamics` and `predictor_smoothing_rad_s`, and select it with `--config`.
-Explicit historical configurations without these fields remain loss-free.
-The newly selected reaching friction default failed its first bounded native
-check: the initial prediction was finite, but after the first 10 ms control
-interval with the example's 3 ms RK4 substeps, the simulated state grew extremely
-large and the second prediction was nonfinite. A separate visualizer check with
-1 ms plant substeps and simulator-only friction also became unstable in its first
-10 ms interval. Both outcomes are retained in
-`../tiago_mpc_visualizer/_expr_data/friction/native/`. The cause has not been
-established; these defaults are not qualified for stable motion. Earlier
-loss-free reaching checks do not qualify them. No timestep or solver tuning was
-applied, and no physical robot qualification is implied.
+Startup checks compare end-effector FK and one GPU/Pinocchio dynamics step at
+both task poses before starting the MPC loop. By default, reaching uses
+rigid-body dynamics without passive joint damping/friction in both the plant and
+the predictor. Losses are opt-in: add `joint_dynamics` and
+`predictor_smoothing_rad_s` (as in `configs/tracking.json`) to a reaching
+configuration for hard-sign losses in the plant and the smooth tanh law in the
+predictor. Such a run became unstable in its first 10 ms control interval on
+2026-10-22. The visualizer's
+[friction diagnosis](../tiago_mpc_visualizer/docs/friction.md) attributes this
+to viscous damping against joint 7's link-only inertia, which is stiff for
+explicit 3 ms RK4 steps. Friction-enabled reaching is not qualified. No
+physical-model validation is implied.
 
 ```bash
 # Build/codegen and check model conventions, without a reaching episode:
@@ -301,8 +290,7 @@ Use `experiments/tools.py:save_replay` for the shared interactive viewer handoff
 see `../tiago_mpc_visualizer/docs/replay-format.md`. The completed experiment
 branches and their raw results were removed at Felix's request after
 the decisions were integrated or discarded. Reaching also uses running/terminal
-XYZ weights 4/8 and now enables the same actual joint losses in both models;
-its other task-specific settings are unchanged.
+XYZ weights 4/8; its other task-specific settings are unchanged.
 
 The historical 4/8 tracking episode used application source `b582309` and final
 study commit `199c899`. Its raw run, report and viewer replay were deleted at
@@ -312,10 +300,9 @@ configuration description and removal of the unused historical hard-predictor
 adapter differ.
 
 The one 4/8 reaching sanity episode stopped on the existing 5 cm arrival
-gate (49.830 mm final error, speed L1 .624 rad/s), not after settling. That
-historical episode used loss-free plant and predictor dynamics and does not
-qualify the current friction-enabled reaching default. It used integration
-source `4dde1f8`; its raw run and viewer replay
+gate (49.830 mm final error, speed L1 .624 rad/s), not after settling. Reaching
+continues to use rigid-body plant and predictor dynamics with passive forces
+inactive. It used integration source `4dde1f8`; its raw run and viewer replay
 were also deleted during the authorized cleanup. Run a fresh episode and export
 it with `experiments/tools.py:save_replay` to inspect the current defaults.
 

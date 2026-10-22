@@ -33,7 +33,7 @@ def test_tracking_configuration_keeps_weights_limits_and_explicit_smooth_losses(
     assert losses == {**settings["joint_dynamics"], "model": "coulomb_tanh_viscous",
                       "smoothing_rad_s": .03}
     _, _, reaching = load_configuration(None)
-    assert reaching["prediction_joint_dynamics"] == losses
+    assert reaching["prediction_joint_dynamics"] is None
     assert reaching["dt_s"] == .01
 
 

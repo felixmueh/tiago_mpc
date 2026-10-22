@@ -98,9 +98,8 @@ anchor, with the selected 2 cm +X edge clearance, 28 cm x span, 9 cm y amplitude
 and 24 s period. Use `--duration 24` for a cycle. The selected configuration
 provides 4/8 XYZ costs, ADMM-only limits and the smooth friction/damping
 predictor (width .03 rad/s). Physical feedback is measured; no simulated plant
-or passive torque is applied in the ROS I/O process. Reaching also selects the
-smooth friction/damping predictor at .03 rad/s in `configs/reaching.json`.
-No ROS tracking or new reaching-friction qualification is claimed.
+or passive torque is applied in the ROS I/O process. Reaching retains its own
+loss-free predictor default. No ROS tracking qualification is claimed.
 Orientation remains unconstrained.
 The I/O loop still uses its explicit 10 ms default, independently of the
 tracking predictor's 2 ms knots; this does not promise a 2 ms ROS update rate.

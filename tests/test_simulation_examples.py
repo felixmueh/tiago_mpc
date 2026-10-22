@@ -25,16 +25,17 @@ def output_root():
 
 
 def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch,
-                      *, duration=.03, period=.01, loss_free=False):
+                      *, duration=.03, period=.01, with_losses=False):
     spec = importlib.util.spec_from_file_location(example, ROOT / "examples" / f"{example}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     tracking = example == "track_figure8"
     settings = json.loads((ROOT / "configs" / ("tracking.json" if tracking else "reaching.json")).read_text())
     settings.update(N=2, dt_s=period)
-    if loss_free:
-        settings.pop("joint_dynamics")
-        settings.pop("predictor_smoothing_rad_s")
+    if with_losses:  # opt-in reaching friction, with tracking's coefficients and width
+        tracking_settings = json.loads((ROOT / "configs/tracking.json").read_text())
+        settings.update({key: tracking_settings[key]
+                         for key in ("joint_dynamics", "predictor_smoothing_rad_s")})
     if tracking:
         settings.update(sim_dt_s=min(.003, period), duration_s=duration, secondary_metrics_start_s=.01)
         settings["figure8"]["period_s"] = duration
@@ -78,7 +79,7 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
     def build(effective, **kwargs):
         if tracking:
             assert effective["prediction_joint_dynamics"] is None
-        elif loss_free:
+        elif not with_losses:
             assert effective["prediction_joint_dynamics"] is None
         else:
             assert effective["prediction_joint_dynamics"] == {
@@ -96,7 +97,7 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
     if not tracking:
         summary = json.loads((out / "summary.json").read_text())
         assert summary["simulator_joint_dynamics"] == settings.get("joint_dynamics")
-        assert (summary["prediction_joint_dynamics"] is None) == loss_free
+        assert (summary["prediction_joint_dynamics"] is None) == (not with_losses)
     if tracking:
         joint = ET.parse(out / "plant.urdf").find(".//joint[@name='arm_right_1_joint']/dynamics")
         assert float(joint.get("friction")) == 1.234
@@ -144,6 +145,6 @@ def test_default_tracking_clock_does_not_add_a_roundoff_solve(output_root, monke
                       output_root, monkeypatch, duration=24., period=.002)
 
 
-def test_explicit_legacy_reaching_configuration_keeps_loss_free_plant(output_root, monkeypatch):
+def test_opt_in_reaching_losses_reach_plant_and_predictor(output_root, monkeypatch):
     run_example_check("reach_sim", "fixed", 0., .001, [0., .01, .02],
-                      output_root, monkeypatch, loss_free=True)
+                      output_root, monkeypatch, with_losses=True)
