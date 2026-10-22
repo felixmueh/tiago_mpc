@@ -15,10 +15,15 @@ import importlib.metadata
 import json
 from pathlib import Path
 import subprocess
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .plan import Plant, Task, Tick
 from .tiago import ROOT
+
+if TYPE_CHECKING:
+    from .mpc import MpcParams
 
 
 def _git(*args, cwd=ROOT):
@@ -28,12 +33,13 @@ def _git(*args, cwd=ROOT):
 class Record:
     """Record(out, task, params, plant); out=None is _expr_data/<task>/<UTC time>."""
 
-    def __init__(self, out, task, params, plant):
+    def __init__(self, out: str | Path | None, task: Task, params: MpcParams, plant: Plant):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         self.out = Path(out) if out else ROOT / "_expr_data" / type(task).__name__.lower() / stamp
         self.out.mkdir(parents=True, exist_ok=False)
         self.task, self.params, self.plant = task, params, plant
-        self.ticks, self.arrays = [], {}
+        self.ticks: list[Tick] = []
+        self.arrays: dict[str, np.ndarray] = {}  # the experiment's, saved with the trajectory
         self.summary = dict(
             status="running", repository_commit=_git("rev-parse", "HEAD"),
             repository_status=_git("status", "--short"),
@@ -41,7 +47,7 @@ class Record:
             versions={k: importlib.metadata.version(k) for k in ("gato-mpc", "grid-rbd", "pin", "numpy")},
             params=asdict(params), task=dict(type=type(task).__name__, **asdict(task)))
 
-    def __call__(self, tick):
+    def __call__(self, tick: Tick) -> None:
         self.ticks.append(tick)
 
     @cached_property

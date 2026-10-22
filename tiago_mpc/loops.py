@@ -9,14 +9,16 @@ latency on the simulation clock, Fixed(s) or Measured().
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import gc
 import math
+from typing import Any
 
 import numpy as np
 
 from .laws import sample_knot
-from .plan import Tick
+from .plan import Callback, Law, MpcLike, Plan, Plant, Task, Tick
 from .tiago import limits
 
 LEASE_S = .1  # a plan may be commanded at most this long after its state's time
@@ -28,7 +30,7 @@ class Fixed:
     """Charge every solve s seconds; zero makes the plan take effect at its own tick."""
     s: float = 0.
 
-    def charge(self, plan):
+    def charge(self, plan: Plan) -> float:
         return self.s
 
 
@@ -36,7 +38,7 @@ class Fixed:
 class Measured:
     """Charge each solve its own wall time (MPCController.step; warm-up solves excluded)."""
 
-    def charge(self, plan):
+    def charge(self, plan: Plan) -> float:
         return plan.stats["wall_s"]
 
 
@@ -77,7 +79,7 @@ class Pending:
         return self.plan if now >= self.at - _TOLERANCE else None
 
 
-def guard(command, plan, t):
+def guard(command: np.ndarray, plan: Plan, t: float) -> np.ndarray:
     """The command, if finite and within the raw effort limits, while the plan's lease lasts.
 
     The lease ends at t0 + min(100 ms, the plan's length), so no plan is commanded
@@ -91,8 +93,9 @@ def guard(command, plan, t):
     return command
 
 
-def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
-        command_period, update_period, duration, latency=None):
+def run(plant: Plant, mpc: MpcLike, task: Task, law: Law = sample_knot,
+        callbacks: Sequence[Callback] = (), *, command_period: float, update_period: float,
+        duration: float, latency: Fixed | Measured | None = None) -> bool:
     """Run task on plant until task.done(state, t) or for duration seconds.
 
     The task's t is counted from the first state's time: execution time for done
@@ -144,14 +147,14 @@ def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
             gc.enable()
 
 
-def run_robot(plant, *args, **kw):
+def run_robot(plant: Plant, *args: Any, **kw: Any) -> bool:
     """Wall clock: the robot, Gazebo or SimPlant(clock=Clock.wall()); plans are used on arrival."""
     if plant.clock.kind == "simulation":
         raise ValueError("run_robot needs a wall or external clock; use run_simulation")
     return run(plant, *args, latency=None, **kw)
 
 
-def run_simulation(plant, *args, latency=Fixed(), **kw):
+def run_simulation(plant: Plant, *args: Any, latency: Fixed | Measured = Fixed(), **kw: Any) -> bool:
     """Simulated clock: each solve is charged latency, Fixed(s) or Measured()."""
     if plant.clock.kind != "simulation":
         raise ValueError("run_simulation needs a simulation clock; use run_robot")

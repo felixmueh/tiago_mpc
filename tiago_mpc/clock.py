@@ -9,30 +9,32 @@ from __future__ import annotations
 
 import math
 import time
+from typing import Literal
 
 
 class Clock:
     """now() is the current execution time; wall_time() the monotonic wall time (for
     measuring computation), whatever the domain."""
 
-    def __init__(self, kind):
-        self.kind, self._t = kind, None
+    def __init__(self, kind: Literal["wall", "simulation", "external"]):
+        self.kind = kind
+        self._t: float | None = None
 
     @classmethod
-    def wall(cls):
+    def wall(cls) -> Clock:
         return cls("wall")
 
     @classmethod
-    def simulation(cls, start=0.):
+    def simulation(cls, start: float = 0.) -> Clock:
         clock = cls("simulation")
         clock._set(start)
         return clock
 
     @classmethod
-    def external(cls):
+    def external(cls) -> Clock:
         return cls("external")
 
-    def now(self):
+    def now(self) -> float:
         if self.kind == "wall":
             return time.monotonic()
         if self._t is None:
@@ -40,15 +42,15 @@ class Clock:
         return self._t
 
     @staticmethod
-    def wall_time():
+    def wall_time() -> float:
         return time.monotonic()
 
-    def advance(self, dt):
+    def advance(self, dt: float) -> None:
         if self.kind != "simulation":
             raise RuntimeError(f"a {self.kind} clock cannot be advanced")
-        self._set(self._t + dt)
+        self._set(self.now() + dt)
 
-    def update(self, t):
+    def update(self, t: float) -> None:
         if self.kind != "external":
             raise RuntimeError(f"a {self.kind} clock cannot be updated")
         self._set(t)

@@ -1,4 +1,6 @@
-"""The plant's state, the MPC's plan and the loop's tick.
+"""The plant's state, the MPC's plan and the loop's tick, and the interfaces of the
+pieces: the protocols a plant, an MPC and a task satisfy (structurally, checked by
+mypy, never at run time) and the types of a control law and a callback.
 
 A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
 (native coordinates), its knot interval dt and its start time t0: the time of
@@ -8,10 +10,17 @@ no torque (PlanEnded).
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import math
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import numpy as np
+
+from .clock import Clock
+
+if TYPE_CHECKING:
+    from .mpc import MpcParams
 
 # Knot boundaries computed as k * dt must select knot k despite rounding
 # (a fraction of one knot interval).
@@ -71,3 +80,49 @@ class Tick:
     command: np.ndarray | None
     plan: Plan | None
     new: bool
+
+
+class Plant(Protocol):
+    """SimPlant (sim.py) and RosPlant (robot.py). run starts it, then per command tick
+    reads its state and execution time (now), applies a command, which it holds, and
+    advances to the next tick; stop comes first on exit (zero torque, handback).
+    settings: what Record saves about it."""
+    clock: Clock
+    settings: dict[str, Any]
+
+    def start(self) -> None: ...
+    def now(self) -> float: ...
+    def state(self) -> State: ...
+    def apply(self, command: np.ndarray) -> None: ...
+    def advance(self, t: float) -> None: ...
+    def stop(self) -> None: ...
+    def close(self) -> None: ...
+
+
+class MpcLike(Protocol):
+    """Mpc and MpcProcess (mpc.py): plans of N knots dt apart. request raises while the
+    previous plan is unread; result returns a plan once, None while it is pending, and
+    raises if the solve failed."""
+    params: MpcParams
+    N: int
+    dt: float
+
+    def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None: ...
+    def result(self, block: bool = False) -> Plan | None: ...
+    def close(self) -> None: ...
+
+
+class Task(Protocol):
+    """A frozen dataclass; t counts from the run's first state. reference: the (n, 6)
+    end-effector reference at the n knots dt apart from t; done: whether it is met.
+
+    A task may add updates(t) -> dict: named solver changes (mpc.UPDATES) for the
+    request at t. A protocol cannot declare an optional method; run looks it up."""
+    __dataclass_fields__: ClassVar[dict[str, Any]]  # a dataclass: Record saves its fields
+
+    def reference(self, t: float, n: int, dt: float) -> np.ndarray: ...
+    def done(self, state: State, t: float) -> bool: ...
+
+
+Law = Callable[[Plan, float, State], np.ndarray]  # law(plan, t, state) -> command (laws.py)
+Callback = Callable[[Tick], None]  # sees every command tick, e.g. a Record

@@ -16,6 +16,7 @@ import time
 from typing import Any, Callable, Sequence
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from .tiago import RIGHT_ARM_JOINTS
 
@@ -107,7 +108,7 @@ def _duration_msg(ros: dict[str, Any], seconds: float) -> Any:
     return duration
 
 
-def _vector(values: Sequence[float], *, size: int, name: str) -> list[float]:
+def _vector(values: ArrayLike, *, size: int, name: str) -> list[float]:
     arr = np.asarray(values, dtype=np.float64).reshape(-1)
     if arr.size != size:
         raise ValueError(f"{name} must contain {size} values, got {arr.size}")
@@ -182,9 +183,9 @@ class TiagoRightArmClient:
         # Resolve the optional dependency before creating a node or any controller RPC.
         sea_type = _sea_state_type() if sea_absolute else None
         self.sea_absolute = bool(sea_absolute)
-        self._sea_estimator = SeaAbsoluteVelocityEstimator() if self.sea_absolute else None
-        self._body_state = None
-        self._sea_state = None
+        self._sea_estimator = SeaAbsoluteVelocityEstimator()  # used only with sea_absolute
+        self._body_state: tuple[float, float, dict[str, float], dict[str, float]] | None = None
+        self._sea_state: tuple[np.ndarray, np.ndarray, float, float, int] | None = None
         self.rclpy = self.ros["rclpy"]
         self._owns_rclpy = False
         if not self.rclpy.ok():
@@ -374,7 +375,7 @@ class TiagoRightArmClient:
             return None
         return self._latest_state
 
-    def publish_effort(self, torques: Sequence[float]) -> None:
+    def publish_effort(self, torques: ArrayLike) -> None:
         msg = self.ros["Float64MultiArray"]()
         msg.data = _vector(torques, size=len(self.joint_names), name="torques")
         self._effort_pub.publish(msg)

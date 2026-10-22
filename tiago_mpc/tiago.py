@@ -50,7 +50,7 @@ def _arm():
 
 
 @cache
-def limits():
+def limits() -> Limits:
     """The reduced arm URDF's raw limits (read-only)."""
     model = _arm()[0]
     arrays = [np.array(a) for a in (model.lowerPositionLimit, model.upperPositionLimit,
@@ -60,13 +60,13 @@ def limits():
     return Limits(*arrays)
 
 
-def urdf_friction(width_rad_s=None):
+def urdf_friction(width_rad_s: float | None = None) -> Friction:
     """The reduced arm URDF's friction and damping coefficients (the only default)."""
     model = _arm()[0]
     return Friction(tuple(model.friction), tuple(model.damping), width_rad_s)
 
 
-def fk(q, frame=GRASP_FRAME):
+def fk(q: np.ndarray, frame: str = GRASP_FRAME) -> np.ndarray:
     """Position of frame in ROOT_FRAME, metres."""
     import pinocchio as pin
     model, data = _arm()

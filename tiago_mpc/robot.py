@@ -12,13 +12,14 @@ from dataclasses import asdict, dataclass
 import math
 import os
 import time
+from typing import Any
 
 import numpy as np
 
 from .clock import Clock
 from .loops import LEASE_S
 from .plan import State
-from .ros2 import TiagoRightArmClient
+from .ros2 import ArmState, TiagoRightArmClient
 from .safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState
 from .tiago import Q_START, RIGHT_ARM_JOINTS, limits
 
@@ -40,7 +41,7 @@ class Checks:
                 raise ValueError(f"{name} must be finite and positive")
 
 
-def safety_state(s):
+def safety_state(s: ArmState) -> SafetyCheckState:
     """The safety worker's view of an ArmState; SEA body-only updates have their own seq."""
     if not s.joint_positions or not s.joint_velocities:
         raise RuntimeError("full named body positions and velocities are required")
@@ -58,23 +59,25 @@ class RosPlant:
     ROS_DISTRO, and after stop() whether the arm was handed back (restored).
     """
 
-    def __init__(self, execute=False, *, checks=Checks(), safety=CollisionSafetySettings(),
-                 sea_absolute=False):
+    def __init__(self, execute: bool = False, *, checks: Checks = Checks(),
+                 safety: CollisionSafetySettings = CollisionSafetySettings(), sea_absolute: bool = False):
         if not safety.enabled or tuple(safety.controlled_joint_names) != RIGHT_ARM_JOINTS:
             raise ValueError("the robot needs the safety worker on the controlled right-arm joints")
         self.execute, self.checks, self.safety = execute, checks, safety
         # Gazebo would use Clock.external() fed from /clock, with the ROS stamps as State.t.
         self.clock = Clock.wall()
-        self.settings = dict(clock=self.clock.kind, execute=execute, sea_absolute=sea_absolute,
-                             checks=asdict(checks), safety=asdict(safety),
-                             ros_distro=os.environ.get("ROS_DISTRO"),
-                             activated=False, restored=None, cleanup_errors=[])
-        self.monitor = self._initial = self._last = None
+        self.settings: dict[str, Any] = dict(
+            clock=self.clock.kind, execute=execute, sea_absolute=sea_absolute, checks=asdict(checks),
+            safety=asdict(safety), ros_distro=os.environ.get("ROS_DISTRO"),
+            activated=False, restored=None, cleanup_errors=[])
+        self.monitor: AsyncSafetyMonitor | None = None
+        self._initial: ArmState | None = None
+        self._last: ArmState | None = None
         self._seq, self._stamp = -1, None
         self._activated = self._uncertain = False
         self.client = TiagoRightArmClient(sea_absolute=sea_absolute)
 
-    def start(self):
+    def start(self) -> None:
         """Startup checks on a fresh state: the safety worker's initial check, PAL's
         position controller in charge, the arm at rest at the comfortable pose.
         execute=True also loads and configures the effort controller (no switch)."""
@@ -91,25 +94,25 @@ class RosPlant:
         self._ready(self._check(self._initial))
         self._last = self._initial
 
-    def now(self):
+    def now(self) -> float:
         return self.clock.now()
 
-    def state(self):
+    def state(self) -> State:
         """The checked state, t its monotonic receipt time."""
         self._last = s = self._fresh()
         return State(s.received_monotonic_sec, s.q, s.qd, s.joint_positions, s.joint_velocities)
 
-    def apply(self, command):
+    def apply(self, command: np.ndarray) -> None:
         if self._activated:
             self.client.publish_effort(command)
         else:
             self._activate(command)
 
-    def advance(self, t):
+    def advance(self, t: float) -> None:
         """Wait until the clock reaches t; late: return at once."""
         time.sleep(max(0., t - self.clock.now()))
 
-    def stop(self):
+    def stop(self) -> None:
         """Zero torque and handback to PAL's position controller; nothing before activation.
 
         Raises if a step failed or the handback is uncertain (settings: cleanup_errors)."""
@@ -136,7 +139,7 @@ class RosPlant:
         if errors:
             raise RuntimeError("; ".join(errors))
 
-    def close(self):
+    def close(self) -> None:
         try:
             if self.monitor is not None:
                 self.monitor.close()

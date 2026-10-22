@@ -28,7 +28,7 @@ class Friction:
             raise ValueError("width_rad_s must be finite and positive")
 
 
-def passive_torque(velocity, friction):
+def passive_torque(velocity: np.ndarray, friction: Friction | None) -> np.ndarray:
     """Positive resisting bias: subtract from actuator torque before ABA."""
     v = np.asarray(velocity, dtype=float)
     if friction is None:
@@ -37,7 +37,8 @@ def passive_torque(velocity, friction):
     return np.asarray(friction.viscous_nm_s_per_rad)*v + np.asarray(friction.coulomb_nm)*coulomb
 
 
-def plant_rk4(model, data, q, velocity, actuator_torque, dt, friction):
+def plant_rk4(model, data, q: np.ndarray, velocity: np.ndarray, actuator_torque: np.ndarray,
+              dt: float, friction: Friction) -> tuple[np.ndarray, np.ndarray]:
     """Native-coordinate RK4 with passive torque recomputed at every stage."""
     import pinocchio as pin
 

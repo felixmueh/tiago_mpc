@@ -16,12 +16,13 @@ import os
 from pathlib import Path
 import queue
 import sys
+from typing import Any
 
 from gato import SolverParams
 import numpy as np
 
 from .dynamics import Friction, passive_torque
-from .plan import Plan
+from .plan import Plan, State
 from .tiago import ARM_URDF, GRASP_FRAME, Q_REACH, Q_START, ROOT, digest, fk, limits, runtime_urdf
 
 
@@ -67,7 +68,7 @@ class MpcParams:
             raise ValueError("GATO predicts smooth Coulomb friction only; hard sign is plant-only")
 
     @classmethod
-    def from_dict(cls, values):
+    def from_dict(cls, values: dict[str, Any]) -> MpcParams:
         """Inverse of dataclasses.asdict, also after a JSON round trip."""
         values = dict(values, solver=SolverParams(**values["solver"]),
                       admm=AdmmLimits(**values["admm"]))
@@ -107,7 +108,7 @@ def cache_root() -> Path:
 # GATO compiles one CUDA module per registered plant name and N (minutes). A fixed name
 # per variant would let two variants overwrite each other in a shared cache, so the
 # name hashes everything compiled into the module. The hash is a cache key, not provenance.
-def plant_name(gpu_urdf_path, ee_frame: str, friction=None) -> str:
+def plant_name(gpu_urdf_path: Path, ee_frame: str, friction: Friction | None = None) -> str:
     """tiago_right_<hash> over the GPU URDF bytes, end-effector frame and predictor
     friction as passed to registration (coefficients and width)."""
     config = json.dumps(friction and asdict(friction), sort_keys=True).encode()
@@ -213,22 +214,23 @@ class Mpc:
     or controller.reset. ``controller`` is the raw GATO MPCController.
     """
 
-    def __init__(self, params):
+    def __init__(self, params: MpcParams):
         self.controller, self.signs = build_controller(params)
         self.params, self.N, self.dt = params, params.N, params.dt_s
-        self._previous_t = self._plan = None
+        self._previous_t: float | None = None
+        self._plan: Plan | None = None
 
-    def request(self, state, reference, updates=None):
+    def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
         _known(updates)
         if self._plan is not None:
             raise RuntimeError("an MPC request is pending")
         self._plan = self._solve(state, reference, updates)
 
-    def result(self, block=False):
+    def result(self, block: bool = False) -> Plan | None:
         plan, self._plan = self._plan, None
         return None if plan is None else _checked(self, plan, plan.t0)
 
-    def close(self):
+    def close(self) -> None:
         pass
 
     def _solve(self, state, reference, updates):
@@ -275,27 +277,27 @@ class MpcProcess:
     that reply, and on a dead process, at the next call.
     """
 
-    def __init__(self, params):
+    def __init__(self, params: MpcParams):
         self.params, self.N, self.dt = params, params.N, params.dt_s
         self._requests, self._replies = _SPAWN.Queue(), _SPAWN.Queue()
         self._process = _SPAWN.Process(target=_serve, args=(params, self._requests, self._replies),
                                        daemon=True)
         self._process.start()
-        self._pending = None  # the outstanding request's state time
+        self._pending: float | None = None  # the outstanding request's state time
         try:
             self._reply(block=True)  # ready
         except BaseException:
             self.close()
             raise
 
-    def request(self, state, reference, updates=None):
+    def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
         _known(updates)
         if self._pending is not None:
             raise RuntimeError("an MPC request is pending")
         self._requests.put((state, reference, updates))
         self._pending = state.t
 
-    def result(self, block=False):
+    def result(self, block: bool = False) -> Plan | None:
         reply = self._reply(block and self._pending is not None)
         if reply is None:
             return None
@@ -304,7 +306,7 @@ class MpcProcess:
         t, self._pending = self._pending, None
         return _checked(self, reply, t)
 
-    def close(self):
+    def close(self) -> None:
         if self._process.is_alive():
             self._requests.put(None)
             self._process.join(1.)
