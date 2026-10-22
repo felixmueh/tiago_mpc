@@ -112,8 +112,8 @@ as `State.t` (a comment in `RosPlant.__init__`); not implemented.
   robot's onboard controllers then do is unknown.
 - On the wall clock the plan in use expires 100 ms after its state; if the
   next plan arrives later, the run faults. The default reach with
-  `SimPlant(clock=Clock.wall())` faulted this way after 0.38 s, when one solve
-  hit the ADMM iteration cap (61 ms); `--latency measured` reproduces it
-  (2026-10-22).
+  `SimPlant(clock=Clock.wall())` faulted this way after about 0.35 s
+  (0.34–0.38 s in two runs), when one solve hit the ADMM iteration cap (46–61 ms);
+  `--latency measured` reproduces it (2026-10-22).
 - Startup needs a real full-body posture that passes the safety worker; the
   comfortable arm with every other joint at zero fails it ([safety.md](safety.md)).
