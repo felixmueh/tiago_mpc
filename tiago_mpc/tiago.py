@@ -27,8 +27,10 @@ RIGHT_ARM_JOINTS = tuple(f"arm_right_{i}_joint" for i in range(1, 8))  # native 
 ROOT_FRAME = "torso_lift_link"  # the reduced arm's fixed root; positions are in this frame
 GRASP_FRAME = "arm_right_grasp_joint"  # nominal grasp center, the default end effector
 FLANGE_FRAME = "arm_right_tool_joint"
-# PAL's comfortable_high_clearance: runs start here at rest (checked on the robot).
-Q_START = np.array([-0.39, -1.73, -0.38, -2.35, 0.0, -1.21, 0.04])
+# Runs start here at rest (checked on the robot): PAL's comfortable_high_clearance with
+# joint 4 at -2.33 instead of -2.35, inside the MPC's planning box (its lower limit -2.4435
+# plus MpcParams.joint_margin_rad 0.1).
+Q_START = np.array([-0.39, -1.73, -0.38, -2.33, 0.0, -1.21, 0.04])
 # A nearby posture: the default reach target's, and the model check's second pose.
 Q_REACH = Q_START + np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
 

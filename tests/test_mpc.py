@@ -21,7 +21,7 @@ from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.plan import Plan, State
-from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, urdf_friction
+from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
 LOSSES = Friction([1.] * 7, [.5] * 7, .03)
@@ -168,6 +168,12 @@ def test_selected_current_bounds_map_native_joint_box_and_limit_fractions():
     assert rows[0][0][0] == -1.9 and rows[0][1][0] == 2.9
     np.testing.assert_allclose(rows[1][1], .8 * model.velocityLimit)
     np.testing.assert_allclose(rows[2][1], .85 * model.effortLimit)
+
+
+def test_the_start_pose_lies_inside_the_planning_box():
+    """Outside it, every solve worked at the ADMM cap once latency skipped knot 0."""
+    raw, margin = limits(), TIAGO.joint_margin_rad
+    assert np.all(raw.lower + margin < Q_START) and np.all(Q_START < raw.upper - margin)
 
 
 @pytest.mark.parametrize("change", [*(dict(max_sqp_time_s=b) for b in (0., -1., np.nan, np.inf)),
