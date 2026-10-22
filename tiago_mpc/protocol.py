@@ -1,12 +1,10 @@
-"""ROS-free messages shared by the I/O process and its MPC worker."""
+"""Task references; they move into the experiments with the loop."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 
 import numpy as np
-
-from .ros2 import ArmState
 
 
 @dataclass(frozen=True)
@@ -17,7 +15,6 @@ class TaskReference:
     """
 
     target_xyz_m: tuple[float, float, float]
-    generation: int = 1
     kind: str = "reach"
     x_span_m: float = 0.28
     y_amplitude_m: float = 0.09
@@ -30,8 +27,6 @@ class TaskReference:
         xyz = np.asarray(self.target_xyz_m, dtype=float)
         if xyz.shape != (3,) or not np.isfinite(xyz).all():
             raise ValueError("target_xyz_m must contain three finite coordinates")
-        if self.generation < 1:
-            raise ValueError("task generation must be positive")
         if (not all(math.isfinite(v) for v in (self.x_span_m, self.y_amplitude_m, self.period_s,
                                              self.edge_clearance_m))
                 or min(self.x_span_m, self.y_amplitude_m, self.edge_clearance_m) < 0
@@ -55,36 +50,3 @@ def figure8_reference(times, start_xyz, shape):
     xyz[:, 0] += shape.edge_clearance_m + .5*shape.x_span_m*(1-np.cos(phase))
     xyz[:, 1] += shape.y_amplitude_m*np.sin(2*phase)
     return xyz
-
-
-@dataclass(frozen=True)
-class SolveRequest:
-    request_id: int
-    state: ArmState
-    task: TaskReference
-    task_elapsed_s: float
-    deadline_monotonic_sec: float
-    dt_elapsed_s: float | None = None
-
-
-@dataclass(frozen=True)
-class WorkerReady:
-    ok: bool
-    error: str = ""
-    details: dict = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class SolveReply:
-    request_id: int
-    generation: int
-    source_seq: int
-    source_received_monotonic_sec: float
-    finished_monotonic_sec: float
-    expires_monotonic_sec: float
-    # The plan: knot torques u_0..u_{N-2} in native coordinates and their
-    # interval. It starts at source_received_monotonic_sec (plan.Plan).
-    torques_native: np.ndarray | None = None
-    dt_s: float = math.nan
-    stats: dict = field(default_factory=dict)
-    error: str = ""

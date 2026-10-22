@@ -192,13 +192,14 @@ def test_bad_durations_and_nonfinite_commands_are_rejected(transport, bad):
     assert not transport.publications[0][1] and not transport.publications[1][1]
 
 
-def test_optional_ros_import_does_not_require_gpu_or_legacy_gato():
+def test_optional_ros_import_does_not_require_ros():
+    # The runner holds MpcParams (gato's SolverParams), so it imports gato's Python
+    # package; the CUDA build and solves stay in the MPC worker process.
     import subprocess
     from pathlib import Path
     result = subprocess.run([sys.executable, '-c',
-        'import sys; import tiago_mpc.ros2, tiago_mpc.runner, tiago_mpc.mpc_worker; '
-        'assert "rclpy" not in sys.modules; assert "gato" not in sys.modules; '
-        'assert "pinocchio" not in sys.modules'],
+        'import sys; import tiago_mpc.ros2, tiago_mpc.runner; '
+        'assert "rclpy" not in sys.modules'],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 

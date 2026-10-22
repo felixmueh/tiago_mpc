@@ -38,15 +38,15 @@ def test_cancelled_execution_creates_no_ros_client_or_runner(cli, monkeypatch):
 def test_task_selects_its_mpc_parameters_before_ros(cli, monkeypatch, name):
     started = []
     class Runner:
-        def __init__(self, config, task, worker, *args, **kwargs):
-            started.append((task, worker))
+        def __init__(self, config, task, params, *args, **kwargs):
+            started.append((task, params))
         def run(self, output, **kwargs):
             return {"status": "checked"}
     monkeypatch.setattr(cli, "RosMpcRunner", Runner)
     assert cli.main(["--task", name, "--target", ".3", "-.2", ".1"]) == 0
-    task, worker = started[0]
+    task, params = started[0]
     assert task.kind == name and task.target_xyz_m == (.3, -.2, .1)
-    assert worker.params == (cli.FIGURE8 if name == "figure8" else cli.TIAGO)
+    assert params == (cli.FIGURE8 if name == "figure8" else cli.TIAGO)
 
 
 @pytest.mark.parametrize("args", [

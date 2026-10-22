@@ -8,19 +8,18 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 import math
-import multiprocessing as mp
 import os
 from pathlib import Path
-import queue
 import shutil
 import subprocess
 import time
 
 import numpy as np
 
-from .plan import Plan
-from .protocol import SolveReply, SolveRequest, TaskReference, WorkerReady
-from .ros2 import ArmState, RIGHT_ARM_JOINTS, TiagoRightArmClient
+from .laws import sample_knot
+from .mpc import MpcWorker
+from .plan import State
+from .ros2 import RIGHT_ARM_JOINTS, TiagoRightArmClient
 
 COMFORTABLE_Q = (-0.39, -1.73, -0.38, -2.35, 0.0, -1.21, 0.04)
 
@@ -118,39 +117,19 @@ class RuntimeGuard:
         if np.sum(np.abs(state.qd)) > self.config.speed_l1_tolerance_rad_s:
             raise RuntimeError("arm is moving too quickly to start effort control")
 
-    def reply(self, reply, request, now):
-        if (reply.request_id != request.request_id or reply.generation != request.task.generation
-                or reply.source_seq != request.state.seq
-                or reply.source_received_monotonic_sec != request.state.received_monotonic_sec):
-            raise RuntimeError("superseded or mismatched MPC result")
-        if reply.error:
-            raise RuntimeError(f"MPC worker: {reply.error}")
-        if (not all(math.isfinite(t) for t in (reply.source_received_monotonic_sec,
-                                              reply.finished_monotonic_sec, reply.expires_monotonic_sec))
-                or reply.finished_monotonic_sec > now
-                or reply.finished_monotonic_sec < reply.source_received_monotonic_sec
-                or reply.expires_monotonic_sec > request.deadline_monotonic_sec
-                or now >= reply.expires_monotonic_sec
-                or now - reply.source_received_monotonic_sec > self.config.command_timeout_sec):
-            raise RuntimeError("MPC result expired or has invalid timing")
-        # Validate every knot: any of them may be sent before the lease ends.
-        torques = np.asarray(reply.torques_native, dtype=float)
-        if (torques.shape != (self.knots, 7) or not np.isfinite(torques).all()
-                or np.any(np.abs(torques) > self.effort)):
-            raise RuntimeError("invalid MPC torque or raw effort limit exceeded")
-        if reply.dt_s != self.dt_s:
-            raise RuntimeError("MPC plan has an unexpected knot interval")
-        plan = Plan(reply.source_received_monotonic_sec, reply.dt_s, torques)
-        if reply.expires_monotonic_sec > plan.end_s:
-            raise RuntimeError("MPC command lease outlives its plan")
-        return plan
+    def lease_end(self, t0):
+        """A plan from a state at t0 may be commanded until then; it ends no later than
+        the plan: 31 x 2 ms knots span only 62 ms, less than the 100 ms command timeout."""
+        return t0 + min(self.config.command_timeout_sec, self.knots * self.dt_s)
 
     def command(self, plan, now):
-        """Knot and torque due at ``now``; past the plan's end this raises."""
-        knot, torque = plan.control_at(now)
+        """Torque due at ``now`` while the plan's lease lasts."""
+        if now >= self.lease_end(plan.t0):
+            raise RuntimeError("MPC command lease expired")
+        torque = sample_knot(plan, now, None)
         if torque.shape != (7,) or not np.isfinite(torque).all() or np.any(np.abs(torque) > self.effort):
             raise RuntimeError("invalid MPC torque or raw effort limit exceeded")
-        return knot, torque.copy()
+        return torque.copy()
 
 
 def _json(value):
@@ -179,17 +158,16 @@ def _log_values(value):
 class RosMpcRunner:
     """Caller process owns I/O; spawned children own CUDA and geometry checks."""
 
-    def __init__(self, config, task, worker_config, safety_settings, *,
+    def __init__(self, config, task, params, safety_settings, *,
                  arm_factory=TiagoRightArmClient, monitor_factory=None,
-                 context=None, clock=time.monotonic, sleep=time.sleep):
-        self.config, self.task, self.worker_config = config, task, worker_config
+                 mpc_factory=MpcWorker, clock=time.monotonic, sleep=time.sleep):
+        self.config, self.task, self.params = config, task, params
         self.safety_settings = safety_settings
         if not safety_settings.enabled:
             raise ValueError("the ROS runner requires the safety worker")
         if tuple(safety_settings.controlled_joint_names) != RIGHT_ARM_JOINTS:
             raise ValueError("the safety worker must monitor the controlled right-arm joints")
-        self.arm_factory, self.monitor_factory = arm_factory, monitor_factory
-        self.context = context or mp.get_context("spawn")
+        self.arm_factory, self.monitor_factory, self.mpc_factory = arm_factory, monitor_factory, mpc_factory
         self.clock, self.sleep = clock, sleep
 
     def run(self, output: Path, *, execute=False):
@@ -198,7 +176,7 @@ class RosMpcRunner:
         summary = {"status": "starting", "execute": execute,
                    "config": asdict(self.config), "task": asdict(self.task),
                    "safety": asdict(self.safety_settings),
-                   "worker_config": asdict(self.worker_config),
+                   "params": asdict(self.params),
                    "restored": None, "cleanup_errors": [], "accepted_commands": 0,
                    "ros_distro": os.environ.get("ROS_DISTRO")}
         root = Path(__file__).resolve().parents[1]
@@ -210,10 +188,9 @@ class RosMpcRunner:
             ["git", "status", "--porcelain"], cwd=root, text=True).strip())
         source = output / "source"
         source.mkdir()
-        for name in ("runner.py", "protocol.py", "plan.py", "ros2.py", "mpc_worker.py", "model_runtime.py", "mpc.py", "joint_dynamics.py", "safety.py"):
+        for name in ("runner.py", "protocol.py", "plan.py", "laws.py", "ros2.py", "model_runtime.py", "mpc.py", "joint_dynamics.py", "safety.py"):
             shutil.copyfile(root / "tiago_mpc" / name, source / name)
-        arm = monitor = process = stop = request_q = response_q = None
-        process_started = False
+        arm = monitor = mpc = None
         mode_attempted = False
         mode_uncertain = False
         log = (output / "events.jsonl").open("w", buffering=1)
@@ -246,34 +223,11 @@ class RosMpcRunner:
             if arm.active_arm_controller(timeout_sec=self.config.service_timeout_sec) != "arm_right_controller":
                 raise RuntimeError("start in the default PAL position controller; existing effort control is not adopted")
 
-            from .mpc_worker import worker_main
-            request_q = self.context.Queue(maxsize=1)
-            response_q = self.context.Queue(maxsize=2)
-            stop = self.context.Event()
-            process = self.context.Process(target=worker_main,
-                kwargs=dict(config=self.worker_config, request_q=request_q,
-                            response_q=response_q, stop_event=stop))
-            process.start()
-            process_started = True
-            ready_deadline = self.clock() + self.config.startup_timeout_sec
-            ready = None
-            while ready is None:
-                arm.spin_once(timeout_sec=self.config.command_period_sec)
-                state = arm.latest_state()
-                self._fresh(state)
-                monitor.check(safety_state(state))
-                if process.exitcode is not None:
-                    raise RuntimeError(f"MPC worker died during startup: {process.exitcode}")
-                if self.clock() > ready_deadline:
-                    raise TimeoutError("MPC worker startup timed out")
-                try:
-                    ready = response_q.get_nowait()
-                except queue.Empty:
-                    pass
-            if not isinstance(ready, WorkerReady) or not ready.ok:
-                raise RuntimeError(f"MPC worker initialization failed: {getattr(ready, 'error', ready)}")
-            summary["worker"] = ready.details
-            guard = RuntimeGuard(self.config, initial, ready.details)
+            # Returns once the worker is ready; the arm stays in PAL position
+            # control meanwhile, and a fresh state is checked below.
+            mpc = self.mpc_factory(self.params)
+            summary["worker"] = mpc.details
+            guard = RuntimeGuard(self.config, initial, mpc.details)
             # Configure while still in the existing PAL control mode. Service
             # waits are bounded, and must finish before the first command solve.
             arm.configure_runtime_effort_controller(timeout_sec=self.config.service_timeout_sec)
@@ -284,10 +238,9 @@ class RosMpcRunner:
             epoch_stamp, task_start = state.stamp_sec, self.clock()
             next_solve = task_start
             next_io = task_start
-            pending = current = current_request = None
+            pending = current = None  # the requested state (ArmState) and the plan in use
             request_id = 0
             last_request_seq = -1
-            last_request_receipt = None
             stopping = False
 
             # ==========================================================================
@@ -310,19 +263,16 @@ class RosMpcRunner:
             # plus feedback in a PAL real-time controller; possibly separate
             # control modes for simulation and the robot.
             # ==========================================================================
-            def publish_checked(reply, request):
+            def publish_checked(plan):
                 # This guard is adjacent to every nonzero publication, including
                 # repeats and service-progress publication. Slow logging or a
                 # service response must not renew the original command lease.
-                if process.exitcode is not None:
-                    raise RuntimeError(f"MPC worker exited unexpectedly: {process.exitcode}")
                 current_state = arm.latest_state()
                 guard.state(current_state, self.clock())
                 monitor.check(safety_state(current_state))
-                now = self.clock()
-                knot, torque = guard.command(guard.reply(reply, request, now), now)
+                torque = guard.command(plan, self.clock())
                 arm.publish_effort(torque)
-                record("effort_publish", source_seq=reply.source_seq, torque_nm=torque, knot=knot)
+                record("effort_publish", plan_start_monotonic_sec=plan.t0, torque_nm=torque)
 
             while not stopping:
                 arm.spin_once(timeout_sec=0.0)
@@ -330,42 +280,33 @@ class RosMpcRunner:
                 state = arm.latest_state()
                 guard.state(state, now)
                 monitor.check(safety_state(state))
-                if process.exitcode is not None:
-                    raise RuntimeError(f"MPC worker exited unexpectedly: {process.exitcode}")
-                if current is not None and now >= current.expires_monotonic_sec:
-                    raise RuntimeError("held MPC command expired")
-                if pending is not None and now >= pending.deadline_monotonic_sec:
+                if pending is not None and now >= guard.lease_end(pending.received_monotonic_sec):
                     raise RuntimeError("pending MPC solve exceeded the command deadline")
-                try:
-                    reply = response_q.get_nowait()
-                except queue.Empty:
-                    reply = None
-                if reply is not None:
-                    if pending is None or not isinstance(reply, SolveReply):
-                        raise RuntimeError("unexpected MPC response")
-                    plan = guard.reply(reply, pending, now)
-                    source_speed = float(np.sum(np.abs(pending.state.qd)))
+                plan = mpc.result()  # raises on an error reply or a dead worker
+                if plan is not None:
+                    source_speed = float(np.sum(np.abs(pending.qd)))
                     arrived = (self.task.kind == "reach"
-                               and reply.stats.get("position_error_m", math.inf)
+                               and plan.stats.get("position_error_m", math.inf)
                                <= self.config.position_tolerance_m
                                and source_speed <= self.config.speed_l1_tolerance_rad_s
                                and np.sum(np.abs(state.qd)) <= self.config.speed_l1_tolerance_rad_s)
                     if arrived:
                         summary["status"] = "arrived"
-                        record("arrival", source_seq=reply.source_seq, stats=reply.stats)
+                        record("arrival", source_seq=pending.seq, stats=plan.stats)
                         break  # do not enable/publish effort for an already-met goal
                     if not mode_attempted:
                         # Recheck current full-body state immediately before
                         # activation, not the older model-build snapshot.
                         guard.start(state)
                         monitor.wait_until_checked(safety_state(state))
-                        guard.reply(reply, pending, self.clock())
-                        publish_checked(reply, pending)  # prime the inactive receiver
+                        publish_checked(plan)  # prime the inactive receiver
                         mode_attempted = True  # failed RPC may have activated it
 
                         def activation_progress():
                             arm.spin_once(timeout_sec=0.0)
-                            publish_checked(reply, pending)
+                            if mpc.result() is not None:  # nothing pending: raises if the worker died
+                                raise RuntimeError("unexpected MPC result")
+                            publish_checked(plan)
 
                         arm.service_progress = activation_progress
                         try:
@@ -378,16 +319,14 @@ class RosMpcRunner:
                             raise
                         finally:
                             arm.service_progress = None
-                        now = self.clock()
-                        guard.state(arm.latest_state(), now)
-                        guard.reply(reply, pending, now)
+                        guard.state(arm.latest_state(), self.clock())
                         monitor.check(safety_state(arm.latest_state()))
-                    publish_checked(reply, pending)
-                    current, current_request, pending = reply, pending, None
+                    publish_checked(plan)
                     summary["accepted_commands"] += 1
-                    record("command", source_seq=reply.source_seq, plan_torques_nm=plan.torques,
-                           plan_dt_s=plan.dt_s, plan_start_monotonic_sec=plan.start_s,
-                           expiry=reply.expires_monotonic_sec, stats=reply.stats)
+                    record("command", source_seq=pending.seq, plan_torques_nm=plan.torques,
+                           plan_dt_s=plan.dt, plan_start_monotonic_sec=plan.t0,
+                           expiry=guard.lease_end(plan.t0), stats=plan.stats)
+                    current, pending = plan, None
                 elapsed = state.stamp_sec - epoch_stamp
                 if elapsed < 0:
                     raise RuntimeError("ROS task clock reset")
@@ -402,26 +341,19 @@ class RosMpcRunner:
                 if (not stopping and pending is None and now >= next_solve - half_tick
                         and state.seq != last_request_seq):
                     request_id += 1
-                    # A plan must not be sampled past its end: 31 x 2 ms knots would
-                    # span only 62 ms, less than the 100 ms command lease.
-                    plan_s = (ready.details["N"] - 1) * ready.details["dt_s"]
-                    deadline = state.received_monotonic_sec + min(self.config.command_timeout_sec, plan_s)
-                    # dt_elapsed is the time between the two plans' states, as in
-                    # simulation. GATO uses it only to score hypotheses (none here).
-                    pending = SolveRequest(request_id, state, self.task, elapsed, deadline,
-                                           None if last_request_receipt is None
-                                           else state.received_monotonic_sec - last_request_receipt)
-                    request_q.put_nowait(pending)
-                    last_request_seq, last_request_receipt = state.seq, state.received_monotonic_sec
+                    # The plan starts at the state's receipt time.
+                    mpc.request(State(state.received_monotonic_sec, state.q, state.qd,
+                                      state.joint_positions, state.joint_velocities),
+                                self.task.horizon(elapsed, mpc.N, mpc.dt))
+                    pending, last_request_seq = state, state.seq
                     record("request", request_id=request_id, source_seq=state.seq,
                            source_stamp_sec=state.stamp_sec, q=state.q, qd=state.qd,
-                           task_elapsed_sec=elapsed, deadline=deadline)
-                    dt = ready.details["dt_s"]
-                    next_solve += (math.floor((now + half_tick - next_solve) / dt) + 1) * dt
+                           task_elapsed_sec=elapsed, deadline=guard.lease_end(state.received_monotonic_sec))
+                    next_solve += (math.floor((now + half_tick - next_solve) / mpc.dt) + 1) * mpc.dt
                 if mode_attempted and current is not None and not stopping:
                     # The receiver holds each torque until the next tick; publish the
                     # current plan's due knot only while its lease is valid.
-                    publish_checked(current, current_request)
+                    publish_checked(current)
                 record("state", seq=state.seq,
                        safety_seq=state.seq if state.safety_seq is None else state.safety_seq,
                        stamp_sec=state.stamp_sec,
@@ -460,33 +392,13 @@ class RosMpcRunner:
                 except BaseException as exc:
                     summary["restored"] = False
                     summary["cleanup_errors"].append(f"controller handback: {exc}")
-            if stop is not None:
-                stop.set()
-            if process_started:
-                try:
-                    process.join(timeout=1.0)
-                    if process.is_alive():
-                        process.terminate()
-                        process.join(timeout=1.0)
-                except BaseException as exc:
-                    summary["cleanup_errors"].append(f"MPC process cleanup: {exc}")
-            for resource in (monitor, arm):
+            for resource in (mpc, monitor, arm):
                 if resource is not None:
                     try:
                         resource.close()
                     except BaseException as exc:
                         summary["cleanup_errors"].append(f"close: {exc}")
-            for channel in (request_q, response_q):
-                if channel is not None:
-                    try:
-                        channel.cancel_join_thread(); channel.close()
-                    except BaseException as exc:
-                        summary["cleanup_errors"].append(f"queue close: {exc}")
             if summary["cleanup_errors"]:
                 summary["status"] = "fault"
             log.close()
             (output / "summary.json").write_text(json.dumps(summary, default=_json, indent=2) + "\n")
-
-    def _fresh(self, state):
-        if state is None or not 0 <= self.clock() - state.received_monotonic_sec <= self.config.state_timeout_sec:
-            raise RuntimeError("joint state stale while waiting for MPC worker")

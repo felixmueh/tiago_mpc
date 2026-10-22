@@ -13,6 +13,7 @@ import pytest
 
 from tiago_mpc.joint_dynamics import urdf_friction
 from tiago_mpc.model_runtime import URDF, EE_FRAME
+from tiago_mpc import mpc
 from tiago_mpc.mpc import FIGURE8, TIAGO
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,16 +62,15 @@ def run_example(example, mode, fixed, wall, output_root, monkeypatch, *, duratio
     controller = NS(reset=lambda state: None, solver=object(), reset_rho_each_step=False,
                     LIMIT_DEFAULTS={"admm": {}}, admm_linsys="pcg")
 
-    def step(state, reference, *, dt_elapsed):
+    def step(state, reference, *, dt_elapsed, budget_s):
         calls.append((state.copy(), reference.copy(), dt_elapsed))
         stats = NS(**{key: np.ones(1, dtype=int) for key in
                       ("sqp_iters", "pcg_iters", "admm_iters", "admm_linsys_iters")})
         u = np.full(7, float(min(len(calls), 3)))
         plan = np.concatenate([np.r_[np.zeros(14), u + knot_offset(k) * distinct_knots] for k in range(n - 1)]
                               + [np.zeros(14)])
-        return NS(u=u, xu_best=plan, wall_s=wall, admm_linsys="pcg",
-                  row_viol=np.zeros(1), solve=NS(stats=stats, solve_time_us=123.,
-                                               xu=plan[None].copy()))
+        return NS(xu_best=plan, wall_s=wall, admm_linsys="pcg", iterations=1, budget_hit=False,
+                  row_viol=np.zeros(1), solve=NS(stats=stats, solve_time_us=123.))
 
     def integrate(model, data, q, v, u, h, *losses):
         applied.append((u.copy(), h))
@@ -84,14 +84,16 @@ def run_example(example, mode, fixed, wall, output_root, monkeypatch, *, duratio
     setup = NS(controller=controller, model=model, data=model.createData(),
                frame_id=model.getFrameId(EE_FRAME), signs=np.ones(7),
                urdf_path=URDF, gpu_urdf_path=URDF,
-               details=dict(model_step_max_abs_errors=[], generator_adapter="stub", plant_name="stub"))
+               details=dict(model_step_max_abs_errors=[], generator_adapter="stub", plant_name="stub",
+                            gpu_joint_coordinate_signs=[1.] * 7, effort_limits=model.effortLimit.tolist()))
     def build(built):
         assert built == (params if with_losses else replace(params, friction=None))
         return setup
-    monkeypatch.setattr(module, "build_controller", build)
+    monkeypatch.setattr(mpc, "build_controller", build)
     monkeypatch.setattr(module, "plant_rk4", integrate)
     if not tracking:
         monkeypatch.setattr(module, "rk4", integrate)
+        monkeypatch.setattr(module, "runtime_urdf", lambda losses: (URDF, URDF, np.ones(7)))
     if tracking:
         monkeypatch.setattr(module, "model_receipt", lambda *args: {})
         prepare = module.runtime_urdf

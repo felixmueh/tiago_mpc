@@ -16,7 +16,6 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "external/gato/python"))
 
 from tiago_mpc.mpc import FIGURE8, TIAGO
-from tiago_mpc.mpc_worker import WorkerConfig
 from tiago_mpc.protocol import TaskReference
 from tiago_mpc.ros2 import TiagoRightArmClient
 from tiago_mpc.runner import RosMpcRunner, RunnerConfig
@@ -41,8 +40,8 @@ def main(argv=None):
     try:
         config = replace(DEFAULT_RUNNER, duration_sec=args.duration)
         task = TaskReference(tuple(args.target or (0., 0., 0.)), kind=args.task)
-        worker = WorkerConfig(FIGURE8 if args.task == "figure8" else TIAGO,
-                              None if args.budget_ms is None else args.budget_ms / 1000.)
+        params = replace(FIGURE8 if args.task == "figure8" else TIAGO,
+                         budget_s=None if args.budget_ms is None else args.budget_ms / 1000.)
     except (ValueError, OSError, TypeError) as exc:
         parser.error(str(exc))
     from tiago_mpc.safety import CollisionSafetySettings
@@ -53,9 +52,9 @@ def main(argv=None):
         parser.error("--output must be inside this checkout's _expr_data")
     print(json.dumps(dict(execute=args.execute, reference_frame=REFERENCE_FRAME,
                          ros_distro=os.environ.get("ROS_DISTRO"),
-                         end_effector_frame=worker.params.ee_frame,
+                         end_effector_frame=params.ee_frame,
                          target_semantics="grasp-center target; figure8 uses anchor plus edge_clearance_m on +X",
-                         runner=asdict(config), task=asdict(task), worker=asdict(worker),
+                         runner=asdict(config), task=asdict(task), params=asdict(params),
                          safety=asdict(safety), output=str(output)), default=str, indent=2))
     if args.execute:
         print("Requires a stationary base/grippers and the comfortable_high_clearance arm pose.")
@@ -69,7 +68,7 @@ def main(argv=None):
         raise KeyboardInterrupt(f"signal {signum}")
     previous_handler = signal.signal(signal.SIGTERM, terminate)
     try:
-        application = RosMpcRunner(config, task, worker, safety,
+        application = RosMpcRunner(config, task, params, safety,
             arm_factory=lambda: TiagoRightArmClient(sea_absolute=args.sea_absolute))
         summary = application.run(output, execute=args.execute)
     finally:

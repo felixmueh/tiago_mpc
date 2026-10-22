@@ -18,15 +18,14 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import gato
 import pinocchio as pin
 from gato.common import rk4
-from tiago_mpc.mpc import TIAGO, build_controller
+from tiago_mpc.mpc import TIAGO, MpcInProcess
 from tiago_mpc.model_runtime import (URDF, EE_FRAME, Q_CHECK, Q_DELTA_CHECK,
                                      ee_position, runtime_urdf as prepare_urdf,
                                      check_model as check_predictor)
 from tiago_mpc.plant_cache import cache_root
-from tiago_mpc.plan import Plan, knot_torques
+from tiago_mpc.plan import State
 from tiago_mpc.simulation import control_intervals, control_segments
 from tiago_mpc.joint_dynamics import plant_rk4
 
@@ -85,7 +84,7 @@ def main(argv=None, params=TIAGO, plant_friction=None):
     out.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(__file__, out / "reach_sim.py")
     for name in ("mpc.py", "model_runtime.py", "joint_dynamics.py",
-                 "simulation.py", "plan.py"):
+                 "simulation.py", "plan.py", "laws.py"):
         shutil.copyfile(ROOT / "tiago_mpc" / name, out / name)
     result = dict(status="started", execution_stage="setup", mode="hold" if args.hold else "reach",
                   repository_commit=git("rev-parse", "HEAD") if (ROOT / ".git").exists()
@@ -110,14 +109,12 @@ def main(argv=None, params=TIAGO, plant_friction=None):
     predicted_states, prediction_errors = [], []
     exit_code = 1
     try:
-        setup = build_controller(params)
-        controller = setup.controller
-        model, data, fid, signs = setup.model, setup.data, setup.frame_id, setup.signs
-        gpu_path = setup.gpu_urdf_path
-        state_signs = np.tile(signs, 2)
-        result["gpu_joint_coordinate_signs"] = signs.tolist()
+        mpc = MpcInProcess(params)
+        model = pin.buildModelFromUrdf(str(runtime_urdf(params.friction)[0]))
+        data, fid = model.createData(), model.getFrameId(ee_frame)
+        result["gpu_joint_coordinate_signs"] = mpc.details["gpu_joint_coordinate_signs"]
         result["joint_names"] = list(model.names)[1:]
-        result["model_step_max_abs_errors"] = setup.details["model_step_max_abs_errors"]
+        result["model_step_max_abs_errors"] = mpc.details["model_step_max_abs_errors"]
         print("GATO/Pinocchio model checks passed", flush=True)
         if args.build_only:
             result["status"] = "model_checked"
@@ -164,36 +161,26 @@ def main(argv=None, params=TIAGO, plant_friction=None):
         result.update(status="running", execution_stage="episode")
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
         x = x_start.copy()
-        controller.reset(x*state_signs)
         times.append(0.0); states.append(x.copy()); errors.append(float(np.linalg.norm(initial-target)))
         t, reached = 0.0, False
         previous_plan = None
-        elapsed = None
         # Hold mode runs the full interval to check stability. Reach stops at arrival.
         while t < args.timeout - 1e-9:
             solve_start_s.append(t)
-            step = controller.step(x*state_signs, reference.ravel(), dt_elapsed=elapsed)
-            stats = step.solve.stats
-            predicted_next = np.asarray(step.solve.xu)[0, 21:35]*state_signs
+            # The plan starts at the time of the state it was computed from.
+            mpc.request(State(t, x[:7], x[7:]), reference.ravel())
+            plan = mpc.result(block=True)
+            stats = plan.stats
+            predicted_next = plan.states[1]
             predicted_states.append(predicted_next.copy())
             if len(work) < SAVE_PLAN_STEPS:
-                np.savez_compressed(out / f"plan_{len(work):04d}.npz", state=x,
-                                    reference=reference, xu=step.solve.xu, signs=signs)
-            work.append(dict(sqp=int(np.sum(stats.sqp_iters)),
-                             pcg=int(np.sum(stats.pcg_iters)),
-                             admm=int(np.sum(stats.admm_iters)),
-                             admm_linsys=int(np.sum(stats.admm_linsys_iters)),
-                             admm_linsys_mode=step.admm_linsys,
-                             zero_pcg_rows=int(np.sum(np.asarray(stats.pcg_iters) == 0))))
-            solve_us.append(float(step.solve.solve_time_us)); wall_s.append(float(step.wall_s))
-            row_viol.append(np.asarray(step.row_viol).copy())
-            if not np.isfinite(step.solve.xu).all():
-                np.savez_compressed(out / "failure_solve.npz", state=x, reference=reference,
-                                    torque_nm=np.asarray(step.u, dtype=float)*signs, xu=step.solve.xu)
-                raise FloatingPointError("Nonfinite torque or predicted trajectory")
-            # The plan starts at the time of the state it was computed from.
-            plan = Plan(t, knot_dt, knot_torques(step.xu_best, signs))
-            intervals = control_intervals(update_period_s, step.wall_s, mode=args.solve_time_mode,
+                np.savez_compressed(out / f"plan_{len(work):04d}.npz", state=x, reference=reference,
+                                    states=plan.states, torques=plan.torques)
+            work.append({key: stats[key] for key in
+                         ("sqp", "pcg", "admm", "admm_linsys", "admm_linsys_mode", "zero_pcg_rows")})
+            solve_us.append(stats["solve_time_us"]); wall_s.append(stats["wall_s"])
+            row_viol.append(stats["row_viol"])
+            intervals = control_intervals(update_period_s, stats["wall_s"], mode=args.solve_time_mode,
                                           fixed_s=args.solve_time_s, remaining_s=args.timeout-t)
             charged_s.append(intervals.charged_s); update_s.append(intervals.elapsed_s)
             interval_start = t
@@ -215,10 +202,9 @@ def main(argv=None, params=TIAGO, plant_friction=None):
             # Snap to the update boundary instead of accumulating RK4 rounding.
             t = min(interval_start + intervals.elapsed_s, args.timeout)
             times[-1] = t
-            # dt_elapsed is the time between the two plans' states.
-            previous_plan, elapsed = plan, intervals.elapsed_s
+            previous_plan = plan
             # A knot prediction and delayed execution cover different controls/times.
-            if intervals.charged_s == 0 and abs(elapsed-knot_dt) < 1e-12:
+            if intervals.charged_s == 0 and abs(intervals.elapsed_s-knot_dt) < 1e-12:
                 prediction_errors.append(np.array([np.max(np.abs(x[:7]-predicted_next[:7])),
                                                    np.max(np.abs(x[7:]-predicted_next[7:]))]))
             else:

@@ -64,5 +64,5 @@ def control_segments(previous, plan, intervals):
         head = ([(np.zeros(plan.torques.shape[1]), intervals.previous_s)]
                 if intervals.previous_s > 0 else [])
     else:
-        head = previous.controls_over(plan.start_s - previous.start_s, intervals.previous_s)
+        head = previous.controls_over(plan.t0 - previous.t0, intervals.previous_s)
     return head + plan.controls_over(intervals.previous_s, intervals.new_s)

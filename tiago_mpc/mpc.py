@@ -1,21 +1,26 @@
-"""MPC parameters with the TIAGo defaults, and the GATO controller built from them.
+"""MPC parameters with the TIAGo defaults, and the MPC built from them.
 
 Experiments override the defaults with dataclasses.replace, for example
-replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)).
+replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). MpcInProcess and MpcWorker
+share one interface: request(state, reference, updates=None), result(block=False)
+-> Plan or None, N, dt and close().
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 import math
+import multiprocessing as mp
 import os
 from pathlib import Path
+import queue
 import sys
 
 from gato import SolverParams
 import numpy as np
 
 from .joint_dynamics import Friction, register_robot, urdf_friction
-from .model_runtime import EE_FRAME, check_model, runtime_urdf
+from .model_runtime import EE_FRAME, check_model, ee_position, runtime_urdf
+from .plan import Plan
 from .plant_cache import cache_root, plant_name
 
 
@@ -49,11 +54,14 @@ class MpcParams:
     velocity_fraction: float = .8
     effort_fraction: float = .85
     friction: Friction | None = None  # predictor friction; None is loss-free
-    warmup: int = 0  # solves before the first plan is used (step 2)
+    warmup: int = 0  # warm-up solves from the first request's state, before its plan
+    budget_s: float | None = None  # SQP wall budget per solve (MPCController.step); None: max_sqp_iters
 
     def __post_init__(self):
         if self.N < 2 or not math.isfinite(self.dt_s) or self.dt_s <= 0:
             raise ValueError("N must be >=2 and dt_s finite and positive")
+        if self.budget_s is not None and (not math.isfinite(self.budget_s) or self.budget_s <= 0):
+            raise ValueError("budget_s must be finite and positive")
 
     @classmethod
     def from_dict(cls, values):
@@ -136,3 +144,176 @@ def build_controller(params: MpcParams):
         velocity_limits=model.velocityLimit.tolist(), effort_limits=model.effortLimit.tolist(),
         model_step_max_abs_errors=errors, plant_name=plant, cache_dir=str(cache_dir))
     return MpcSetup(controller, model, data, frame_id, signs, path, gpu_path, details)
+
+
+# Named solver changes, applied before a solve in either Mpc. Each persists in the
+# solver until changed again. Add a name when an experiment needs it.
+UPDATES = {
+    # dict of scalar weights: q_cost, qd_cost, u_cost, N_cost, *_lim_cost
+    "cost_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights(**weights),
+    # (N, 3) [ee, qd, u] weights per knot; None returns to the scalar weights
+    "knot_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights_per_knot(weights),
+    # (weight, q_nom): running posture cost toward the native posture q_nom
+    "posture": lambda mpc, value: (mpc.controller.solver.set_q_pos_cost(value[0]),
+                                   mpc.controller.solver.set_q_nom(np.asarray(value[1]) * mpc.signs)),
+    # external wrench in GATO's layout (BSQP.set_f_ext_B)
+    "external_force": lambda mpc, wrench: mpc.controller.solver.set_f_ext_B(wrench),
+}
+
+
+def _known(updates):
+    unknown = set(updates or ()) - UPDATES.keys()
+    if unknown:
+        raise KeyError(f"unknown MPC updates: {sorted(unknown)}")
+
+
+def _checked(mpc, plan, t):
+    """Any knot may be commanded before the plan's lease ends, so every knot is checked."""
+    if plan.t0 != t:
+        raise RuntimeError("MPC result does not match the request")
+    if plan.dt != mpc.dt:
+        raise RuntimeError("MPC plan has an unexpected knot interval")
+    if (plan.states.shape != (mpc.N, 14) or plan.torques.shape != (mpc.N - 1, 7)
+            or not np.isfinite(plan.states).all() or not np.isfinite(plan.torques).all()
+            or np.any(np.abs(plan.torques) > mpc.details["effort_limits"])):
+        raise RuntimeError("invalid MPC plan or raw effort limit exceeded")
+    return plan
+
+
+class MpcInProcess:
+    """The GATO controller in this process: request solves, result returns the plan.
+
+    The first request resets the controller from its state (and runs the warm-up
+    solves); later requests never reset it. A fresh controller needs a new Mpc,
+    or controller.reset. ``controller`` is the raw GATO MPCController.
+    """
+
+    def __init__(self, params):
+        setup = build_controller(params)
+        self.params, self.N, self.dt = params, params.N, params.dt_s
+        self.controller, self.signs, self.details = setup.controller, setup.signs, setup.details
+        self._fk = lambda q: ee_position(setup.model, setup.data, q, setup.frame_id)
+        self._previous_t = self._plan = None
+
+    def request(self, state, reference, updates=None):
+        _known(updates)
+        self._plan = self._solve(state, reference, updates)
+
+    def result(self, block=False):
+        plan, self._plan = self._plan, None
+        return None if plan is None else _checked(self, plan, plan.t0)
+
+    def close(self):
+        pass
+
+    def _solve(self, state, reference, updates):
+        q, qd = np.asarray(state.q, dtype=float), np.asarray(state.qd, dtype=float)
+        if q.shape != (7,) or qd.shape != (7,) or not np.isfinite(np.r_[q, qd]).all():
+            raise ValueError("Measured state must contain seven finite native positions/velocities")
+        state_signs = np.tile(self.signs, 2)
+        x = np.r_[q, qd] * state_signs
+        for name, value in (updates or {}).items():
+            UPDATES[name](self, value)
+        if self._previous_t is None:
+            self.controller.reset(x)
+            for _ in range(self.params.warmup):
+                self.controller.warmup(x, reference)
+        # GATO uses dt_elapsed only to score hypotheses (none here).
+        dt_elapsed = None if self._previous_t is None else state.t - self._previous_t
+        self._previous_t = state.t
+        step = self.controller.step(x, reference, dt_elapsed=dt_elapsed, budget_s=self.params.budget_s)
+        xu = np.asarray(step.xu_best, dtype=float).reshape(-1)
+        if xu.size != self.N * 21 - 7:
+            raise ValueError("Malformed GATO trajectory")
+        knots = np.append(xu, np.zeros(7)).reshape(self.N, 21)  # [x_k u_k], no u after the last state
+        raw = step.solve.stats
+        stats = dict(
+            solve_time_us=float(step.solve.solve_time_us), wall_s=float(step.wall_s),
+            iterations=int(step.iterations), budget_hit=bool(step.budget_hit),
+            sqp=int(np.sum(raw.sqp_iters)), pcg=int(np.sum(raw.pcg_iters)),
+            zero_pcg_rows=int(np.sum(np.asarray(raw.pcg_iters) == 0)),
+            admm=int(np.sum(raw.admm_iters)) if raw.admm_iters is not None else 0,
+            admm_linsys=int(np.sum(raw.admm_linsys_iters)) if raw.admm_linsys_iters is not None else 0,
+            admm_linsys_mode=step.admm_linsys,
+            row_viol=None if step.row_viol is None else np.array(step.row_viol),
+            # The ROS runner's arrival check; moves to the task with the loop.
+            position_error_m=float(np.linalg.norm(
+                self._fk(q) - np.asarray(reference).reshape(self.N, 6)[0, :3])))
+        return Plan(state.t, self.dt, knots[:, :14] * state_signs, knots[:-1, 14:] * self.signs, stats)
+
+
+_SPAWN = mp.get_context("spawn")
+
+
+class MpcWorker:
+    """MpcInProcess in a spawned worker process, behind the same interface.
+
+    __init__ returns once the worker has built and checked its controller. A
+    failed solve replies with its error and ends the worker; result() raises on
+    that reply, and on a dead worker, at the next call.
+    """
+
+    def __init__(self, params):
+        self.N, self.dt = params.N, params.dt_s
+        self._requests, self._replies = _SPAWN.Queue(), _SPAWN.Queue()
+        self._process = _SPAWN.Process(target=_serve, args=(params, self._requests, self._replies),
+                                       daemon=True)
+        self._process.start()
+        self._pending = None  # the outstanding request's state time
+        try:
+            self.details = self._reply(block=True)
+        except BaseException:
+            self.close()
+            raise
+
+    def request(self, state, reference, updates=None):
+        _known(updates)
+        if self._pending is not None:
+            raise RuntimeError("an MPC request is pending")
+        self._requests.put((state, reference, updates))
+        self._pending = state.t
+
+    def result(self, block=False):
+        reply = self._reply(block and self._pending is not None)
+        if reply is None:
+            return None
+        if self._pending is None:
+            raise RuntimeError("unexpected MPC reply")
+        t, self._pending = self._pending, None
+        return _checked(self, reply, t)
+
+    def close(self):
+        if self._process.is_alive():
+            self._requests.put(None)
+            self._process.join(1.)
+            if self._process.is_alive():
+                self._process.terminate()
+                self._process.join(1.)
+        for channel in (self._requests, self._replies):
+            channel.cancel_join_thread()
+            channel.close()
+
+    def _reply(self, block):
+        while True:
+            try:
+                reply = self._replies.get(timeout=.05) if block else self._replies.get_nowait()
+            except queue.Empty:
+                if not self._process.is_alive():
+                    raise RuntimeError(f"MPC worker exited unexpectedly: {self._process.exitcode}")
+                if block:
+                    continue
+                return None
+            if isinstance(reply, str):
+                raise RuntimeError(f"MPC worker: {reply}")
+            return reply
+
+
+def _serve(params, requests, replies):
+    """The worker: build, reply with the details (or the error), then one plan per request."""
+    try:
+        mpc = MpcInProcess(params)
+        replies.put(mpc.details)
+        while (item := requests.get()) is not None:
+            replies.put(mpc._solve(*item))
+    except Exception as exc:
+        replies.put(f"{type(exc).__name__}: {exc}")

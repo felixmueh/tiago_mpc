@@ -1,14 +1,14 @@
-"""The plan the execution controller samples, shared by the simulation loops and the ROS runner.
+"""The plant's state and the MPC's plan, shared by the simulation loops and the ROS runner.
 
-A plan holds GATO's knot torques u_0..u_{K-1} (K = N - 1, native coordinates),
-its knot interval dt and its start time t0: the time of the state it was
-computed from. ``control_at`` gives u_k for t0 + k dt <= t < t0 + (k + 1) dt,
-a zero-order hold per knot as GATO's transcription assumes. Past the last
-knot there is no control: ``control_at`` and ``controls_over`` raise PlanEnded.
+A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
+(native coordinates), its knot interval dt and its start time t0: the time of
+the state it was computed from. Knot k covers t0 + k dt <= t < t0 + (k + 1) dt,
+a zero-order hold as GATO's transcription assumes; past the last knot there is
+no torque (PlanEnded).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 import numpy as np
@@ -22,53 +22,42 @@ class PlanEnded(RuntimeError):
     """The requested time lies past the plan's last knot."""
 
 
-def knot_torques(xu, signs):
-    """Native torques u_0..u_{N-2} from GATO's flat [x_0 u_0 x_1 ... x_{N-1}] plan."""
-    signs = np.asarray(signs, dtype=float)
-    nu = signs.size
-    stride = 3 * nu  # fixed-base arm: nx = 2 nu
-    xu = np.asarray(xu, dtype=float).reshape(-1)
-    if (xu.size + nu) % stride or xu.size < stride + 2 * nu:
-        raise ValueError("Malformed GATO trajectory")
-    knots = (xu.size + nu) // stride - 1
-    return xu[:knots * stride].reshape(knots, stride)[:, 2 * nu:] * signs
+@dataclass(frozen=True)
+class State:
+    """t in seconds (robot: monotonic receipt time); arm q and qd in native coordinates.
+
+    The robot path adds the full body's named joint values for the safety check."""
+    t: float
+    q: np.ndarray
+    qd: np.ndarray
+    joint_positions: dict[str, float] | None = None
+    joint_velocities: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
 class Plan:
-    start_s: float
-    dt_s: float
-    torques: np.ndarray
+    t0: float
+    dt: float
+    states: np.ndarray   # (N, 14): q, qd per knot
+    torques: np.ndarray  # (N - 1, 7)
+    stats: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        torques = np.array(self.torques, dtype=float)
-        if torques.ndim != 2 or len(torques) < 1 or not np.isfinite(torques).all():
-            raise ValueError("A plan needs at least one finite knot torque")
-        if not math.isfinite(self.start_s) or not math.isfinite(self.dt_s) or self.dt_s <= 0:
+        states, torques = np.array(self.states, dtype=float), np.array(self.torques, dtype=float)
+        if (torques.ndim != 2 or len(torques) < 1 or states.shape != (len(torques) + 1, 2 * torques.shape[1])
+                or not np.isfinite(states).all() or not np.isfinite(torques).all()):
+            raise ValueError("A plan needs N finite knot states and N - 1 finite knot torques")
+        if not math.isfinite(self.t0) or not math.isfinite(self.dt) or self.dt <= 0:
             raise ValueError("A plan needs a finite start time and a positive knot interval")
-        torques.flags.writeable = False
+        states.flags.writeable = torques.flags.writeable = False
+        object.__setattr__(self, "states", states)
         object.__setattr__(self, "torques", torques)
 
-    @property
-    def knots(self) -> int:
-        return len(self.torques)
-
-    @property
-    def end_s(self) -> float:
-        return self.start_s + self.knots * self.dt_s
-
     def index(self, offset_s: float) -> int:
-        """Zero-order-hold knot of a time offset from the start; may exceed the plan."""
+        """Zero-order-hold knot of a time offset from t0; may exceed the plan."""
         if not offset_s >= 0 or math.isinf(offset_s):
             raise ValueError("time precedes the plan's state or is not finite")
-        return math.floor(offset_s / self.dt_s + _KNOT_TOLERANCE)
-
-    def control_at(self, t: float) -> tuple[int, np.ndarray]:
-        """Knot and torque due at absolute time t (ROS: monotonic seconds)."""
-        k = self.index(t - self.start_s)
-        if k >= self.knots:
-            raise PlanEnded("time is past the plan's last knot")
-        return k, self.torques[k]
+        return math.floor(offset_s / self.dt + _KNOT_TOLERANCE)
 
     def controls_over(self, begin_s: float, span_s: float):
         """(torque, duration) pieces over offsets [begin_s, begin_s + span_s), split at knots.
@@ -79,9 +68,9 @@ class Plan:
             return []
         end = begin_s + span_s
         k, position, out = self.index(begin_s), begin_s, []
-        while k < self.knots:
-            boundary = (k + 1) * self.dt_s
-            if boundary >= end - _KNOT_TOLERANCE * self.dt_s:
+        while k < len(self.torques):
+            boundary = (k + 1) * self.dt
+            if boundary >= end - _KNOT_TOLERANCE * self.dt:
                 return out + [(self.torques[k], end - position)]
             out.append((self.torques[k], boundary - position))
             position, k = boundary, k + 1

@@ -9,8 +9,8 @@ import pytest
 
 from tiago_mpc import runner as r
 from tiago_mpc.mpc import TIAGO
-from tiago_mpc.mpc_worker import WorkerConfig
-from tiago_mpc.protocol import SolveReply, SolveRequest, TaskReference, WorkerReady
+from tiago_mpc.plan import Plan
+from tiago_mpc.protocol import TaskReference
 from tiago_mpc.ros2 import ArmState, RIGHT_ARM_JOINTS
 
 
@@ -21,6 +21,10 @@ LIMITS = dict(q_lower=[-3.] * 7, q_upper=[3.] * 7,
 def knot_plan():
     """Distinct torques per knot, so tests can tell which knot was published."""
     return 1. + .1 * np.arange(LIMITS["N"] - 1)[:, None] * np.ones(7)
+
+
+def plan_from(t0, **stats):
+    return Plan(t0, LIMITS["dt_s"], np.zeros((LIMITS["N"], 14)), knot_plan(), stats)
 
 
 @dataclass
@@ -46,20 +50,6 @@ def state(clock, seq=1, **kwargs):
                     **kwargs)
 
 
-class Channel(queue.Queue):
-    on_put = None
-    closed = False
-    def put_nowait(self, value):
-        if self.on_put:
-            self.on_put(value)
-        else:
-            super().put_nowait(value)
-    def cancel_join_thread(self):
-        pass
-    def close(self):
-        self.closed = True
-
-
 @pytest.fixture
 def rig(monkeypatch):
     return make_rig(monkeypatch)
@@ -67,11 +57,11 @@ def rig(monkeypatch):
 
 def make_rig(monkeypatch, config=r.RunnerConfig()):
     clock = Clock()
-    faults = NS(start=False, hang=False, mismatched=False, switch=False,
-                switch_death=False, monitor=False, restore=False, join=False,
+    faults = NS(start=False, hang=False, switch=False, error=False,
+                switch_death=False, monitor=False, restore=False, close=False,
                 never_arrive=False, already_arrived=False, moving_source=False)
     publications, requests = [], []
-    ctx = NS(queues=[], process=None)
+    ctx = NS(mpc=None)
 
     class Arm:
         seq = 0
@@ -82,7 +72,7 @@ def make_rig(monkeypatch, config=r.RunnerConfig()):
             clock.sleep(.00001)  # each emitted source observation has a new stamp
             self.seq += 1
             self.latest = state(clock, self.seq)
-            if faults.moving_source and self.seq == 5:
+            if faults.moving_source and self.seq == 4:  # the first requested state
                 self.latest = replace(self.latest, qd=np.full(7, .2))
         def read_state(self, **kwargs):
             self.spin_once()
@@ -99,7 +89,7 @@ def make_rig(monkeypatch, config=r.RunnerConfig()):
             if faults.switch:
                 clock.sleep(.2)
             if faults.switch_death:
-                ctx.process.exitcode = 9
+                ctx.mpc.dead = True
             if self.service_progress:
                 self.service_progress()
             self.owner = "effort"
@@ -127,50 +117,38 @@ def make_rig(monkeypatch, config=r.RunnerConfig()):
             self.closed = True
 
     monitor = Monitor()
-    def channel(maxsize):
-        value = Channel(maxsize)
-        ctx.queues.append(value)
-        return value
-    ctx.Queue = channel
-    ctx.Event = lambda: NS(set=lambda: None)
-    def process(target, kwargs):
-        class Process:
-            exitcode = None
-            started = False
-            def start(self):
-                if faults.start:
-                    raise RuntimeError("spawn failed")
-                self.started = True
-                kwargs["response_q"].put_nowait(WorkerReady(True, details=LIMITS))
-                def solve(request):
-                    requests.append(request)
-                    if faults.hang:
-                        return
-                    kwargs["response_q"].put_nowait(SolveReply(
-                        request.request_id, request.task.generation + int(faults.mismatched),
-                        request.state.seq, request.state.received_monotonic_sec,
-                        clock(), request.deadline_monotonic_sec, knot_plan(), LIMITS["dt_s"],
-                        dict(position_error_m=(0. if faults.already_arrived or
-                              (len(requests) > 1 and not faults.never_arrive) else .1))))
-                kwargs["request_q"].on_put = solve
-            def join(self, timeout):
-                assert self.started, "unstarted process must not be joined"
-                if faults.join:
-                    raise RuntimeError("join failed")
-                self.exitcode = 0
-            def is_alive(self):
-                return self.exitcode is None
-            def terminate(self):
-                self.exitcode = -15
-        ctx.process = Process()
-        return ctx.process
-    ctx.Process = process
+
+    class Mpc:
+        """MpcWorker's interface; the worker's own checks are tested in test_mpc."""
+        N, dt, details = LIMITS["N"], LIMITS["dt_s"], LIMITS
+        dead = closed = False
+        def __init__(self, params):
+            if faults.start:
+                raise RuntimeError("spawn failed")
+            ctx.mpc, self.reply = self, None
+        def request(self, state, reference, updates=None):
+            assert self.reply is None, "one request at a time"
+            requests.append(state)
+            arrived = faults.already_arrived or (len(requests) > 1 and not faults.never_arrive)
+            self.reply = None if faults.hang else plan_from(state.t, position_error_m=0. if arrived else .1)
+        def result(self, block=False):
+            if self.dead:
+                raise RuntimeError("MPC worker exited unexpectedly: 9")
+            if faults.error and self.reply is not None:
+                raise RuntimeError("MPC worker: FloatingPointError")
+            reply, self.reply = self.reply, None
+            return reply
+        def close(self):
+            self.closed = True
+            if faults.close:
+                raise RuntimeError("close failed")
+
     # Geometry and real process checks have their own tests. This fixture
     # deliberately replaces only the boundary conversion to avoid Pinocchio.
     monkeypatch.setattr(r, "safety_state", lambda snapshot: snapshot)
-    runner = r.RosMpcRunner(config, TaskReference((.6, .1, .2)), WorkerConfig(TIAGO),
+    runner = r.RosMpcRunner(config, TaskReference((.6, .1, .2)), TIAGO,
         SafetySettings(), arm_factory=lambda: arm, monitor_factory=lambda **kw: monitor,
-        context=ctx, clock=clock, sleep=clock.sleep)
+        mpc_factory=Mpc, clock=clock, sleep=clock.sleep)
     return NS(runner=runner, clock=clock, arm=arm, monitor=monitor, ctx=ctx,
               faults=faults, publications=publications, requests=requests)
 
@@ -178,7 +156,7 @@ def make_rig(monkeypatch, config=r.RunnerConfig()):
 def test_check_only_has_no_worker_commands_or_controller_mutation(rig, tmp_path):
     result = rig.runner.run(tmp_path / "check")
     assert result["status"] == "checked"
-    assert rig.ctx.process is None and not rig.publications
+    assert rig.ctx.mpc is None and not rig.publications
     assert rig.arm.owner == "arm_right_controller"
     assert rig.arm.closed and rig.monitor.closed
 
@@ -187,23 +165,15 @@ def test_normal_run_hands_back_and_records_original_command_lease(rig, tmp_path)
     result = rig.runner.run(tmp_path / "run", execute=True)
     assert result["status"] == "arrived" and result["restored"] is True
     assert result["accepted_commands"] == 1 and len(rig.requests) == 2
-    assert rig.arm.restored and rig.arm.closed and rig.monitor.closed
-    assert all(c.closed for c in rig.ctx.queues)
+    assert rig.arm.restored and rig.arm.closed and rig.monitor.closed and rig.ctx.mpc.closed
     assert np.all(rig.publications[-1][1] == 0)
     saved = json.loads((tmp_path / "run/summary.json").read_text())
     assert saved["status"] == "arrived"
     assert "ros_distro" in saved
 
 
-
-def test_request_deadline_ends_no_later_than_the_plan(rig, tmp_path, monkeypatch):
-    monkeypatch.setitem(LIMITS, "dt_s", .002)  # 2 ms knots: 31 x 2 ms = 62 ms plan
-    rig.runner.run(tmp_path / "short-plan", execute=True)
-    request = rig.requests[0]
-    assert request.deadline_monotonic_sec - request.state.received_monotonic_sec == pytest.approx(.062)
-
 @pytest.mark.parametrize("fault,text,uncertain", [
-    ("hang", "deadline", False), ("mismatched", "mismatched", False),
+    ("hang", "deadline", False), ("error", "FloatingPointError", False),
     ("switch", "expired", True), ("switch_death", "exited", True),
     ("monitor", "collision margin", True)])
 def test_fault_stops_and_partial_activation_never_claims_restoration(rig, tmp_path, fault, text, uncertain):
@@ -224,7 +194,7 @@ def test_existing_effort_mode_is_rejected_before_any_solve_or_command(rig, tmp_p
     rig.arm.owner = "effort"
     result = rig.runner.run(tmp_path / "existing-effort", execute=True)
     assert result["status"] == "fault" and "existing effort" in result["error"]
-    assert rig.ctx.process is None and not rig.publications
+    assert rig.ctx.mpc is None and not rig.publications
 
 
 def test_goal_already_met_never_activates_or_publishes_effort(rig, tmp_path):
@@ -251,16 +221,15 @@ def test_slow_logging_cannot_cause_a_late_nonzero_republication(rig, tmp_path, m
     monkeypatch.setattr(r, "_log_values", delayed)
     result = rig.runner.run(tmp_path / "slow-log", execute=True)
     assert result["status"] == "fault" and rig.arm.restored
-    assert all(t < rig.requests[0].deadline_monotonic_sec
-               for t, u in rig.publications if np.any(u))
+    assert all(t < rig.requests[0].t + .1 for t, u in rig.publications if np.any(u))
 
 
-@pytest.mark.parametrize("fault", ["start", "join"])
+@pytest.mark.parametrize("fault", ["start", "close"])
 def test_process_cleanup_failure_does_not_skip_other_resources_or_summary(rig, tmp_path, fault):
     setattr(rig.faults, fault, True)
     result = rig.runner.run(tmp_path / fault, execute=True)
     assert result["status"] == "fault"
-    assert rig.arm.closed and rig.monitor.closed and all(c.closed for c in rig.ctx.queues)
+    assert rig.arm.closed and rig.monitor.closed
     assert (tmp_path / fault / "summary.json").exists()
 
 
@@ -274,28 +243,21 @@ def test_handback_failure_is_reported(rig, tmp_path):
 def test_safety_cannot_be_disabled_or_monitor_a_different_arm():
     for safety in (SafetySettings(False), SafetySettings(True, ("arm_left_1_joint",))):
         with pytest.raises(ValueError):
-            r.RosMpcRunner(r.RunnerConfig(), TaskReference((0., 0., 0.)), WorkerConfig(TIAGO), safety)
+            r.RosMpcRunner(r.RunnerConfig(), TaskReference((0., 0., 0.)), TIAGO, safety)
 
 
 def test_guards_check_source_velocity_expiry_torque_and_body_motion(rig):
     snapshot = state(rig.clock)
     guard = r.RuntimeGuard(r.RunnerConfig(), snapshot, LIMITS)
     guard.state(snapshot, rig.clock()); guard.start(snapshot)
-    request = SolveRequest(1, snapshot, rig.runner.task, 0., rig.clock() + .1)
-    reply = SolveReply(1, 1, snapshot.seq, snapshot.received_monotonic_sec,
-                       rig.clock(), request.deadline_monotonic_sec, knot_plan(), .01)
-    plan = guard.reply(reply, request, rig.clock())
-    np.testing.assert_array_equal(plan.torques, knot_plan())
-    assert plan.start_s == snapshot.received_monotonic_sec and plan.dt_s == .01
+    plan = plan_from(snapshot.received_monotonic_sec)
+    np.testing.assert_array_equal(guard.command(plan, rig.clock() + .015), knot_plan()[1])
     late_knot = knot_plan()
-    late_knot[-1, 3] = 27.  # only the last knot exceeds the raw effort limit
-    for bad in (replace(reply, generation=2), replace(reply, expires_monotonic_sec=rig.clock()),
-                replace(reply, expires_monotonic_sec=rig.clock()+1),
-                replace(reply, torques_native=np.ones(7)), replace(reply, torques_native=late_knot),
-                replace(reply, torques_native=np.where(late_knot > 26, np.nan, late_knot)),
-                replace(reply, dt_s=.002)):
+    late_knot[1, 3] = 27.  # this knot exceeds the raw effort limit
+    for bad, now in ((plan, rig.clock() + .1),
+                     (Plan(plan.t0, plan.dt, plan.states, late_knot), rig.clock() + .015)):
         with pytest.raises(RuntimeError):
-            guard.reply(bad, request, rig.clock())
+            guard.command(bad, now)
     for bad in (replace(snapshot, qd=np.ones(7)*3),
                 replace(snapshot, received_monotonic_sec=rig.clock()-1),
                 replace(snapshot, joint_positions={**snapshot.joint_positions, "torso_lift_joint": .3})):
@@ -306,6 +268,17 @@ def test_guards_check_source_velocity_expiry_torque_and_body_motion(rig):
 def test_uncontrolled_nonfinite_metadata_can_be_logged_without_relaxing_control_checks():
     assert r._log_values({"wheel": float("nan")}) == {"wheel": None}
     json.dumps(r._log_values({"wheel": np.float32("nan")}), allow_nan=False)
+
+
+def test_tracking_reference_includes_edge_clearance():
+    task = TaskReference((.3, -.2, .1), kind="figure8")
+    assert (task.x_span_m, task.y_amplitude_m, task.edge_clearance_m, task.period_s) == (.28, .09, .02, 24.)
+    times = 1.3 + np.arange(7)*.002
+    phase = 2*np.pi*times/task.period_s
+    expected = np.tile(task.target_xyz_m, (len(times), 1))
+    expected[:, 0] += task.edge_clearance_m + .5*task.x_span_m*(1-np.cos(phase))
+    expected[:, 1] += task.y_amplitude_m*np.sin(2*phase)
+    np.testing.assert_allclose(task.horizon(1.3, 7, .002)[:, :3], expected, atol=2e-8)
 
 
 def test_reference_phase_is_time_based_and_orientation_unconstrained():
@@ -324,41 +297,33 @@ def test_command_ticks_publish_the_due_knot_of_plans_whose_interval_differs(monk
     result = rig.runner.run(tmp_path / "ticks", execute=True)
     assert result["status"] == "timeout" and result["restored"] is True
     events = [json.loads(line) for line in (tmp_path / "ticks/events.jsonl").read_text().splitlines()]
-    published = [e for e in events if e["event"] == "effort_publish" and "knot" in e]
-    commands = {e["source_seq"]: e for e in events if e["event"] == "command"}
+    published = [e for e in events if e["event"] == "effort_publish" and "plan_start_monotonic_sec" in e]
+    commands = {e["plan_start_monotonic_sec"]: e for e in events if e["event"] == "command"}
     assert len(published) == sum(np.any(u) for _, u in rig.publications)
-    plan = knot_plan()
+    plan, knots = knot_plan(), set()
     for event in published:
-        command = commands[event["source_seq"]]
+        command = commands[event["plan_start_monotonic_sec"]]
         offset = event["monotonic_sec"] - command["plan_start_monotonic_sec"]
-        assert event["knot"] == int(np.floor(offset / dt_s + 1e-9))
-        np.testing.assert_array_equal(event["torque_nm"], plan[event["knot"]])
+        knot = int(np.floor(offset / dt_s + 1e-9))
+        np.testing.assert_array_equal(event["torque_nm"], plan[knot])
         assert event["monotonic_sec"] < command["expiry"]
+        knots.add(knot)
     # Plans are sampled: later knots are published, not only u_0.
-    assert {e["knot"] for e in published} - {0}
+    assert knots - {0}
     # One solve per 10 ms in both cases: per knot with fast I/O, per tick with slow I/O.
-    receipts = np.array([q.state.received_monotonic_sec for q in rig.requests])
+    receipts = np.array([item.t for item in rig.requests])
     np.testing.assert_allclose(np.diff(receipts), .01, atol=1e-4)
-    # dt_elapsed is the time between consecutive plans' states, as in simulation.
-    assert rig.requests[0].dt_elapsed_s is None
-    np.testing.assert_allclose([q.dt_elapsed_s for q in rig.requests[1:]], np.diff(receipts))
     # Every nonzero publication ends no later than its plan's lease.
     assert all(c["expiry"] <= c["plan_start_monotonic_sec"] + (LIMITS["N"] - 1) * dt_s
                for c in commands.values())
 
 
-def test_guard_never_samples_a_plan_past_its_end(rig, monkeypatch):
-    monkeypatch.setitem(LIMITS, "dt_s", .002)
+def test_lease_ends_no_later_than_the_plan(rig, monkeypatch):
+    monkeypatch.setitem(LIMITS, "dt_s", .002)  # 2 ms knots: 31 x 2 ms = 62 ms plan, 100 ms timeout
     snapshot = state(rig.clock)
     guard = r.RuntimeGuard(r.RunnerConfig(), snapshot, LIMITS)
-    start = snapshot.received_monotonic_sec
-    request = SolveRequest(1, snapshot, rig.runner.task, 0., start + .1)
-    reply = SolveReply(1, 1, snapshot.seq, start, rig.clock(), start + .1, knot_plan(), .002)
-    with pytest.raises(RuntimeError, match="outlives"):
-        guard.reply(reply, request, rig.clock())  # 100 ms lease, 62 ms plan
-    plan = guard.reply(replace(reply, expires_monotonic_sec=start + .062), request, rig.clock())
-    assert guard.command(plan, start + .0611)[0] == 30
-    with pytest.raises(RuntimeError):
-        guard.command(plan, start + .062)
-
-
+    plan = plan_from(snapshot.received_monotonic_sec)
+    assert guard.lease_end(plan.t0) - plan.t0 == pytest.approx(.062)
+    np.testing.assert_array_equal(guard.command(plan, plan.t0 + .0611), knot_plan()[30])
+    with pytest.raises(RuntimeError, match="expired"):
+        guard.command(plan, plan.t0 + .062)
