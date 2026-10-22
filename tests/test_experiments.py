@@ -9,6 +9,7 @@ import pytest
 
 from experiments import common, figure8 as f8, reach as rc
 from tiago_mpc.loops import Fixed, run_simulation
+from tiago_mpc.mpc import MpcParams
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import ARM_URDF, Q_START, RIGHT_ARM_JOINTS, fk, urdf_friction
@@ -89,6 +90,7 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
         metadata = json.loads(str(replay["metadata_json"]))
         assert metadata["joint_names"] == list(RIGHT_ARM_JOINTS) and len(metadata["predictions"]) == summary["plans"]
         assert metadata["time_basis"] == "simulation"
+        assert MpcParams.from_dict(metadata["provenance"]["params"]) == record.params
     assert record.out == tmp_path / name
 
 

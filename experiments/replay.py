@@ -6,6 +6,7 @@ TIAGo names come from tiago_mpc.tiago, which loads only NumPy).
 """
 from __future__ import annotations
 
+from dataclasses import asdict
 import hashlib
 import json
 import os
@@ -22,7 +23,8 @@ VERSION = 1
 
 def export_replay(record):
     """Write <record.out>/replay.npz on execution time: the state and command at each
-    tick, the task's reference and every plan; nothing for fewer than two ticks."""
+    tick, the task's reference, every plan and the MpcParams (provenance.params);
+    nothing for fewer than two ticks."""
     trajectory = record.trajectory
     time_s, state, command = trajectory["time_s"], trajectory["state"], trajectory["command"]
     if len(time_s) < 2:
@@ -39,7 +41,8 @@ def export_replay(record):
                        torque_time_s=time_s[sent] if sent.any() else None,
                        reference_xyz_m=np.array([record.task.at(t, 2, dt)[0][0, :3] for t in time_s]),
                        reference_time_s=time_s, reference_frame=ROOT_FRAME, plans=plans,
-                       end_effector_frame=record.params.ee_frame, label=record.out.name)
+                       end_effector_frame=record.params.ee_frame, label=record.out.name,
+                       provenance=dict(params=asdict(record.params)))
 
 
 def model_sha256(model_urdf):
