@@ -48,11 +48,24 @@ class SimPlant:
         return State(self.t, self.q.copy(), self.qd.copy())
 
     def apply(self, command: np.ndarray) -> None:
+        """Hold command from now on, after integrating the held one up to now."""
+        self._integrate(self.clock.now())
         self.command = np.array(command, dtype=float)
 
     def advance(self, t: float) -> None:
         """Integrate to t with the held command, then advance the simulation clock to t
         or wait until the wall clock reaches t (late: return at once)."""
+        self._integrate(t)
+        if self.clock.kind == "simulation":
+            self.clock.advance(t - self.clock.now())
+        else:
+            time.sleep(max(0., t - self.clock.now()))
+
+    def _integrate(self, t):
+        """Integrate the held command from self.t to t in substeps; nothing unless t is later
+        (apply on the simulation clock, or a deadline that apply passed on the wall clock)."""
+        if t - self.t <= 1e-12:
+            return
         while self.t < t - 1e-12:
             h = min(self.substep, t - self.t)
             if self.friction is None:
@@ -62,11 +75,7 @@ class SimPlant:
             if not np.isfinite(q).all() or not np.isfinite(qd).all():
                 raise FloatingPointError("Nonfinite simulated state")
             self.q, self.qd, self.t = q, qd, self.t + h
-        self.t = t  # the tick's time, instead of accumulating substep rounding
-        if self.clock.kind == "simulation":
-            self.clock.advance(t - self.clock.now())
-        else:
-            time.sleep(max(0., t - self.clock.now()))
+        self.t = t  # instead of accumulating substep rounding
 
     def stop(self) -> None:
         self.command = np.zeros(7)
