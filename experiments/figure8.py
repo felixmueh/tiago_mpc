@@ -51,7 +51,7 @@ class Figure8:
 
 
 FIGURE8 = replace(TIAGO, dt_s=.01, solver=TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
-                  admm=replace(TIAGO.admm, rho_q=.1, rho_qd=.03), friction=urdf_friction(.03))
+                  friction=urdf_friction(.03))
 
 
 def metrics(error):

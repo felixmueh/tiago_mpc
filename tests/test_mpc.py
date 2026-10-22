@@ -34,6 +34,10 @@ def test_asdict_round_trips_also_through_json_and_pickle(params):
     assert pickle.loads(pickle.dumps(params)) == params
 
 
+def test_the_admm_limits_are_gatos_defaults():
+    assert asdict(TIAGO.admm) == gato.MPCController.LIMIT_DEFAULTS["admm"]
+
+
 @pytest.fixture
 def no_compile(monkeypatch, tmp_path):
     """A fresh GATO cache in which compiling or a solver raises."""
