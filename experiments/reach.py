@@ -80,7 +80,7 @@ def reach(plant, run=run_simulation, task=Reach(), params=TIAGO, law=sample_knot
         arrived = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
                       update_period=update_period or params.dt_s,
                       duration=task.timeout_s if duration is None else min(task.timeout_s, duration))
-        trajectory = record.trajectory()
+        trajectory = record.trajectory
         distance = np.array([task.distance(q) for q in trajectory["state"][:, :7]])
         excess = limit_excess(trajectory)
         record.arrays["distance_m"] = distance

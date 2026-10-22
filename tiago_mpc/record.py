@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+from functools import cached_property
 import importlib.metadata
 import json
 from pathlib import Path
@@ -42,8 +43,9 @@ class Record:
     def __call__(self, tick):
         self.ticks.append(tick)
 
+    @cached_property
     def trajectory(self):
-        """The buffered ticks as arrays; times from the first tick."""
+        """The buffered ticks as arrays, computed once after the run; times from the first tick."""
         ticks = self.ticks
         t0 = ticks[0].state.t if ticks else 0.
         plans = [k.plan for k in ticks if k.new]
@@ -61,7 +63,7 @@ class Record:
         return out
 
     def save(self):
-        trajectory = self.trajectory()
+        trajectory = self.trajectory
         np.savez_compressed(self.out / "trajectory.npz", **trajectory, **self.arrays)
         self.summary.update(ticks=len(self.ticks), plans=len(trajectory["plan_t0_s"]),
                             plant=dict(type=type(self.plant).__name__, **self.plant.settings))  # after stop()

@@ -74,7 +74,7 @@ def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sampl
         run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
             update_period=update_period or params.dt_s,
             duration=task.period_s if duration is None else min(task.period_s, duration))
-        trajectory = record.trajectory()
+        trajectory = record.trajectory
         t = trajectory["time_s"]
         xyz = np.array([fk(q, params.ee_frame) for q in trajectory["state"][:, :7]])
         error = np.linalg.norm(xyz - task.path(t), axis=1)

@@ -105,9 +105,10 @@ def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
     # enabled in between (e.g. collecting at safe points); to be discussed (todo.org).
     gc.disable()
     try:
-        start = plant.state().t
+        start = None
         while True:
             s = plant.state()
+            start = s.t if start is None else start
             t = s.t - start
             done = task.done(s, t)
             end = done or t >= duration - _TOLERANCE
