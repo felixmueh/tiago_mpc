@@ -36,7 +36,7 @@ Physical execution is not qualified.
 flowchart LR
     Robot[ROS 2 robot] -->|named state| IO[Caller: ROS I/O and watchdogs]
     IO -->|one outstanding request| MPC[Spawned MPC worker]
-    MPC -->|native torque and original expiry| IO
+    MPC -->|native plan and original expiry| IO
     IO -->|full named state| Safety[Spawned safety worker]
     Safety -->|result or latched fault| IO
     IO -->|effort / PAL handback| Robot
@@ -102,10 +102,32 @@ or passive torque is applied in the ROS I/O process. Reaching retains its own
 loss-free predictor default. No ROS tracking qualification is claimed.
 Orientation remains unconstrained.
 The I/O loop still uses its explicit 10 ms default, independently of the
-tracking predictor's 2 ms knots; this does not promise a 2 ms ROS update rate.
+predictor's knot interval (10 ms for both tasks since 2026-10-22; 2 ms for
+tracking before). The runner never assumes that the two are equal.
 References follow measured ROS timestamps and the existing one-knot warm-start
 shift remains unchanged. The worker smoke below does not qualify this complete
 ROS timing loop.
+
+## Plan playback
+
+The worker replies with the whole plan: the native knot torques u₀…u₍N−2₎ and
+their interval dt. Every knot is validated on receipt (finite, within the raw
+effort limits); a plan whose lease would outlive its last knot is rejected. At
+each I/O tick the runner publishes the knot due at that tick,
+k = floor((now − t₀)/dt), where t₀ is the parent's monotonic receipt time of the
+plan's state (`tiago_mpc/playback.py`, shared with the simulation). Each torque
+passes the guards below before publication and is logged with its knot and
+evaluation time. The receiver holds it until the next tick, so I/O slower than
+the knots samples the plan once per tick. `--command-mode first` publishes the
+plan's first torque at every tick instead, as before.
+
+Solves are scheduled once per knot, at the I/O tick nearest each knot boundary,
+at most once per tick and with one outstanding request; missed slots are
+skipped. With 2 ms I/O and 10 ms knots this solves every fifth tick; with 10 ms
+I/O and 2 ms knots, every tick. `dt_elapsed` is the time between consecutive
+requests' states, as in simulation; GATO uses it only to score hypotheses and
+shifts its warm start by one knot per solve, so solves more than one knot
+apart start from a misaligned guess.
 
 ## Leases, safety and handback
 

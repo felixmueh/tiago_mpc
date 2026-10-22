@@ -204,7 +204,7 @@ def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client
     arm._on_sea_state(message(1.01))
     first = arm.latest_state()
     limits = dict(q_lower=[-3.]*7, q_upper=[3.]*7, velocity_limits=[2.5]*7,
-                  effort_limits=[26.]*7)
+                  effort_limits=[26.]*7, N=32, dt_s=.01)
     guard = RuntimeGuard(RunnerConfig(), first, limits)
     guard.state(first, client.clock.now)
     client.clock.now = 1.02

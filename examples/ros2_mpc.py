@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "external/gato/python"))
 
 from tiago_mpc.mpc_worker import WorkerConfig
 from tiago_mpc.model_runtime import EE_FRAME
+from tiago_mpc.playback import MODES
 from tiago_mpc.protocol import TaskReference
 from tiago_mpc.ros2 import TiagoRightArmClient
 from tiago_mpc.runner import RosMpcRunner, RunnerConfig
@@ -34,6 +35,8 @@ def main(argv=None):
     parser.add_argument("--duration", type=float, default=DEFAULT_RUNNER.duration_sec, help="maximum run wall time, seconds")
     parser.add_argument("--config", type=Path, help="explicit MPC configuration; defaults to configs/reaching.json")
     parser.add_argument("--budget-ms", type=float, help="optional advisory per-step SQP wall budget, milliseconds")
+    parser.add_argument("--command-mode", choices=MODES, default=DEFAULT_RUNNER.command_mode,
+                        help="publish each plan's due knot (default), or hold its first torque as before")
     parser.add_argument("--sea-absolute", action="store_true", help="use the ported SEA absolute feedback estimator")
     parser.add_argument("--output", type=Path, help="fresh run directory under this checkout's _expr_data")
     args = parser.parse_args(argv)
@@ -42,7 +45,7 @@ def main(argv=None):
     if args.execute and args.task == "figure8" and args.config is None:
         parser.error("figure-eight execution requires an explicit tracking --config")
     try:
-        config = replace(DEFAULT_RUNNER, duration_sec=args.duration)
+        config = replace(DEFAULT_RUNNER, duration_sec=args.duration, command_mode=args.command_mode)
         shape = {}
         if args.task == "figure8" and args.config is not None:
             shape = json.loads(args.config.read_text()).get("figure8", {})

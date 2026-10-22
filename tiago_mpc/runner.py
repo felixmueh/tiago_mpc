@@ -17,6 +17,7 @@ import time
 
 import numpy as np
 
+from .playback import MODES, Plan
 from .protocol import SolveReply, SolveRequest, TaskReference, WorkerReady
 from .ros2 import ArmState, RIGHT_ARM_JOINTS, TiagoRightArmClient
 
@@ -36,11 +37,14 @@ class RunnerConfig:
     start_tolerance_rad: float = 0.05
     body_drift_tolerance_rad: float = 0.02
     torso_drift_tolerance_m: float = 0.005
+    command_mode: str = "playback"  # or "first": hold u_0 as before (tiago_mpc/playback.py)
 
     def __post_init__(self):
         for name, value in asdict(self).items():
-            if not math.isfinite(value) or value <= 0:
+            if name != "command_mode" and (not math.isfinite(value) or value <= 0):
                 raise ValueError(f"{name} must be finite and positive")
+        if self.command_mode not in MODES:
+            raise ValueError(f"command_mode must be one of {MODES}")
 
 
 def safety_state(state):
@@ -69,6 +73,9 @@ class RuntimeGuard:
                 or np.any(self.lower >= self.upper) or np.any(self.velocity <= 0)
                 or np.any(self.effort <= 0)):
             raise ValueError("invalid native physical limits from MPC worker")
+        self.knots, self.dt_s = int(limits["N"]) - 1, float(limits["dt_s"])
+        if self.knots < 1 or not math.isfinite(self.dt_s) or self.dt_s <= 0:
+            raise ValueError("invalid MPC horizon from MPC worker")
         self.last_seq, self.last_stamp = -1, None
 
     def state(self, state, now):
@@ -128,10 +135,24 @@ class RuntimeGuard:
                 or now >= reply.expires_monotonic_sec
                 or now - reply.source_received_monotonic_sec > self.config.command_timeout_sec):
             raise RuntimeError("MPC result expired or has invalid timing")
-        u = np.asarray(reply.u_native, dtype=float)
-        if u.shape != (7,) or not np.isfinite(u).all() or np.any(np.abs(u) > self.effort):
+        # Validate every knot: any of them may be played back before the lease ends.
+        torques = np.asarray(reply.torques_native, dtype=float)
+        if (torques.shape != (self.knots, 7) or not np.isfinite(torques).all()
+                or np.any(np.abs(torques) > self.effort)):
             raise RuntimeError("invalid MPC torque or raw effort limit exceeded")
-        return u.copy()
+        if reply.dt_s != self.dt_s:
+            raise RuntimeError("MPC plan has an unexpected knot interval")
+        plan = Plan(reply.source_received_monotonic_sec, reply.dt_s, torques, self.config.command_mode)
+        if reply.expires_monotonic_sec > plan.end_s:
+            raise RuntimeError("MPC command lease outlives its plan")
+        return plan
+
+    def command(self, plan, now):
+        """Knot and torque due at ``now``; past the plan's end this raises."""
+        knot, torque = plan.command(now)
+        if torque.shape != (7,) or not np.isfinite(torque).all() or np.any(np.abs(torque) > self.effort):
+            raise RuntimeError("invalid MPC torque or raw effort limit exceeded")
+        return knot, torque.copy()
 
 
 def _json(value):
@@ -190,7 +211,7 @@ class RosMpcRunner:
             ["git", "status", "--porcelain"], cwd=root, text=True).strip())
         source = output / "source"
         source.mkdir()
-        for name in ("runner.py", "protocol.py", "ros2.py", "mpc_worker.py", "model_runtime.py", "configuration.py", "controller.py", "joint_dynamics.py", "safety.py"):
+        for name in ("runner.py", "protocol.py", "playback.py", "ros2.py", "mpc_worker.py", "model_runtime.py", "configuration.py", "controller.py", "joint_dynamics.py", "safety.py"):
             shutil.copyfile(root / "tiago_mpc" / name, source / name)
         selected_config = Path(self.worker_config.config_path or root / "configs/reaching.json")
         shutil.copyfile(selected_config, output / "mpc-config.json")
@@ -269,22 +290,28 @@ class RosMpcRunner:
             pending = current = current_request = None
             request_id = 0
             last_request_seq = -1
-            applied_at = None
+            last_request_receipt = None
             stopping = False
 
             # ==========================================================================
-            # TODO(torque command, Felix 2026-10-22): NOT YET THE RIGHT COMMAND TYPE
-            # FOR REAL-TIME CONTROL OF THE ROBOT.
-            # Only the plan's first torque u0 is sent, then republished every I/O
-            # tick until the next reply or the lease ends. The rest of the plan is
-            # discarded, the torque steps at every update, and a torque planned for
-            # one knot (2 ms in tracking) is held for 10 ms or longer.
-            # Options (thesis workspace research/tiago-mpc-simplification-proposals.md,
-            # "Torque commands"): play back the plan per knot (zero-order hold, as
-            # GATO's transcription assumes); feedforward torque plus local feedback
-            # in a PAL real-time controller; possibly separate control modes for
-            # simulation and the robot. The simulation holds u0 the same way
-            # (tiago_mpc/simulation.py): change both together.
+            # ==========================================================================
+            # TODO(torque command, Felix 2026-10-22): STILL NOT THE FINAL COMMAND
+            # TYPE FOR REAL-TIME CONTROL OF THE ROBOT.
+            # Done: each I/O tick publishes the knot of the latest plan that is due
+            # at the tick, u_k for t0 + k dt <= now < t0 + (k+1) dt, where t0 is the
+            # receipt time of the plan's state (tiago_mpc/playback.py, shared with
+            # the simulation; --command-mode first keeps the earlier u_0 hold). The
+            # lease ends no later than the plan, so a plan is never played past its
+            # last knot: expiry faults first.
+            # Remaining: the receiver holds each torque until the next tick, so with
+            # I/O slower than the knots the plan is only sampled once per tick, and
+            # the torque still steps at every tick and every update. GATO shifts its
+            # warm start by one knot per solve whatever dt_elapsed says, so solves
+            # more than one knot apart start from a misaligned guess.
+            # Deferred (thesis workspace research/tiago-mpc-simplification-proposals.md,
+            # "Torque commands"): smoothing or local feedback; feedforward torque
+            # plus feedback in a PAL real-time controller; possibly separate
+            # control modes for simulation and the robot.
             # ==========================================================================
             def publish_checked(reply, request):
                 # This guard is adjacent to every nonzero publication, including
@@ -295,9 +322,12 @@ class RosMpcRunner:
                 current_state = arm.latest_state()
                 guard.state(current_state, self.clock())
                 monitor.check(safety_state(current_state))
-                torque = guard.reply(reply, request, self.clock())
+                now = self.clock()
+                knot, torque = guard.command(guard.reply(reply, request, now), now)
                 arm.publish_effort(torque)
-                record("effort_publish", source_seq=reply.source_seq, torque_nm=torque,
+                record("effort_publish", source_seq=reply.source_seq, torque_nm=torque, knot=knot,
+                       evaluated_monotonic_sec=now,
+                       plan_start_monotonic_sec=reply.source_received_monotonic_sec,
                        expires_monotonic_sec=reply.expires_monotonic_sec)
 
             while not stopping:
@@ -319,7 +349,7 @@ class RosMpcRunner:
                 if reply is not None:
                     if pending is None or not isinstance(reply, SolveReply):
                         raise RuntimeError("unexpected MPC response")
-                    u = guard.reply(reply, pending, now)
+                    plan = guard.reply(reply, pending, now)
                     source_speed = float(np.sum(np.abs(pending.state.qd)))
                     arrived = (self.task.kind == "reach"
                                and reply.stats.get("position_error_m", math.inf)
@@ -360,9 +390,9 @@ class RosMpcRunner:
                         monitor.check(safety_state(arm.latest_state()))
                     publish_checked(reply, pending)
                     current, current_request, pending = reply, pending, None
-                    applied_at = now
                     summary["accepted_commands"] += 1
-                    record("command", source_seq=reply.source_seq, torque_nm=u,
+                    record("command", source_seq=reply.source_seq, plan_torques_nm=plan.torques,
+                           plan_dt_s=plan.dt_s, plan_start_monotonic_sec=plan.start_s,
                            expiry=reply.expires_monotonic_sec, stats=reply.stats)
                 elapsed = state.stamp_sec - epoch_stamp
                 if elapsed < 0:
@@ -370,23 +400,33 @@ class RosMpcRunner:
                 if now - task_start >= self.config.duration_sec:
                     summary["status"] = "completed" if self.task.kind == "figure8" else "timeout"
                     stopping = True
-                if not stopping and pending is None and now >= next_solve and state.seq != last_request_seq:
+                # One solve per knot, at the I/O tick nearest each knot boundary,
+                # and at most one per tick (I/O slower than the knots: every tick).
+                # Missed slots are skipped. GATO shifts its warm start by exactly one
+                # knot per solve, so this keeps it aligned whenever ticks allow it.
+                half_tick = .5 * self.config.io_period_sec
+                if (not stopping and pending is None and now >= next_solve - half_tick
+                        and state.seq != last_request_seq):
                     request_id += 1
-                    # A held torque must not outlive its plan: tracking plans span
-                    # only 31 x 2 ms = 62 ms, less than the 100 ms command lease.
+                    # A plan must not be played past its end: 31 x 2 ms knots would
+                    # span only 62 ms, less than the 100 ms command lease.
                     plan_s = (ready.details["N"] - 1) * ready.details["dt_s"]
                     deadline = state.received_monotonic_sec + min(self.config.command_timeout_sec, plan_s)
+                    # dt_elapsed is the time between the two plans' states, as in
+                    # simulation. GATO uses it only to score hypotheses (none here).
                     pending = SolveRequest(request_id, state, self.task, elapsed, deadline,
-                                           None if applied_at is None else now - applied_at)
+                                           None if last_request_receipt is None
+                                           else state.received_monotonic_sec - last_request_receipt)
                     request_q.put_nowait(pending)
-                    last_request_seq = state.seq
+                    last_request_seq, last_request_receipt = state.seq, state.received_monotonic_sec
                     record("request", request_id=request_id, source_seq=state.seq,
                            source_stamp_sec=state.stamp_sec, q=state.q, qd=state.qd,
                            task_elapsed_sec=elapsed, deadline=deadline)
                     dt = ready.details["dt_s"]
-                    next_solve += max(1, math.floor((now - next_solve) / dt) + 1) * dt
+                    next_solve += (math.floor((now + half_tick - next_solve) / dt) + 1) * dt
                 if mode_attempted and current is not None and not stopping:
-                    # The receiver holds this torque; republish only while valid.
+                    # The receiver holds each torque until the next tick; publish the
+                    # current plan's due knot only while its lease is valid.
                     publish_checked(current, current_request)
                 record("state", seq=state.seq,
                        safety_seq=state.seq if state.safety_seq is None else state.safety_seq,

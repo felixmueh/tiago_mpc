@@ -154,13 +154,26 @@ Both examples accept `--solve-time-mode fixed|measured`:
 - `measured` charges `MPCController.step`'s complete reported wall time,
   including host work, rather than native kernel timing.
 
-During charged time the plant holds the previous torque (initially zero).
-The new torque acts for the remainder of the nominal controller period.
+Each solve returns a plan: one torque per knot. By default (`--command-mode
+playback`) the plant applies knot k = floor((t − t₀)/dt) at time t, where t₀
+is the time of the state the plan was computed from: a zero-order hold per knot,
+as GATO's transcription assumes. `--command-mode first` keeps the earlier
+command, the plan's first torque held until the next plan, for comparison with
+earlier runs. With the control period equal to dt and zero latency both modes
+are bitwise identical. During charged time the previous plan continues
+(initially zero torque); the new plan then plays from the offset of the
+charged time. Past a plan's last knot, which only long charged solves reach,
+the plant holds the final knot and flags it (`applied_past_plan_end`,
+`plant_steps_past_plan_end`). `--control-period-s` sets the nominal time
+between solves; it defaults to the knot interval `dt_s` and may differ from it.
 Overruns extend the interval to the charged solve time. References follow the
 resulting simulated timestamps; no wall-clock sleeping is used. Setup, plotting
-and logging time are not charged. The upstream one-knot warm-start shift is
-unchanged. Histories record solve-start times, charged latency and actual update
-intervals alongside native/controller timings.
+and logging time are not charged. The upstream warm-start shift is unchanged:
+GATO shifts by one knot per solve whatever `dt_elapsed` says (it only scores
+hypotheses), so a control period other than dt starts each solve from a
+misaligned guess. Histories record solve-start times, charged latency and actual
+update intervals alongside native/controller timings, and per plant substep the
+applied torque, its knot and its plan's start time.
 
 ```bash
 .venv/bin/python examples/reach_sim.py --solve-time-mode fixed --solve-time-s .003
@@ -230,8 +243,10 @@ runners retain their configured width throughout a run. Controller setup details
 effective seven float32 widths as `joint_friction_smoothing_rad_s`; it is `null`
 when predictor friction is disabled. Record a new receipt after any deliberate
 runtime change: the module hash alone no longer identifies the smoothing law.
-N32, 2 ms prediction/control and 0.1 ms RK4 plant substeps track a 24 s horizontal
-figure eight, 0.28 m wide and 0.18 m high. This uses exact state and fixed simulation
+N32, 10 ms knots and control period and 0.1 ms RK4 plant substeps track a 24 s
+horizontal figure eight, 0.28 m wide and 0.18 m high. The default knot interval
+changed from 2 ms to 10 ms on 2026-10-22; the tracking checks above ran at 2 ms
+and do not qualify the 10 ms default. This uses exact state and fixed simulation
 time: computation latency does not advance the plant. It is not a real-time or
 physical-robot qualification. Collisions are not checked.
 

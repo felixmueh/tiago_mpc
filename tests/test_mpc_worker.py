@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_tracking_configuration_keeps_weights_limits_and_explicit_smooth_losses():
     selected, settings, effective = load_configuration(ROOT / "configs/tracking.json")
     assert selected == ROOT / "configs/tracking.json"
-    assert (effective["N"], effective["dt_s"]) == (32, .002)
+    assert (effective["N"], effective["dt_s"]) == (32, .01)
     assert effective["solver_params"]["q_cost"] == 4
     assert effective["solver_params"]["N_cost"] == 8
     assert effective["solver_params"]["u_cost"] == 1e-6
@@ -96,11 +96,11 @@ def engine(controller=None):
 def test_native_order_and_signed_joint_cross_only_gpu_boundary():
     item = request(elapsed=1.5)
     worker, controller, fk_calls = engine()
-    u, stats = worker.solve(item)
+    torques, stats = worker.solve(item)
     expected_x = np.r_[item.state.q, item.state.qd] * np.tile(SIGNS, 2)
     np.testing.assert_allclose(controller.resets[0], expected_x)
     np.testing.assert_allclose(controller.calls[0][0], expected_x)
-    np.testing.assert_allclose(u, np.arange(7) * SIGNS)
+    np.testing.assert_allclose(torques, [np.arange(7) * SIGNS])
     np.testing.assert_allclose(fk_calls[0], item.state.q)
     np.testing.assert_allclose(fk_calls[1], item.state.q * 2)
     assert stats["sqp"] == 2 and stats["pcg"] == 3 and stats["zero_pcg_rows"] == 1
@@ -130,6 +130,21 @@ def test_only_new_generation_resets_from_current_measured_state():
     worker.solve(newer)
     assert len(controller.resets) == 2
     np.testing.assert_allclose(controller.resets[-1][:7], newer.state.q * SIGNS)
+
+
+def test_reply_carries_every_knot_of_the_plan_in_native_coordinates():
+    controller = Controller()
+    knots = np.arange(21, dtype=float).reshape(3, 7)
+
+    def step(x, reference, *, dt_elapsed, budget_s):
+        result = Controller.step(controller, x, reference, dt_elapsed=dt_elapsed, budget_s=budget_s)
+        plan = np.concatenate([np.r_[x, u] for u in knots] + [x * 2])
+        return SimpleNamespace(**{**vars(result), "u": knots[0].copy(), "xu_best": plan})
+    controller.step = step
+    worker = MpcEngine(controller, signs=SIGNS, n=4, dt_s=.002,
+                       ee_position=lambda q: q[:3], details={"N": 4})
+    torques, _ = worker.solve(request())
+    np.testing.assert_array_equal(torques, knots * SIGNS)
 
 
 @pytest.mark.parametrize("field", ["torque", "plan", "state"])
@@ -167,6 +182,8 @@ def test_expiry_is_original_absolute_deadline_even_if_solve_finishes_late():
     assert reply.expires_monotonic_sec == 12.
     assert reply.source_received_monotonic_sec == 10. and reply.source_seq == 11
     assert reply.generation == 1 and reply.request_id == 7
+    np.testing.assert_allclose(reply.torques_native, [np.arange(7) * SIGNS])
+    assert reply.dt_s == .01
 
 
 def test_already_expired_request_avoids_solve_and_preserves_deadline():
@@ -175,7 +192,7 @@ def test_already_expired_request_avoids_solve_and_preserves_deadline():
     assert not controller.calls
     assert replies[1].error == "request expired before solve"
     assert replies[1].expires_monotonic_sec == 12.
-    assert replies[1].u_native is None
+    assert replies[1].torques_native is None
 
 
 def test_initialization_failure_reports_not_ready():
@@ -192,7 +209,7 @@ def test_solve_failure_reports_error_and_exits_before_next_request():
     replies, pending = run_loop([request(), request(generation=2)], lambda _: worker, [11., 12.])
     assert len(replies) == 2
     assert "FloatingPointError" in replies[1].error
-    assert replies[1].u_native is None
+    assert replies[1].torques_native is None
     assert pending.qsize() == 2  # next request and shutdown marker remain unconsumed
 
 

@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 
+from .playback import knot_torques
 from .protocol import SolveReply, SolveRequest, WorkerReady
 
 
@@ -68,13 +69,12 @@ class MpcEngine:
             self._generation = request.task.generation
         step = self.controller.step(x_gpu, reference,
                                     dt_elapsed=request.dt_elapsed_s, budget_s=self.budget_s)
-        # TODO(torque command): only u0 leaves the worker; see tiago_mpc/runner.py.
-        u = np.asarray(step.u, dtype=float)
+        # The whole plan leaves the worker; the runner plays it back by knot.
+        # TODO(torque command): what remains deferred is noted in tiago_mpc/runner.py.
         plan = np.asarray(step.xu_best, dtype=float).reshape(-1)
-        if u.shape != (7,) or not np.isfinite(u).all():
-            raise FloatingPointError("Nonfinite or malformed MPC torque")
         if plan.size != self.n * 21 - 7 or not np.isfinite(plan).all():
             raise FloatingPointError("Nonfinite or malformed MPC trajectory")
+        torques = knot_torques(plan, self.signs)
         measured_ee = np.asarray(self.ee_position(q), dtype=float)
         terminal_q_native = plan[-14:-7] * self.signs
         predicted_ee = np.asarray(self.ee_position(terminal_q_native), dtype=float)
@@ -94,16 +94,16 @@ class MpcEngine:
             predicted_endpoint_error_m=float(np.linalg.norm(predicted_ee - reference[-1, :3])),
             ee_xyz_m=measured_ee.tolist(), controller_reset=reset,
             task_elapsed_s=float(request.task_elapsed_s))
-        return u * self.signs, stats
+        return torques, stats
 
 
-def _reply(request, now, *, u=None, stats=None, error=""):
+def _reply(request, now, *, torques=None, dt_s=math.nan, stats=None, error=""):
     return SolveReply(
         request_id=request.request_id, generation=request.task.generation,
         source_seq=request.state.seq,
         source_received_monotonic_sec=request.state.received_monotonic_sec,
         finished_monotonic_sec=now, expires_monotonic_sec=request.deadline_monotonic_sec,
-        u_native=u, stats={} if stats is None else stats, error=error)
+        torques_native=torques, dt_s=dt_s, stats={} if stats is None else stats, error=error)
 
 
 def worker_loop(config, request_q, response_q, stop_event, *, engine_factory=None, clock=None):
@@ -130,11 +130,11 @@ def worker_loop(config, request_q, response_q, stop_event, *, engine_factory=Non
             response_q.put(_reply(request, now, error="request expired before solve"))
             continue
         try:
-            u, stats = engine.solve(request)
+            torques, stats = engine.solve(request)
         except Exception as exc:
             response_q.put(_reply(request, clock(), error=f"{type(exc).__name__}: {exc}"))
             return
-        response_q.put(_reply(request, clock(), u=u, stats=stats))
+        response_q.put(_reply(request, clock(), torques=torques, dt_s=engine.dt_s, stats=stats))
 
 
 def worker_main(config, request_q, response_q, stop_event):

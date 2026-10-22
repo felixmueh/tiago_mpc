@@ -24,28 +24,40 @@ def output_root():
         yield Path(directory)
 
 
-def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch,
-                      *, duration=.03, period=.01, with_losses=False):
+def knot_offset(k):
+    """Stub plans give knot k the solve's u_0 plus k/4, so each knot is identifiable."""
+    return .25 * k
+
+
+def run_example(example, mode, fixed, wall, output_root, monkeypatch, *, duration=.03,
+                period=.01, with_losses=False, n=2, control_period=None, command_mode=None,
+                name="run"):
+    """Run an example with a deterministic controller; return what it saved and saw."""
     spec = importlib.util.spec_from_file_location(example, ROOT / "examples" / f"{example}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     tracking = example == "track_figure8"
     settings = json.loads((ROOT / "configs" / ("tracking.json" if tracking else "reaching.json")).read_text())
-    settings.update(N=2, dt_s=period)
+    settings.update(N=n, dt_s=period)
     if with_losses:  # opt-in reaching friction, with tracking's coefficients and width
         tracking_settings = json.loads((ROOT / "configs/tracking.json").read_text())
         settings.update({key: tracking_settings[key]
                          for key in ("joint_dynamics", "predictor_smoothing_rad_s")})
     if tracking:
-        settings.update(sim_dt_s=min(.003, period), duration_s=duration, secondary_metrics_start_s=.01)
+        settings.update(sim_dt_s=min(.003, period, control_period or period), duration_s=duration,
+                        secondary_metrics_start_s=.01)
         settings["figure8"]["period_s"] = duration
         settings["joint_dynamics"]["coulomb_nm"][0] = 1.234
-    config = output_root / "config.json"
+    config = output_root / f"{name}-config.json"
     config.write_text(json.dumps(settings))
-    out = output_root / "run"
+    out = output_root / name
     argv = [example, "--config", str(config), "--output", str(out),
             "--solve-time-mode", mode, "--solve-time-s", str(fixed)]
     argv += ["--losses", "plant-only"] if tracking else ["--hold", "--timeout", str(duration)]
+    if control_period is not None:
+        argv += ["--control-period-s", str(control_period)]
+    if command_mode is not None:
+        argv += ["--command-mode", command_mode]
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(module, "git", lambda *args, **kwargs: "test")
     monkeypatch.setattr(module.importlib.metadata, "version", lambda name: "test")
@@ -59,9 +71,12 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
         calls.append((state.copy(), reference.copy(), dt_elapsed))
         stats = NS(**{key: np.ones(1, dtype=int) for key in
                       ("sqp_iters", "pcg_iters", "admm_iters", "admm_linsys_iters")})
-        return NS(u=np.full(7, min(len(calls), 3)), wall_s=wall, admm_linsys="pcg",
+        u = np.full(7, float(min(len(calls), 3)))
+        plan = np.concatenate([np.r_[np.zeros(14), u + knot_offset(k)] for k in range(n - 1)]
+                              + [np.zeros(14)])
+        return NS(u=u, xu_best=plan, wall_s=wall, admm_linsys="pcg",
                   row_viol=np.zeros(1), solve=NS(stats=stats, solve_time_us=123.,
-                                               xu=np.zeros((1, 35))))
+                                               xu=plan[None].copy()))
 
     def integrate(model, data, q, v, u, h, *losses):
         applied.append((u.copy(), h))
@@ -94,6 +109,15 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
         prepare = module.runtime_urdf
         monkeypatch.setattr(module, "runtime_urdf", lambda cache, losses: prepare(output_root / "plant", losses))
     assert module.main() == 0
+    return NS(out=out, calls=calls, applied=applied, settings=settings, module=module, tracking=tracking)
+
+
+def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch,
+                      *, duration=.03, period=.01, with_losses=False):
+    run = run_example(example, mode, fixed, wall, output_root, monkeypatch,
+                      duration=duration, period=period, with_losses=with_losses)
+    out, calls, applied, settings, module, tracking = (
+        run.out, run.calls, run.applied, run.settings, run.module, run.tracking)
     if not tracking:
         summary = json.loads((out / "summary.json").read_text())
         assert summary["simulator_joint_dynamics"] == settings.get("joint_dynamics")
@@ -140,11 +164,64 @@ def test_example_delays_actuation_and_advances_reference(
     run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch)
 
 
-def test_default_tracking_clock_does_not_add_a_roundoff_solve(output_root, monkeypatch):
-    run_example_check("track_figure8", "fixed", 0., .001, np.arange(12000) * .002,
-                      output_root, monkeypatch, duration=24., period=.002)
+@pytest.mark.parametrize("period", [.01, .002])  # the 10 ms default and the earlier 2 ms knots
+def test_default_tracking_clock_does_not_add_a_roundoff_solve(output_root, monkeypatch, period):
+    assert json.loads((ROOT / "configs/tracking.json").read_text())["dt_s"] == .01
+    run_example_check("track_figure8", "fixed", 0., .001, np.arange(round(24. / period)) * period,
+                      output_root, monkeypatch, duration=24., period=period)
 
 
 def test_opt_in_reaching_losses_reach_plant_and_predictor(output_root, monkeypatch):
     run_example_check("reach_sim", "fixed", 0., .001, [0., .01, .02],
                       output_root, monkeypatch, with_losses=True)
+
+
+def saved(out):
+    with np.load(out / "trajectory.npz") as trajectory:
+        return {key: trajectory[key] for key in trajectory.files}
+
+
+@pytest.mark.parametrize("example", ["reach_sim", "track_figure8"])
+def test_playback_at_the_knot_interval_reproduces_the_first_torque_hold_bitwise(
+        example, output_root, monkeypatch):
+    # Control period = dt and zero latency: each plan's knot 0 spans the whole
+    # interval, so playback must equal the earlier u_0 hold exactly.
+    runs = {mode: run_example(example, "fixed", 0., .001, output_root, monkeypatch, n=4,
+                              command_mode=mode, name=mode)
+            for mode in ("first", "playback")}
+    first, playback = saved(runs["first"].out), saved(runs["playback"].out)
+    assert first.keys() == playback.keys()
+    for key in first:
+        assert np.array_equal(first[key], playback[key], equal_nan=True), key
+    torque_key = "applied_actuator_torque_nm" if runs["first"].tracking else "applied_torque_nm"
+    # Earlier semantics: each substep applies step.u of the latest solve.
+    expected = [u for u, _ in runs["first"].applied]
+    np.testing.assert_array_equal(playback[torque_key], expected)
+    assert np.all(playback["applied_knot"] == 0) and not playback["applied_past_plan_end"].any()
+    assert set(np.unique(playback[torque_key])) <= {1., 2., 3.}
+
+
+@pytest.mark.parametrize("example", ["reach_sim", "track_figure8"])
+def test_control_period_longer_than_knots_plays_each_knot_for_its_interval(
+        example, output_root, monkeypatch):
+    # 10 ms control period, 2 ms knots, 4 ms charged latency, N=8 (7 knots, 14 ms plans).
+    run = run_example(example, "fixed", .004, .001, output_root, monkeypatch, n=8,
+                      period=.002, control_period=.01)
+    trajectory = saved(run.out)
+    torque_key = "applied_actuator_torque_nm" if run.tracking else "applied_torque_nm"
+    np.testing.assert_allclose(trajectory["solve_start_s"], [0., .01, .02])
+    np.testing.assert_allclose([call[2] for call in run.calls[1:]], [.01, .01])
+    starts = trajectory["time_s"][:-1]
+    for t, knot, plan_start, torque in zip(starts, trajectory["applied_knot"],
+                                           trajectory["applied_plan_start_s"],
+                                           trajectory[torque_key]):
+        solve = int(np.floor((t - .004) / .01 + 1e-9))  # latest plan already applied
+        if solve < 0:
+            assert knot == -1 and np.isnan(plan_start) and not np.any(torque)
+            continue
+        assert plan_start == pytest.approx(.01 * solve)
+        assert knot == int(np.floor((t - plan_start) / .002 + 1e-9))
+        np.testing.assert_array_equal(torque, np.full(7, min(solve + 1, 3) + knot_offset(knot)))
+    # Knots 2..6 are applied: the plan is played, not only u_0, and never past its end.
+    assert set(trajectory["applied_knot"]) == {-1, 2, 3, 4, 5, 6}
+    assert not trajectory["applied_past_plan_end"].any()

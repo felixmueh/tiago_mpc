@@ -1,7 +1,7 @@
 {
-  "description": "Selected figure-eight default: running XYZ weight 4, terminal XYZ weight 8, actual joint losses, tanh width 0.03 rad/s, ADMM-only limits and u_cost=1e-6; one separately recorded 24 s fixed-clock sanity episode completed at N32/2 ms with 0.1 ms plant substeps.",
+  "description": "Selected figure-eight default: running XYZ weight 4, terminal XYZ weight 8, actual joint losses, tanh width 0.03 rad/s, ADMM-only limits and u_cost=1e-6; N32 with 10 ms knots (Felix, 2026-10-22) and 0.1 ms plant substeps. The earlier 24 s fixed-clock sanity episode ran at 2 ms knots and does not qualify the 10 ms default.",
   "N": 32,
-  "dt_s": 0.002,
+  "dt_s": 0.01,
   "sim_dt_s": 0.0001,
   "duration_s": 24.0,
   "secondary_metrics_start_s": 1.0,
