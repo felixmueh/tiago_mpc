@@ -11,9 +11,9 @@ freshness, fault handling, default checks-only invocation and explicit execution
 confirmation intact. No ROS/PAL or physical execution is qualified by this port.
 
 The worker uses the current nominal grasp TCP and task configurations. Reaching
-keeps its loss-free predictor; `configs/tracking.json` explicitly enables the
-existing smooth friction/damping predictor at width .03 rad/s and supplies the
-figure-eight dimensions/edge clearance. Do not apply passive losses twice or
+and tracking enable the smooth friction/damping predictor at width .03 rad/s
+by default; `configs/tracking.json` also supplies the figure-eight dimensions
+and edge clearance. Do not apply passive losses twice or
 infer a 2 ms ROS update rate from tracking's knot interval; I/O remains 10 ms by
 default. Existing ADMM parameters and zero soft costs are unchanged.
 
@@ -127,13 +127,16 @@ The separate 24 s 4/8 tracking check completed (26.536 mm full-cycle RMS;
 sampled executed and planned raw limits passed); old 8/1600 results do not
 qualify 4/8. Keep armature inactive
 in both models. Preserve historical protocols and raw cohorts unchanged.
-Reaching also uses running/terminal XYZ weights 4/8 in `configs/reaching.json`;
-only its terminal weight changes from the preceding 4/800 profile. Other reaching
+Reaching also uses running/terminal XYZ weights 4/8 in `configs/reaching.json`.
+As selected on 2026-10-22, both reaching and tracking default to actual right-arm
+losses: hard-sign Coulomb plus viscous damping in the simulated plant, smooth
+tanh Coulomb plus viscous damping in the predictor at width .03 rad/s. Explicit
+historical configurations without loss fields remain loss-free. Other reaching
 settings remain task-specific and unchanged. The historical 84/100 cohort used
-4/800 and does not qualify this new terminal weight. One bounded 4/8 sanity reach
-passed the existing 5 cm arrival gate at .270 s with sampled raw limits passing;
-this is not broad reaching or settling qualification. Do not rerun or relabel
-the frozen historical cohort.
+4/800 and loss-free models; the bounded 4/8 sanity reach passed the existing
+5 cm arrival gate at .270 s with sampled raw limits passing, also loss-free.
+Neither qualifies the new friction-enabled reaching default or broad reaching
+and settling behavior. Do not rerun or relabel the frozen historical cohort.
 
 ## Completed experiment cleanup — Felix, 2026-10-21
 
