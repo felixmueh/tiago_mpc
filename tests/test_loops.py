@@ -187,6 +187,36 @@ def test_a_dead_mpc_process_is_noticed_within_one_tick_and_stops_the_plant():
     assert plant.calls == ["start", "stop"] and plant.t == pytest.approx(.03)
 
 
+class Blocking(Mpc):
+    """Synchronous on a wall-like clock: each request takes solve seconds of the plant's time."""
+    def __init__(self, plant, solve, **kw):
+        super().__init__(**kw)
+        self.plant, self.solve = plant, solve
+
+    def request(self, state, reference, updates=None):
+        super().request(state, reference, updates)
+        self.plant.t += self.solve
+
+
+def test_a_blocking_solve_ends_the_run_or_the_lease_at_the_time_after_it():
+    """A 120 ms solve, requested at 0, outlasts the 50 ms run and the plan's 100 ms lease."""
+    plant = Plant(kind="wall")
+    _, ticks, done = go(Blocking(plant, .12), loop=run_robot, plant=plant, duration=.05)
+    assert not done and not plant.applied and [(round(k.t, 6), k.command) for k in ticks] == [(.12, None)]
+    plant = Plant(kind="wall")  # a 310 ms plan: its lease ends first
+    with pytest.raises(RuntimeError, match="lease expired"):
+        go(Blocking(plant, .12, N=32), loop=run_robot, plant=plant, duration=1.)
+    assert not plant.applied and plant.calls == ["start", "stop"]
+
+
+def test_after_a_short_blocking_solve_the_command_goes_out_at_the_time_after_it():
+    """One 12 ms solve, requested at 0: knot 1 from 12 ms, ticks 10 ms apart from then."""
+    plant = Plant(kind="wall")
+    _, ticks, _ = go(Blocking(plant, .012), loop=run_robot, plant=plant, duration=.03, update_period=1.)
+    assert commanded(ticks) == [(.012, 2.), (.022, 3.)]
+    assert [round(t, 6) for t, _ in plant.applied] == [.012, .022]
+
+
 def test_each_loop_refuses_a_plant_on_the_other_clock():
     for loop, kind in ((run_simulation, "wall"), (run_simulation, "external"), (run_robot, "simulation")):
         plant = Plant(kind=kind)

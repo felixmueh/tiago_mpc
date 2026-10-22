@@ -126,6 +126,9 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
                 pending = Pending(mpc, t, latency)
                 if (now := pending.ready(t)) is not None:  # zero latency: this tick
                     new, plan, pending = now, now, None
+                t = plant.now()  # a blocking solve takes execution time on a wall or external clock
+                done = task.done(s, t - start)
+                end = done or t - start >= duration - _TOLERANCE
             command = None
             if plan is not None and not end:
                 command = guard(law(plan, t, s), plan, t)
