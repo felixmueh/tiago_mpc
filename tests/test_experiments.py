@@ -117,6 +117,18 @@ def test_duration_caps_the_tasks_own(tmp_path):
     assert len(record.ticks) == 3  # 0, 10 and 20 ms
 
 
+def test_a_run_without_solves_reports_zero_work(tmp_path):
+    """The goal met at the start, or a zero duration: one tick, no solve."""
+    params = replace(rc.TIAGO, N=4)
+    done = rc.reach(SimPlant(substep=.003), Mpc(params), task=rc.Reach(tuple(fk(Q_START))), out=tmp_path / "d")
+    zero = rc.reach(SimPlant(substep=.003), Mpc(params), out=tmp_path / "z", duration=0.)
+    for record, status in ((done, "arrived"), (zero, "timeout")):
+        summary = json.loads((record.out / "summary.json").read_text())
+        assert summary["status"] == status and summary["ticks"] == 1 and summary["solve_calls"] == 0
+        assert summary["solve_time_median_ms"] is None and not any(summary["work_totals"].values())
+        assert summary["max_abs_torque_nm"] == 0. and summary["limits_pass"]
+
+
 def test_an_interrupted_run_is_saved_as_interrupted(tmp_path):
     def interrupted(*args, **kw):
         raise KeyboardInterrupt  # Ctrl-C, or SIGTERM through common._interrupt

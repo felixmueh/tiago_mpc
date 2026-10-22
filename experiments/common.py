@@ -31,9 +31,11 @@ def limit_excess(trajectory):
 
 
 def solve_summary(trajectory):
+    """A run without solves has no median and zero work."""
+    times = trajectory.get("plan_solve_time_us")
     return dict(solve_calls=len(trajectory["plan_t0_s"]),
-                solve_time_median_ms=float(np.median(trajectory["plan_solve_time_us"]) / 1000),
-                work_totals={k: int(np.sum(trajectory[f"plan_{k}"]))
+                solve_time_median_ms=None if times is None else float(np.median(times) / 1000),
+                work_totals={k: int(np.sum(trajectory.get(f"plan_{k}", 0)))
                              for k in ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows")})
 
 
@@ -57,7 +59,7 @@ def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None,
         record.summary.update(
             status=done_status if done else "timeout", max_limit_excess=excess,
             limits_pass=max(excess.values()) <= 1e-5,
-            max_abs_torque_nm=float(np.nanmax(np.abs(trajectory["command"]))),
+            max_abs_torque_nm=float(np.nanmax(np.abs(trajectory["command"]), initial=0.)),
             **solve_summary(trajectory))
         if evaluate is not None:
             evaluate(record)
