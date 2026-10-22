@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .plan import Plant, Task, Tick
+from .plan import PlantInterface, TaskInterface, Tick
 from .tiago import ROOT
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ def _git(*args, cwd=ROOT):
 class Record:
     """Record(out, task, params, plant); out=None is _expr_data/<task>/<UTC time>."""
 
-    def __init__(self, out: str | Path | None, task: Task, params: MpcParams, plant: Plant):
+    def __init__(self, out: str | Path | None, task: TaskInterface, params: MpcParams, plant: PlantInterface):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         self.out = Path(out) if out else ROOT / "_expr_data" / type(task).__name__.lower() / stamp
         self.out.mkdir(parents=True, exist_ok=False)

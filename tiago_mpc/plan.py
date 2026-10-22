@@ -82,7 +82,7 @@ class Tick:
     new: bool
 
 
-class Plant(Protocol):
+class PlantInterface(Protocol):
     """SimPlant (sim.py) and RosPlant (robot.py). run starts it, then per command tick
     reads its state and execution time (now), applies a command, which it holds, and
     advances to the next tick; stop comes first on exit (zero torque, handback).
@@ -99,7 +99,7 @@ class Plant(Protocol):
     def close(self) -> None: ...
 
 
-class MpcLike(Protocol):
+class MpcInterface(Protocol):
     """Mpc and MpcProcess (mpc.py): plans of N knots dt apart. request raises while the
     previous plan is unread; result returns a plan once, None while it is pending, and
     raises if the solve failed."""
@@ -112,7 +112,7 @@ class MpcLike(Protocol):
     def close(self) -> None: ...
 
 
-class Task(Protocol):
+class TaskInterface(Protocol):
     """A frozen dataclass; t counts from the run's first state. reference: the (n, 6)
     end-effector reference at the n knots dt apart from t; done: whether it is met.
 

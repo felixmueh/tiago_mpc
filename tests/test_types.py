@@ -18,13 +18,13 @@ if TYPE_CHECKING:  # read by mypy only
     import test_experiments
     import test_loops
     from tiago_mpc.mpc import Mpc, MpcProcess
-    from tiago_mpc.plan import MpcLike, Plant, Task
+    from tiago_mpc.plan import MpcInterface, PlantInterface, TaskInterface
     from tiago_mpc.robot import RosPlant
     from tiago_mpc.sim import SimPlant
 
-    plants: list[type[Plant]] = [SimPlant, RosPlant, test_loops.Plant]
-    mpcs: list[type[MpcLike]] = [Mpc, MpcProcess, test_loops.Mpc, test_experiments.Mpc]
-    tasks: list[type[Task]] = [Reach, Figure8, test_loops.Task]
+    plants: list[type[PlantInterface]] = [SimPlant, RosPlant, test_loops.Plant]
+    mpcs: list[type[MpcInterface]] = [Mpc, MpcProcess, test_loops.Mpc, test_experiments.Mpc]
+    tasks: list[type[TaskInterface]] = [Reach, Figure8, test_loops.Task]
 
 
 def test_mypy():

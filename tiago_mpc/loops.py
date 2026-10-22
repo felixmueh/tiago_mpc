@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 
 from .laws import sample_knot
-from .plan import Callback, Law, MpcLike, Plan, Plant, Task, Tick
+from .plan import Callback, Law, MpcInterface, Plan, PlantInterface, TaskInterface, Tick
 from .tiago import limits
 
 LEASE_S = .1  # a plan may be commanded at most this long after its state's time
@@ -93,7 +93,7 @@ def guard(command: np.ndarray, plan: Plan, t: float) -> np.ndarray:
     return command
 
 
-def run(plant: Plant, mpc: MpcLike, task: Task, law: Law = sample_knot,
+def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law = sample_knot,
         callbacks: Sequence[Callback] = (), *, command_period: float, update_period: float,
         duration: float, latency: Fixed | Measured | None = None) -> bool:
     """Run task on plant until task.done(state, t) or for duration seconds.
@@ -147,14 +147,14 @@ def run(plant: Plant, mpc: MpcLike, task: Task, law: Law = sample_knot,
             gc.enable()
 
 
-def run_robot(plant: Plant, *args: Any, **kw: Any) -> bool:
+def run_robot(plant: PlantInterface, *args: Any, **kw: Any) -> bool:
     """Wall clock: the robot, Gazebo or SimPlant(clock=Clock.wall()); plans are used on arrival."""
     if plant.clock.kind == "simulation":
         raise ValueError("run_robot needs a wall or external clock; use run_simulation")
     return run(plant, *args, latency=None, **kw)
 
 
-def run_simulation(plant: Plant, *args: Any, latency: Fixed | Measured = Fixed(), **kw: Any) -> bool:
+def run_simulation(plant: PlantInterface, *args: Any, latency: Fixed | Measured = Fixed(), **kw: Any) -> bool:
     """Simulated clock: each solve is charged latency, Fixed(s) or Measured()."""
     if plant.clock.kind != "simulation":
         raise ValueError("run_simulation needs a simulation clock; use run_robot")
