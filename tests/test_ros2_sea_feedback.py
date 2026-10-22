@@ -27,7 +27,7 @@ def client(monkeypatch):
     node = NS(create_subscription=lambda *args: subscriptions.append(args),
               create_publisher=lambda *args: publications.append(args), destroy_node=lambda: None)
     fake_ros = dict(rclpy=NS(ok=lambda: True, create_node=lambda name: node),
-                    JointState=object, JointTrajectory=object, Float64MultiArray=object)
+                    JointState=object, Float64MultiArray=object)
     monkeypatch.setattr(ros, "_ros_imports", lambda: fake_ros)
     monkeypatch.setattr(ros, "_sea_state_type", lambda: NS())
     monkeypatch.setitem(sys.modules, "rclpy.qos", NS(
@@ -108,7 +108,7 @@ def test_gap_requires_two_new_samples(client, gap_kind):
     np.testing.assert_allclose(arm.latest_state().qd, 2.)
 
 
-def test_full_body_merge_and_raw_channels_in_history(client):
+def test_full_body_merge(client):
     arm = client.arm
     body_names = (*RIGHT_ARM_JOINTS, "torso_lift_joint", "wheel_right_joint")
     body = message(2., .4, names=body_names)
@@ -121,19 +121,13 @@ def test_full_body_merge_and_raw_channels_in_history(client):
     state = arm.latest_state()
     np.testing.assert_allclose(state.q, 1.04)
     np.testing.assert_allclose(state.qd, 2.)
-    assert state.stamp_sec == 3.02 and state.body_stamp_sec == 2.
+    assert state.stamp_sec == 3.02
     assert state.received_monotonic_sec == 1.
     assert state.joint_positions["torso_lift_joint"] == pytest.approx(.6)
     assert np.isnan(state.joint_velocities["wheel_right_joint"])
     assert all(state.joint_positions[name] == 1.04 for name in RIGHT_ARM_JOINTS)
-    metadata = state.feedback_metadata
-    np.testing.assert_allclose(metadata["sea_motor_position"], 1.24)
-    np.testing.assert_allclose(metadata["sea_absolute_position"], state.q)
-    assert metadata["velocity_filter_tau_sec"] == .01
-    assert metadata["body_received_monotonic_sec"] == 1.
-    assert metadata["arm_received_monotonic_sec"] == 1.02
     assert client.subscriptions[0][3].depth == 1
-    assert client.subscriptions[1][1] == ros.DEFAULT_SEA_STATE_TOPIC
+    assert client.subscriptions[1][1] == ros.SEA_STATE_TOPIC
 
 
 @pytest.mark.parametrize("frozen_source", ["body", "arm"])
@@ -160,7 +154,6 @@ def test_default_does_not_resolve_sea_dependency_or_change_jointstate_path(clien
     state = arm.latest_state()
     np.testing.assert_allclose(state.q, .6)
     np.testing.assert_allclose(state.qd, .3)
-    assert state.feedback_metadata is None
     assert client.subscriptions[-1][3] == 10
 
 
@@ -190,7 +183,6 @@ def test_abs_position_is_sufficient_without_optional_motor_channel(client):
     client.clock.now = 1.01
     arm._on_sea_state(second)
     np.testing.assert_allclose(arm.latest_state().qd, 2.)
-    assert arm.latest_state().feedback_metadata["sea_motor_position"] is None
 
 
 def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client, monkeypatch):
@@ -216,8 +208,7 @@ def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client
     arm._on_joint_state(body)
     merged = arm.latest_state()
     assert merged.seq == first.seq and merged.stamp_sec == first.stamp_sec
-    assert merged.arm_received_monotonic_sec == first.arm_received_monotonic_sec
-    assert merged.received_monotonic_sec == first.arm_received_monotonic_sec
+    assert merged.received_monotonic_sec == 1.01  # the arm sample's receipt, older than the body's
     assert safety_state(merged).seq > safety_state(first).seq
     assert safety_state(merged).joint_positions["torso_lift_joint"] == .201
     plant._check(merged)  # Equal arm stamp remains valid for this arm seq.

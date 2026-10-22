@@ -19,12 +19,10 @@ import numpy as np
 
 from .tiago import RIGHT_ARM_JOINTS
 
-DEFAULT_JOINT_STATES_TOPIC = "/joint_states"
-DEFAULT_SEA_STATE_TOPIC = "/arm_right_sea_state_broadcaster_controller/sea_joint_states"
-DEFAULT_SEA_VELOCITY_FILTER_TAU_SEC = 0.01
-DEFAULT_TRAJECTORY_TOPIC = "/arm_right_controller/joint_trajectory"
-DEFAULT_CONTROLLER_MANAGER = "/controller_manager"
-DEFAULT_EFFORT_CONTROLLER = "gato_arm_effort_forward_runtime"
+JOINT_STATES_TOPIC = "/joint_states"
+SEA_STATE_TOPIC = "/arm_right_sea_state_broadcaster_controller/sea_joint_states"
+CONTROLLER_MANAGER = "/controller_manager"
+EFFORT_CONTROLLER = "gato_arm_effort_forward_runtime"
 
 
 @dataclass(frozen=True)
@@ -38,16 +36,9 @@ class ArmState:
     seq: int = 0
     joint_positions: dict[str, float] | None = None
     joint_velocities: dict[str, float] | None = None
-    body_stamp_sec: float | None = None
-    arm_received_monotonic_sec: float | None = None
-    body_received_monotonic_sec: float | None = None
-    feedback_metadata: dict[str, Any] | None = None
     # SEA body updates require collision checks without inventing an arm sample.
     safety_seq: int | None = None
 
-    @property
-    def age_sec(self) -> float:
-        return time.monotonic() - self.received_monotonic_sec
 
 def validate_controller_manager_interfaces() -> None:
     """Reject the known incompatible Humble layout before sending any RPCs.
@@ -93,7 +84,6 @@ def _ros_imports() -> dict[str, Any]:
         from rcl_interfaces.srv import GetParameters, SetParameters
         from sensor_msgs.msg import JointState
         from std_msgs.msg import Float64MultiArray
-        from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
         validate_controller_manager_interfaces()
     except ImportError as exc:
         raise RuntimeError(
@@ -185,35 +175,14 @@ def _sea_state_type():
 
 
 class TiagoRightArmClient:
-    """ROS 2 client for TIAGo right-arm state, position, and effort commands."""
+    """ROS 2 client for TIAGo right-arm state and effort commands."""
 
-    def __init__(
-        self,
-        *,
-        node_name: str = "tiago_mpc_right_arm_client",
-        joint_names: Sequence[str] = RIGHT_ARM_JOINTS,
-        joint_states_topic: str = DEFAULT_JOINT_STATES_TOPIC,
-        sea_absolute: bool = False,
-        sea_state_topic: str = DEFAULT_SEA_STATE_TOPIC,
-        sea_velocity_filter_tau_sec: float = DEFAULT_SEA_VELOCITY_FILTER_TAU_SEC,
-        stale_timeout_sec: float = 0.1,
-        trajectory_topic: str = DEFAULT_TRAJECTORY_TOPIC,
-        controller_manager: str = DEFAULT_CONTROLLER_MANAGER,
-        effort_controller: str = DEFAULT_EFFORT_CONTROLLER,
-    ) -> None:
+    def __init__(self, *, sea_absolute: bool = False) -> None:
         self.ros = _ros_imports()
         # Resolve the optional dependency before creating a node or any controller RPC.
         sea_type = _sea_state_type() if sea_absolute else None
         self.sea_absolute = bool(sea_absolute)
-        self.sea_state_topic = str(sea_state_topic).strip()
-        self._sea_estimator = SeaAbsoluteVelocityEstimator(
-            joint_names, tau_sec=sea_velocity_filter_tau_sec, stale_timeout_sec=stale_timeout_sec,
-        ) if self.sea_absolute else None
-        if self.sea_absolute and not self.sea_state_topic:
-            raise ValueError("sea_state_topic must be nonempty")
-        self._stale_timeout_sec = float(stale_timeout_sec)
-        if not np.isfinite(self._stale_timeout_sec) or self._stale_timeout_sec <= 0:
-            raise ValueError("stale_timeout_sec must be finite and positive")
+        self._sea_estimator = SeaAbsoluteVelocityEstimator() if self.sea_absolute else None
         self._body_state = None
         self._sea_state = None
         self.rclpy = self.ros["rclpy"]
@@ -222,12 +191,10 @@ class TiagoRightArmClient:
             self.rclpy.init()
             self._owns_rclpy = True
 
-        self.joint_names = tuple(joint_names)
-        self.joint_states_topic = joint_states_topic
-        self.trajectory_topic = trajectory_topic
-        self.controller_manager = controller_manager.rstrip("/")
-        self.effort_controller = effort_controller
-        self.effort_command_topic = f"/{effort_controller}/commands"
+        self.joint_names = RIGHT_ARM_JOINTS
+        self.controller_manager = CONTROLLER_MANAGER
+        self.effort_controller = EFFORT_CONTROLLER
+        self.effort_command_topic = f"/{EFFORT_CONTROLLER}/commands"
         self._latest_state: ArmState | None = None
         self._state_seq = 0
         self._safety_seq = 0
@@ -236,24 +203,19 @@ class TiagoRightArmClient:
         # Optional synchronous supervisor; it may raise to abort our wait.
         self.service_progress: Callable[[], None] | None = None
 
-        self.node = self.rclpy.create_node(node_name)
+        self.node = self.rclpy.create_node("tiago_mpc_right_arm_client")
         state_qos = 10
         if self.sea_absolute:
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             state_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.node.create_subscription(
             self.ros["JointState"],
-            self.joint_states_topic,
+            JOINT_STATES_TOPIC,
             self._on_joint_state,
             state_qos,
         )
         if self.sea_absolute:
-            self.node.create_subscription(sea_type, self.sea_state_topic, self._on_sea_state, state_qos)
-        self._trajectory_pub = self.node.create_publisher(
-            self.ros["JointTrajectory"],
-            self.trajectory_topic,
-            10,
-        )
+            self.node.create_subscription(sea_type, SEA_STATE_TOPIC, self._on_sea_state, state_qos)
         self._effort_pub = self.node.create_publisher(
             self.ros["Float64MultiArray"],
             self.effort_command_topic,
@@ -264,12 +226,6 @@ class TiagoRightArmClient:
         self.node.destroy_node()
         if self._owns_rclpy:
             self.rclpy.shutdown()
-
-    def __enter__(self) -> "TiagoRightArmClient":
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
 
     def _on_joint_state(self, msg: Any) -> None:
         self._state_callback_count += 1
@@ -285,8 +241,8 @@ class TiagoRightArmClient:
             velocities = dict(zip(names, map(float, msg.velocity)))
             if not all(name in positions for name in self.joint_names):
                 return
-            q = np.asarray([positions[name] for name in self.joint_names], dtype=np.float32)
-            qd = np.asarray([velocities[name] for name in self.joint_names], dtype=np.float32)
+            q = np.array([positions[name] for name in self.joint_names])
+            qd = np.array([velocities[name] for name in self.joint_names])
             stamp_sec = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
             if (not np.isfinite(q).all() or not np.isfinite(qd).all()
                     or not np.isfinite(stamp_sec)
@@ -338,16 +294,14 @@ class TiagoRightArmClient:
                 self._latest_state = None
             return
         self._state_seq += 1
-        motor = dict(zip(msg.name, map(float, msg.position)))
-        self._sea_state = (*sample, received, self._state_seq,
-                           [motor[name] for name in self.joint_names] if motor else None)
+        self._sea_state = (*sample, received, self._state_seq)
         self._merge_sea_state()
 
     def _merge_sea_state(self) -> None:
         if self._body_state is None or self._sea_state is None:
             return
-        body_stamp, body_received, positions, velocities = self._body_state
-        q, qd, stamp, arm_received, seq, motor = self._sea_state
+        _, body_received, positions, velocities = self._body_state
+        q, qd, stamp, arm_received, seq = self._sea_state
         positions, velocities = positions.copy(), velocities.copy()
         self._safety_seq += 1
         positions.update(zip(self.joint_names, map(float, q)))
@@ -355,21 +309,7 @@ class TiagoRightArmClient:
         self._latest_state = ArmState(
             q=q.copy(), qd=qd.copy(), stamp_sec=stamp,
             received_monotonic_sec=min(arm_received, body_received), seq=seq,
-            joint_positions=positions, joint_velocities=velocities,
-            body_stamp_sec=body_stamp, arm_received_monotonic_sec=arm_received,
-            body_received_monotonic_sec=body_received, safety_seq=self._safety_seq,
-            feedback_metadata={
-                "arm_source": "sea_state_msgs/msg/SeaState.absolute_position",
-                "arm_topic": self.sea_state_topic,
-                "body_topic": self.joint_states_topic,
-                "body_stamp_sec": body_stamp,
-                "body_received_monotonic_sec": body_received,
-                "arm_received_monotonic_sec": arm_received,
-                "joint_names": list(self.joint_names),
-                "sea_motor_position": motor,
-                "sea_absolute_position": q.tolist(),
-                "velocity_filter_tau_sec": self._sea_estimator.tau_sec,
-            },
+            joint_positions=positions, joint_velocities=velocities, safety_seq=self._safety_seq,
         )
 
     def spin_once(
@@ -384,12 +324,6 @@ class TiagoRightArmClient:
         or the drain budget. A callback itself can exceed the budget; this is
         not a hard deadline or a background executor. Call from one owner only.
         """
-        if not np.isfinite(timeout_sec) or timeout_sec < 0:
-            raise ValueError("timeout_sec must be finite and non-negative")
-        if not isinstance(max_callbacks, int) or max_callbacks < 1:
-            raise ValueError("max_callbacks must be a positive integer")
-        if not np.isfinite(drain_budget_sec) or drain_budget_sec < 0:
-            raise ValueError("drain_budget_sec must be finite and non-negative")
         start_count = self._state_callback_count
         previous_count = start_count
         self.rclpy.spin_once(self.node, timeout_sec=timeout_sec)
@@ -412,10 +346,6 @@ class TiagoRightArmClient:
         ROS source timestamps remain separately available on the result.
         A zero timeout performs one nonblocking poll.
         """
-        if not np.isfinite(timeout_sec) or timeout_sec < 0:
-            raise ValueError("timeout_sec must be finite and non-negative")
-        if max_age_sec is not None and (not np.isfinite(max_age_sec) or max_age_sec < 0):
-            raise ValueError("max_age_sec must be finite and non-negative")
         deadline = time.monotonic() + timeout_sec
         first_poll = True
         while self.rclpy.ok():
@@ -424,78 +354,25 @@ class TiagoRightArmClient:
             first_poll = False
             state = self.latest_state()
             if (state is not None and (after_seq is None or state.seq > after_seq)
-                    and (max_age_sec is None or state.age_sec <= max_age_sec)):
+                    and (max_age_sec is None
+                         or time.monotonic() - state.received_monotonic_sec <= max_age_sec)):
                 return state
             if time.monotonic() >= deadline:
                 break
         raise TimeoutError(
             f"did not receive qualifying {len(self.joint_names)}-joint arm state on "
-            f"{self.joint_states_topic}"
-            + (f" and fresh SEA absolute position/estimated velocity on {self.sea_state_topic}"
+            f"{JOINT_STATES_TOPIC}"
+            + (f" and fresh SEA absolute position/estimated velocity on {SEA_STATE_TOPIC}"
                if self.sea_absolute else "")
             + f" within {timeout_sec:.1f}s (after_seq={after_seq}, max_age_sec={max_age_sec})"
         )
 
     def latest_state(self) -> ArmState | None:
         if (self.sea_absolute and self._latest_state is not None
-                and self._latest_state.age_sec > self._stale_timeout_sec):
+                and time.monotonic() - self._latest_state.received_monotonic_sec
+                > self._sea_estimator.stale_timeout_sec):
             return None
         return self._latest_state
-
-    def publish_position_trajectory(
-        self,
-        positions: Sequence[float],
-        *,
-        duration_sec: float = 2.0,
-        velocities: Sequence[float] | None = None,
-    ) -> None:
-        point = self.ros["JointTrajectoryPoint"]()
-        point.positions = _vector(positions, size=len(self.joint_names), name="positions")
-        if velocities is not None:
-            point.velocities = _vector(
-                velocities,
-                size=len(self.joint_names),
-                name="velocities",
-            )
-        point.time_from_start = _duration_msg(self.ros, duration_sec)
-
-        msg = self.ros["JointTrajectory"]()
-        msg.joint_names = list(self.joint_names)
-        msg.points = [point]
-        self._trajectory_pub.publish(msg)
-
-    def publish_position_trajectory_points(
-        self,
-        positions: Sequence[Sequence[float]],
-        *,
-        dt: float,
-    ) -> None:
-        """Publish a multi-point joint position trajectory.
-
-        The first row is sent at ``dt`` seconds, not zero. This avoids asking
-        the controller to jump if the first IK point is slightly different from
-        the current measured state.
-        """
-        if not np.isfinite(dt) or dt <= 0.0:
-            raise ValueError("dt must be finite and positive")
-
-        rows = np.asarray(positions, dtype=np.float64)
-        if rows.ndim != 2 or rows.shape[1] != len(self.joint_names):
-            raise ValueError(
-                f"positions must have shape (N, {len(self.joint_names)}), "
-                f"got {rows.shape}"
-            )
-        if not np.isfinite(rows).all():
-            raise ValueError("positions contains non-finite values")
-
-        msg = self.ros["JointTrajectory"]()
-        msg.joint_names = list(self.joint_names)
-        for idx, row in enumerate(rows):
-            point = self.ros["JointTrajectoryPoint"]()
-            point.positions = [float(value) for value in row]
-            point.time_from_start = _duration_msg(self.ros, (idx + 1) * dt)
-            msg.points.append(point)
-        self._trajectory_pub.publish(msg)
 
     def publish_effort(self, torques: Sequence[float]) -> None:
         msg = self.ros["Float64MultiArray"]()
@@ -521,14 +398,16 @@ class TiagoRightArmClient:
             if controller.state != "unconfigured":
                 raise RuntimeError(f"unexpected effort controller state: {controller.state}")
         else:
-            self._set_controller_manager_type(self.effort_controller, expected_type, timeout_sec)
-            self._load_controller(self.effort_controller, timeout_sec)
+            self._set_remote_parameters(
+                self.controller_manager, {f"{self.effort_controller}.type": expected_type}, timeout_sec,
+            )
+            self._controller_request("load", self.effort_controller, timeout_sec)
         self._set_remote_parameters(
             f"/{self.effort_controller}",
             {"joints": list(self.joint_names), "interface_name": "effort"},
             timeout_sec,
         )
-        self._configure_controller(self.effort_controller, timeout_sec)
+        self._controller_request("configure", self.effort_controller, timeout_sec)
         self._validate_effort_controller(
             self._list_controllers(timeout_sec).get(self.effort_controller), timeout_sec,
         )
@@ -634,9 +513,8 @@ class TiagoRightArmClient:
             raise RuntimeError(f"controller switch not established: wanted {destination}, got {actual}")
 
     def _service_progress_tick(self) -> None:
-        callback = getattr(self, "service_progress", None)
-        if callback is not None:
-            callback()
+        if self.service_progress:
+            self.service_progress()
 
     def _service_call(
         self,
@@ -687,18 +565,6 @@ class TiagoRightArmClient:
         finally:
             self.node.destroy_client(client)
 
-    def _set_controller_manager_type(
-        self,
-        controller_name: str,
-        controller_type: str,
-        timeout_sec: float,
-    ) -> None:
-        self._set_remote_parameters(
-            self.controller_manager,
-            {f"{controller_name}.type": controller_type},
-            timeout_sec,
-        )
-
     def _set_remote_parameters(
         self,
         node_name: str,
@@ -733,29 +599,16 @@ class TiagoRightArmClient:
             msg.value.string_array_value = list(value)
         return msg
 
-    def _load_controller(self, name: str, timeout_sec: float) -> None:
-        request = self.ros["LoadController"].Request()
+    def _controller_request(self, verb: str, name: str, timeout_sec: float) -> None:
+        """load_controller or configure_controller; a failed reply raises."""
+        service = self.ros[f"{verb.capitalize()}Controller"]
+        request = service.Request()
         request.name = name
         response = self._service_call(
-            f"{self.controller_manager}/load_controller",
-            self.ros["LoadController"],
-            request,
-            timeout_sec,
+            f"{self.controller_manager}/{verb}_controller", service, request, timeout_sec,
         )
-        if not response.ok and not self._node_exists(f"/{name}"):
-            raise RuntimeError(f"failed to load controller: {name}")
-
-    def _configure_controller(self, name: str, timeout_sec: float) -> None:
-        request = self.ros["ConfigureController"].Request()
-        request.name = name
-        response = self._service_call(
-            f"{self.controller_manager}/configure_controller",
-            self.ros["ConfigureController"],
-            request,
-            timeout_sec,
-        )
-        if not response.ok and not self._node_exists(f"/{name}"):
-            raise RuntimeError(f"failed to configure controller: {name}")
+        if not response.ok:
+            raise RuntimeError(f"failed to {verb} controller: {name}")
 
     def _switch_controllers(
         self,
@@ -783,13 +636,6 @@ class TiagoRightArmClient:
                 f"activate={list(activate)} deactivate={list(deactivate)}; "
                 f"reason={response.message}"
             )
-
-    def _node_exists(self, full_name: str) -> bool:
-        for name, namespace in self.node.get_node_names_and_namespaces():
-            candidate = f"{namespace.rstrip('/')}/{name}" if namespace != "/" else f"/{name}"
-            if candidate == full_name:
-                return True
-        return False
 
     def _topic_has_subscription(self, topic_name: str) -> bool:
         return bool(self.node.get_subscriptions_info_by_topic(topic_name))

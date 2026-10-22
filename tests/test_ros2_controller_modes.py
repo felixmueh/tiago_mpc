@@ -17,9 +17,9 @@ def make_arm(active=(POSITION,), *, bad_claims=False, switch_ok=True, apply=True
     arm.joint_names = RIGHT_ARM_JOINTS
     arm.controller_manager = "/controller_manager"
     arm.effort_controller = EFFORT
-    arm.trajectory_topic = "/arm_right_controller/joint_trajectory"
     arm.effort_command_topic = f"/{EFFORT}/commands"
-    arm.ros = {name: NS(Request=NS) for name in ("ListControllers", "SwitchController", "GetParameters")}
+    arm.ros = {name: NS(Request=NS) for name in ("ListControllers", "SwitchController", "GetParameters",
+                                                  "LoadController", "ConfigureController")}
     arm.ros["ParameterType"] = NS(PARAMETER_STRING=4, PARAMETER_STRING_ARRAY=9)
     arm.ros["Duration"] = NS
     controllers = {}
@@ -193,3 +193,11 @@ def test_correct_existing_effort_controller_is_reused_without_mutation():
     arm._set_remote_parameters = lambda *args: pytest.fail("configured controller mutated")
     arm.configure_runtime_effort_controller()
     assert calls == []
+
+
+def test_a_failed_configure_reply_raises():
+    arm, controllers, calls = make_arm(switch_ok=False)
+    controllers[EFFORT].state = "unconfigured"
+    with pytest.raises(RuntimeError, match="failed to configure controller"):
+        arm.configure_runtime_effort_controller()
+    assert len(calls) == 1

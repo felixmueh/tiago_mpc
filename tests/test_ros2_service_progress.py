@@ -51,7 +51,7 @@ def rpc(monkeypatch):
         pending.complete = (record.complete_after is not None
                             and len(record.spins) >= record.complete_after)
     arm = ros2.TiagoRightArmClient.__new__(ros2.TiagoRightArmClient)
-    arm.node = node
+    arm.node, arm.service_progress = node, None
     arm.rclpy = NS(spin_until_future_complete=spin_until_future_complete)
     return NS(arm=arm, clock=clock, record=record, client=client, future=future)
 
@@ -60,8 +60,7 @@ def call(rpc, timeout=.5):
     return rpc.arm._service_call('/controller_manager/switch_controller', object, 'request', timeout)
 
 
-def test_success_without_hook_or_constructor_attribute_is_compatible(rpc):
-    assert not hasattr(rpc.arm, 'service_progress')
+def test_success_without_hook(rpc):
     assert call(rpc) is rpc.record.result
     assert rpc.record.sent == ['request']
     assert rpc.record.destroyed == [rpc.client]
@@ -200,7 +199,7 @@ def test_public_active_owner_inspection_uses_existing_validation_without_switch(
     position = NS(state='active', claimed_interfaces=[
         f'{joint}/position' for joint in RIGHT_ARM_JOINTS])
     rpc.arm.joint_names = RIGHT_ARM_JOINTS
-    rpc.arm.effort_controller = ros2.DEFAULT_EFFORT_CONTROLLER
+    rpc.arm.effort_controller = ros2.EFFORT_CONTROLLER
     calls = []
     def inventory(timeout):
         calls.append(timeout)

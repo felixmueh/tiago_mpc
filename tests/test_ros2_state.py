@@ -35,12 +35,8 @@ def transport(monkeypatch):
             callbacks.popleft()()
         else:
             clock.now += timeout_sec
-    class Trajectory:
-        def __init__(self):
-            self.points = []
     fake = dict(rclpy=NS(ok=lambda: True, create_node=lambda name: node,
                          spin_once=spin_once), JointState=object,
-                JointTrajectory=Trajectory, JointTrajectoryPoint=NS,
                 Float64MultiArray=NS, Duration=NS)
     monkeypatch.setattr(ros, '_ros_imports', lambda: fake)
     monkeypatch.setattr(ros, '_sea_state_type', lambda: NS())
@@ -130,7 +126,7 @@ def test_replayed_joint_message_does_not_refresh_age_or_sequence(transport):
     arm._on_joint_state(message(2.))
     arm._on_joint_state(message(1.))
     assert arm.latest_state() is state
-    assert state.age_sec == pytest.approx(.1)
+    assert transport.clock.now - state.received_monotonic_sec == pytest.approx(.1)
     with pytest.raises(TimeoutError):
         arm.read_state(timeout_sec=0, after_seq=state.seq)
 
@@ -165,32 +161,21 @@ def test_malformed_controlled_state_does_not_become_fresh(transport, fault):
     assert arm.latest_state() is None
 
 
-def test_effort_and_trajectory_preserve_joint_order_native_signs(transport):
+def test_effort_preserves_joint_order_and_native_signs(transport):
     arm = transport.new()
     values = [-1., 2., -3., 4., -5., -6., 7.]
     arm.publish_effort(values)
-    arm.publish_position_trajectory(values, duration_sec=.25, velocities=[.1]*7)
-    effort = transport.publications[1][1][-1]
-    trajectory = transport.publications[0][1][-1]
-    assert effort.data == values
-    assert trajectory.joint_names == list(RIGHT_ARM_JOINTS)
-    assert trajectory.points[0].positions == values
-    assert trajectory.points[0].time_from_start.nanosec == 250_000_000
-    arm.publish_position_trajectory_points([values, values], dt=.01)
-    points = transport.publications[0][1][-1].points
-    assert [p.time_from_start.nanosec for p in points] == [10_000_000, 20_000_000]
+    assert transport.publications[0][1][-1].data == values
 
 
 @pytest.mark.parametrize('bad', [float('nan'), float('inf'), -1.])
 def test_bad_durations_and_nonfinite_commands_are_rejected(transport, bad):
     arm = transport.new()
     with pytest.raises(ValueError):
-        arm.publish_position_trajectory([0.]*7, duration_sec=bad)
-    with pytest.raises(ValueError):
-        arm.publish_position_trajectory_points([[0.]*7], dt=bad)
+        ros._duration_msg(arm.ros, bad)
     with pytest.raises(ValueError):
         arm.publish_effort([0.]*6 + [float('nan')])
-    assert not transport.publications[0][1] and not transport.publications[1][1]
+    assert not transport.publications[0][1]
 
 
 def test_loop_process_imports_no_ros_compiled_gato_or_pinocchio_for_the_mpc():
