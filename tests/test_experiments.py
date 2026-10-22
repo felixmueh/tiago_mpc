@@ -103,3 +103,12 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path, monkeypatch
         np.testing.assert_allclose(saved["time_s"], np.arange(31) * .002, atol=1e-12)
         assert np.isfinite(saved["command"][:-1]).all()  # a command at every tick but the last
     np.testing.assert_allclose(requests, np.arange(10) * .006, atol=1e-12)  # every third tick
+
+
+def test_duration_caps_the_tasks_own(tmp_path, monkeypatch):
+    monkeypatch.setattr(rc, "MpcWorker", Mpc)
+    assert rc.arguments("", ["--duration", ".02"]).duration == .02
+    record = rc.reach(SimPlant(substep=.003), task=rc.Reach(timeout_s=.06), params=replace(rc.TIAGO, N=4),
+                      out=tmp_path / "r", duration=.02)
+    assert record.summary["status"] == "timeout" and record.summary["duration_cap_s"] == .02
+    assert len(record.ticks) == 3  # 0, 10 and 20 ms

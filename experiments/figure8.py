@@ -64,14 +64,16 @@ def metrics(error):
 
 
 def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sample_knot, out=None,
-            command_period=None, update_period=None):
-    """command_period and update_period default to the knot interval params.dt_s."""
+            command_period=None, update_period=None, duration=None):
+    """command_period and update_period default to the knot interval params.dt_s;
+    duration (seconds) caps the task's period."""
     record = Record(out, task=task, params=params, plant=plant)
     mpc = None
     try:
         mpc = MpcWorker(params)
         run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
-            update_period=update_period or params.dt_s, duration=task.period_s)
+            update_period=update_period or params.dt_s,
+            duration=task.period_s if duration is None else min(task.period_s, duration))
         trajectory = record.trajectory()
         t = trajectory["time_s"]
         xyz = np.array([fk(q, params.ee_frame) for q in trajectory["state"][:, :7]])
@@ -79,7 +81,7 @@ def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sampl
         excess = limit_excess(trajectory)
         record.arrays.update(ee_xyz_m=xyz, reference_xyz_m=task.path(t))
         record.summary.update(
-            status="completed", metrics_full_cycle=metrics(error),
+            status="completed", duration_cap_s=duration, metrics_full_cycle=metrics(error),
             metrics_after_initial_1s=metrics(error[t >= 1.]) if np.any(t >= 1.) else None,
             max_limit_excess=excess, limits_pass=max(excess.values()) <= 1e-5,
             max_abs_torque_nm=float(np.nanmax(np.abs(trajectory["command"]))),
@@ -100,7 +102,7 @@ def main(argv=None):
     args = arguments(__doc__, argv)
     task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
     record = launch(args, partial(figure8, task=task, out=args.output, command_period=args.command_period,
-                                  update_period=args.update_period),
+                                  update_period=args.update_period, duration=args.duration),
                     lambda: SimPlant(substep=1e-4, friction=urdf_friction()))
     if record is None:
         return 0

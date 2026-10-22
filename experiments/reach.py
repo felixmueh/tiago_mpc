@@ -68,8 +68,9 @@ def solve_summary(trajectory):
 
 
 def reach(plant, run=run_simulation, task=Reach(), params=TIAGO, law=sample_knot, out=None,
-          command_period=None, update_period=None):
-    """command_period and update_period default to the knot interval params.dt_s."""
+          command_period=None, update_period=None, duration=None):
+    """command_period and update_period default to the knot interval params.dt_s;
+    duration (seconds) caps the task's timeout."""
     if task.ee_frame != params.ee_frame:
         raise ValueError("the task and the MPC must track the same frame")
     record = Record(out, task=task, params=params, plant=plant)
@@ -77,13 +78,14 @@ def reach(plant, run=run_simulation, task=Reach(), params=TIAGO, law=sample_knot
     try:
         mpc = MpcWorker(params)
         arrived = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
-                      update_period=update_period or params.dt_s, duration=task.timeout_s)
+                      update_period=update_period or params.dt_s,
+                      duration=task.timeout_s if duration is None else min(task.timeout_s, duration))
         trajectory = record.trajectory()
         distance = np.array([task.distance(q) for q in trajectory["state"][:, :7]])
         excess = limit_excess(trajectory)
         record.arrays["distance_m"] = distance
         record.summary.update(
-            status="arrived" if arrived else "timeout", reached=arrived,
+            status="arrived" if arrived else "timeout", reached=arrived, duration_cap_s=duration,
             simulated_time_s=float(trajectory["time_s"][-1]), initial_distance_m=distance[0],
             final_distance_m=distance[-1], max_distance_m=distance.max(),
             final_speed_l1_rad_s=float(np.abs(trajectory["state"][-1, 7:]).sum()),
@@ -119,6 +121,7 @@ def arguments(description, argv):
     parser.add_argument("--latency", type=latency, default=Fixed(), help="sim: seconds per solve, or 'measured'")
     parser.add_argument("--command-period", type=float, help="seconds (default: the knot interval)")
     parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
+    parser.add_argument("--duration", type=float, help="seconds: cap the task's own duration")
     parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/<task>/)")
     args = parser.parse_args(argv)
     if args.target is not None and not np.isfinite(args.target).all():
@@ -160,7 +163,8 @@ def main(argv=None):
     args = arguments(__doc__, argv)
     task = Reach() if args.target is None else Reach(tuple(args.target))
     record = launch(args, partial(reach, task=task, out=args.output, command_period=args.command_period,
-                                  update_period=args.update_period), lambda: SimPlant(substep=.003))
+                                  update_period=args.update_period, duration=args.duration),
+                    lambda: SimPlant(substep=.003))
     if record is None:
         return 0
     print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},

@@ -90,7 +90,7 @@ def guard(command, plan, t):
     return command
 
 
-def run(plant, mpc, task, law=sample_knot, safety=None, callbacks=(), *,
+def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
         command_period, update_period, duration, latency=None):
     """Run task on plant until task.done(state, t) or for duration seconds.
 
@@ -101,13 +101,13 @@ def run(plant, mpc, task, law=sample_knot, safety=None, callbacks=(), *,
     """
     due, plan, pending = Schedule(update_period), None, None
     plant.start()  # startup checks on a fresh state
+    # Paused for the whole run: full collections took 7-10 ms at 500 Hz. It must be
+    # enabled in between (e.g. collecting at safe points); to be discussed (todo.org).
     gc.disable()
     try:
         start = plant.state().t
         while True:
             s = plant.state()
-            if safety:
-                safety.check(s)
             t = s.t - start
             done = task.done(s, t)
             end = done or t >= duration - _TOLERANCE

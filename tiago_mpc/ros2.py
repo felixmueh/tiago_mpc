@@ -1,7 +1,7 @@
 """Optional ROS 2 I/O for the TIAGo right arm, in native joint coordinates.
 
 Ported from GATO ros-tiago c4cf5cc466bc576fd7f5a86bc02d6690c248044a.
-See docs/ROS2_ADAPTER.md for provenance, validation and deployment limits.
+See docs/robot.md for provenance, validation and deployment limits.
 This module provides transport and controller handover, not a motion supervisor.
 
 The module avoids importing ROS at import time so non-ROS tests and experiments
@@ -74,7 +74,7 @@ def validate_controller_manager_interfaces() -> None:
             raise RuntimeError(
                 "Incompatible controller_manager_msgs: PAL 4.32.2 interfaces required; "
                 "source a compatible PAL interface overlay in a fresh shell "
-                "before constructing the client (see docs/ROS2_ADAPTER.md)."
+                "before constructing the client (see docs/robot.md)."
             )
 
 

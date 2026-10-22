@@ -206,6 +206,8 @@ class RosPlant:
         self._ready(s)  # recheck right before activation
         self.client.publish_effort(command)  # prime the inactive receiver
         self._activated = self.settings["activated"] = True  # a failed switch may still activate
+        # Until the state's time + LEASE_S, not the plan's lease end (62 ms for 2 ms knots):
+        # the plant cannot see the plan. Left as is for Felix's safety review.
         hold_until = s.received_monotonic_sec + LEASE_S
 
         def progress():
