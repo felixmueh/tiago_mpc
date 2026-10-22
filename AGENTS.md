@@ -62,7 +62,7 @@ Keep the robot rules intact: check-only by default and typed confirmation for
 execution; startup pose and speed checks; state freshness; every knot
 validated; leases that end no later than the plan; never clip a torque or renew
 a lease; zero torque and handback first on exit; a met goal never enables
-effort control; a dead MPC worker noticed within one tick. Keep the safety
+effort control; a dead MPC process noticed within one tick. Keep the safety
 model's 4 cm margin, blacklist and documented limits; never change them to make
 a fixture pass. ROS imports stay lazy: the package, simulation and tests run
 without ROS.

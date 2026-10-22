@@ -15,7 +15,7 @@ order, and `inputs/` holds one NPZ per task.
 
 - **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`) with the
   flange as end-effector frame (`PARAMS` in `run.py`). Each case runs once, in
-  order: `reach` from `experiments/reach.py` with its own MPC worker, writing to
+  order: `reach` from `experiments/reach.py` with its own `MpcProcess`, writing to
   a fresh directory under `_expr_data/`. The runner takes the shared GPU locks.
 - **Outcomes:** arrival (position error at most 5 cm and joint-speed L1 at most
   1 rad/s within 8 simulated seconds) and simulated physical-limit compliance

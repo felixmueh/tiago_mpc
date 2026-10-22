@@ -1,7 +1,7 @@
 """MPC parameters with the TIAGo defaults, and the MPC built from them.
 
 Experiments override the defaults with dataclasses.replace, for example
-replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). MpcInProcess and MpcWorker
+replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). Mpc and MpcProcess
 share one interface: request(state, reference, updates=None), result(block=False)
 -> Plan or None, N, dt and close().
 """
@@ -170,8 +170,8 @@ def check_model(solver, model, data, ee_frame, signs, friction=None):
     solver.reset()
 
 
-# Named solver changes, applied before a solve in either Mpc. Each persists in the
-# solver until changed again. Add a name when an experiment needs it.
+# Named solver changes, applied before a solve by Mpc (also in MpcProcess). Each persists
+# in the solver until changed again. Add a name when an experiment needs it.
 UPDATES = {
     # dict of scalar weights: q_cost, qd_cost, u_cost, N_cost, *_lim_cost
     "cost_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights(**weights),
@@ -204,7 +204,7 @@ def _checked(mpc, plan, t):
     return plan
 
 
-class MpcInProcess:
+class Mpc:
     """The GATO controller in this process: request solves, result returns the plan.
 
     The first request resets the controller from its state (and runs the warm-up
@@ -264,12 +264,12 @@ class MpcInProcess:
 _SPAWN = mp.get_context("spawn")
 
 
-class MpcWorker:
-    """MpcInProcess in a spawned worker process, behind the same interface.
+class MpcProcess:
+    """Mpc in a spawned process, behind the same interface.
 
-    __init__ returns once the worker has built and checked its controller. A
-    failed solve replies with its error and ends the worker; result() raises on
-    that reply, and on a dead worker, at the next call.
+    __init__ returns once the process has built and checked its controller. A
+    failed solve replies with its error and ends the process; result() raises on
+    that reply, and on a dead process, at the next call.
     """
 
     def __init__(self, params):
@@ -318,19 +318,19 @@ class MpcWorker:
                 reply = self._replies.get(timeout=.05) if block else self._replies.get_nowait()
             except queue.Empty:
                 if not self._process.is_alive():
-                    raise RuntimeError(f"MPC worker exited unexpectedly: {self._process.exitcode}")
+                    raise RuntimeError(f"MPC process exited unexpectedly: {self._process.exitcode}")
                 if block:
                     continue
                 return None
             if isinstance(reply, str):
-                raise RuntimeError(f"MPC worker: {reply}")
+                raise RuntimeError(f"MPC process: {reply}")
             return reply
 
 
 def _serve(params, requests, replies):
-    """The worker: build, reply None when ready (or the error), then one plan per request."""
+    """The process: build, reply None when ready (or the error), then one plan per request."""
     try:
-        mpc = MpcInProcess(params)
+        mpc = Mpc(params)
         replies.put(None)
         while (item := requests.get()) is not None:
             replies.put(mpc._solve(*item))

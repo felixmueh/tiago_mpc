@@ -114,7 +114,7 @@ def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
             start = s.t if start is None else start
             done = task.done(s, t - start)
             end = done or t - start >= duration - _TOLERANCE
-            # Without a pending solve, result() still notices a dead worker within one tick.
+            # Without a pending solve, result() still notices a dead MPC process within one tick.
             new = pending.ready(t) if pending else mpc.result()
             if new is not None:
                 plan, pending = new, None

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.replay import export_replay
 from tiago_mpc.laws import sample_knot
 from tiago_mpc.loops import Fixed, Measured, run_robot, run_simulation
-from tiago_mpc.mpc import TIAGO, MpcWorker
+from tiago_mpc.mpc import TIAGO, MpcProcess
 from tiago_mpc.record import Record
 from tiago_mpc.robot import RosPlant
 from tiago_mpc.sim import SimPlant
@@ -76,7 +76,7 @@ def reach(plant, run=run_simulation, task=Reach(), params=TIAGO, law=sample_knot
     record = Record(out, task=task, params=params, plant=plant)
     mpc = None
     try:
-        mpc = MpcWorker(params)
+        mpc = MpcProcess(params)
         arrived = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
                       update_period=update_period or params.dt_s,
                       duration=task.timeout_s if duration is None else min(task.timeout_s, duration))

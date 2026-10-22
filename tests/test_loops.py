@@ -49,7 +49,7 @@ class Mpc:
 
     def result(self, block=False):
         if self.dead:
-            raise RuntimeError("MPC worker exited unexpectedly")
+            raise RuntimeError("MPC process exited unexpectedly")
         if self.waiting is None or len(self.requests) > self.replies:
             return None
         if self.waiting[0] > 0 and not block:
@@ -166,7 +166,7 @@ def test_past_the_plans_end_faults_and_stops():
     assert plant.calls == ["start", "stop"]
 
 
-def test_a_dead_worker_is_noticed_within_one_tick_and_stops_the_plant():
+def test_a_dead_mpc_process_is_noticed_within_one_tick_and_stops_the_plant():
     mpc, plant = Mpc(), Plant()
 
     def die(tick):

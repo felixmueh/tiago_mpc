@@ -18,7 +18,7 @@ from experiments.reach import arguments, launch, limit_excess, solve_summary
 from experiments.replay import export_replay
 from tiago_mpc.laws import sample_knot
 from tiago_mpc.loops import run_simulation
-from tiago_mpc.mpc import TIAGO, MpcWorker
+from tiago_mpc.mpc import TIAGO, MpcProcess
 from tiago_mpc.record import Record
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import Q_START, fk, urdf_friction
@@ -70,7 +70,7 @@ def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sampl
     record = Record(out, task=task, params=params, plant=plant)
     mpc = None
     try:
-        mpc = MpcWorker(params)
+        mpc = MpcProcess(params)
         run(plant, mpc, task, law, callbacks=[record], command_period=command_period or params.dt_s,
             update_period=update_period or params.dt_s,
             duration=task.period_s if duration is None else min(task.period_s, duration))

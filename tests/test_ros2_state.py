@@ -180,7 +180,7 @@ def test_bad_durations_and_nonfinite_commands_are_rejected(transport, bad):
 
 def test_loop_process_imports_no_ros_compiled_gato_or_pinocchio_for_the_mpc():
     # The loop process holds MpcParams (gato's SolverParams), so it imports gato's
-    # Python package; the CUDA build and solves stay in the MPC worker process.
+    # Python package; the CUDA build and solves stay in the MPC process.
     # Only the plants (and the safety model) load Pinocchio; only RosPlant() loads ROS.
     import subprocess
     from pathlib import Path

@@ -19,8 +19,8 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
   settings. It reads the controller inventory but loads no controller, switches
   nothing, publishes nothing and builds no MPC. Nothing is saved.
 - **Execution:** `--execute --target X_M Y_M Z_M` (target required). You type
-  `EXECUTE` before the ROS client exists. Then the experiment builds the MPC
-  worker, and `run_robot` calls `plant.start()`, so the startup checks see a
+  `EXECUTE` before the ROS client exists. Then the experiment builds the
+  `MpcProcess`, and `run_robot` calls `plant.start()`, so the startup checks see a
   state read after the build; meanwhile the arm stays under PAL's position
   controller. SIGTERM ends the run like Ctrl-C.
 - **`--duration S`** ends a run after at most S seconds (otherwise the reach
@@ -35,7 +35,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 | Process | Runs |
 |---|---|
 | 1 (launching) | loop, task, law, `guard`, `Record`, `RosPlant` and the ROS client |
-| 2 (spawned) | `MpcWorker`: builds the GATO controller and solves on the GPU |
+| 2 (spawned) | `MpcProcess`: builds the GATO controller and solves on the GPU |
 | 3 (spawned) | the safety worker (`AsyncSafetyMonitor`), owned by `RosPlant`: no robot run without it |
 
 ## Where each check lives
@@ -46,7 +46,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 | `RosPlant.start()` | first state within 180 s; safety worker started with it; PAL's `arm_right_controller` active (existing effort control is not adopted; mixed or unknown arm owners are rejected); with `execute`, the effort controller loaded and configured; then a newer state passes `state()`'s checks, lies within 0.05 rad of the comfortable pose at joint-speed L1 ≤ 1 rad/s, and the safety worker has checked it |
 | `RosPlant.state()` | receipt age ≤ 100 ms; finite stamp; seven finite q, qd within the URDF position and speed limits; sequence never reversed; a new sample has a later ROS stamp (a clock reset faults); full named body state; every other body joint within 0.02 rad (torso 5 mm) of its start value; the state goes to the safety worker, whose faults latch |
 | loop (`run`) | `plant.start()` before the first tick; `task.done` before any command (a met goal never activates effort control); no command before the first plan; `plant.stop()` first on exit |
-| `MpcWorker.result()` | every knot finite and within the raw effort limits; expected knot interval; the plan answers the pending request; an error reply or a dead worker raises, polled every tick |
+| `MpcProcess.result()` | every knot finite and within the raw effort limits; expected knot interval; the plan answers the pending request; an error reply or a dead process raises, polled every tick |
 | `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; execution time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time |
 
 The checks raise; nothing retries. Limits are the reduced arm URDF's; the

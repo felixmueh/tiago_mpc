@@ -59,7 +59,7 @@ class Mpc:
 @pytest.mark.parametrize("name", ["reach", "figure8"])
 def test_experiment_records_summary_trajectory_and_replay(tmp_path, monkeypatch, name):
     module = rc if name == "reach" else f8
-    monkeypatch.setattr(module, "MpcWorker", Mpc)
+    monkeypatch.setattr(module, "MpcProcess", Mpc)
     params = replace(module.TIAGO if name == "reach" else f8.FIGURE8, N=4)
     if name == "reach":
         task = rc.Reach(timeout_s=.05)
@@ -96,7 +96,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path, monkeypatch
             requests.append(state.t)
             super().request(state, reference, updates)
 
-    monkeypatch.setattr(rc, "MpcWorker", Counting)
+    monkeypatch.setattr(rc, "MpcProcess", Counting)
     params = replace(rc.TIAGO, N=8)  # 10 ms knots, 70 ms plans
     rc.reach(SimPlant(substep=.002), task=rc.Reach(timeout_s=.06), params=params, out=tmp_path / "r",
              command_period=.002, update_period=.006)
@@ -107,7 +107,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path, monkeypatch
 
 
 def test_duration_caps_the_tasks_own(tmp_path, monkeypatch):
-    monkeypatch.setattr(rc, "MpcWorker", Mpc)
+    monkeypatch.setattr(rc, "MpcProcess", Mpc)
     assert rc.arguments("", ["--duration", ".02"]).duration == .02
     record = rc.reach(SimPlant(substep=.003), task=rc.Reach(timeout_s=.06), params=replace(rc.TIAGO, N=4),
                       out=tmp_path / "r", duration=.02)
@@ -119,7 +119,7 @@ def test_an_interrupted_run_is_saved_as_interrupted(tmp_path, monkeypatch):
     def interrupted(*args, **kw):
         raise KeyboardInterrupt  # Ctrl-C, or SIGTERM through reach._interrupt
 
-    monkeypatch.setattr(rc, "MpcWorker", Mpc)
+    monkeypatch.setattr(rc, "MpcProcess", Mpc)
     with pytest.raises(KeyboardInterrupt):
         rc.reach(SimPlant(substep=.003), run=interrupted, params=replace(rc.TIAGO, N=4), out=tmp_path / "r")
     assert json.loads((tmp_path / "r" / "summary.json").read_text())["status"] == "interrupted"

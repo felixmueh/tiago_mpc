@@ -261,7 +261,7 @@ def test_run_robot_never_activates_for_a_goal_already_met(rig):
     assert "switch" not in rig.arm.calls and not rig.arm.published
 
 
-def test_a_dead_worker_on_the_robot_stops_and_hands_back(rig):
+def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
     mpc, plant = Mpc(N=32), robot.RosPlant(execute=True)
 
     def die(tick):
@@ -274,7 +274,7 @@ def test_a_dead_worker_on_the_robot_stops_and_hands_back(rig):
 
 @pytest.mark.parametrize("module", [rc, f8])
 def test_robot_main_checks_only_by_default(rig, monkeypatch, module):
-    monkeypatch.setattr(module, "MpcWorker", lambda params: pytest.fail("check-only builds no MPC"))
+    monkeypatch.setattr(module, "MpcProcess", lambda params: pytest.fail("check-only builds no MPC"))
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("check-only must not prompt"))
     monkeypatch.setattr(rc.signal, "signal", lambda *args: None)
     assert module.main(["--plant", "robot"]) == 0

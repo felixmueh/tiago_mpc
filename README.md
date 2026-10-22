@@ -20,7 +20,7 @@ state's time; on the robot a state can be older than the tick and repeat.
 
 ```
 tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction laws),
-              mpc.py (MpcParams, TIAGO, plant names, MpcInProcess, MpcWorker),
+              mpc.py (MpcParams, TIAGO, plant names, Mpc, MpcProcess),
               plan.py (State, Plan, Tick), clock.py (Clock), laws.py, loops.py (run, guard),
               sim.py (SimPlant), robot.py (RosPlant), ros2.py (ROS 2 client), safety.py,
               record.py (Record)
@@ -103,8 +103,8 @@ record = reach(SimPlant(substep=.003), run=partial(run_simulation, latency=Fixed
 - `SimPlant(friction=...)` sets the **plant's** losses, `MpcParams.friction`
   the **predictor's**; the run records both.
 - **Per-solve solver changes** come from the task's optional `updates(t)`,
-  named in `UPDATES` (`mpc.py`). **Your own loop** can use `MpcInProcess`
-  (the `MpcWorker` interface plus the raw GATO `controller`) directly.
+  named in `UPDATES` (`mpc.py`). **Your own loop** can use `Mpc` (the
+  `MpcProcess` interface plus the raw GATO `controller`) directly.
 
 ## On the robot
 

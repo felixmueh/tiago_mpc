@@ -15,7 +15,7 @@ import pytest
 from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction
-from tiago_mpc.mpc import TIAGO, MpcInProcess, MpcParams, MpcWorker
+from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, urdf_friction
 
@@ -144,7 +144,7 @@ class Controller:
 
 @pytest.fixture
 def controller(monkeypatch):
-    """Every Mpc built in this process (also MpcWorker on threads) gets this controller."""
+    """Every Mpc built in this process (also MpcProcess on threads) gets this controller."""
     controller = Controller()
     monkeypatch.setattr(mpc, "build_controller", lambda params: (controller, SIGNS))
     return controller
@@ -156,7 +156,7 @@ def state(t=1., scale=1.):
 
 def test_native_coordinates_cross_only_the_gpu_boundary(controller):
     item = state()
-    m = MpcInProcess(PARAMS)
+    m = Mpc(PARAMS)
     m.request(item, REFERENCE)
     plan = m.result()
     x = np.r_[item.q, item.qd]
@@ -170,7 +170,7 @@ def test_native_coordinates_cross_only_the_gpu_boundary(controller):
 
 
 def test_first_request_resets_and_warms_up_once_and_dt_elapsed_follows_state_times(controller):
-    m = MpcInProcess(replace(PARAMS, warmup=2))
+    m = Mpc(replace(PARAMS, warmup=2))
     for t in (1., 1.013, 1.02):
         m.request(state(t, scale=t), REFERENCE)
     kinds = [event[0] for event in controller.events]
@@ -182,7 +182,7 @@ def test_first_request_resets_and_warms_up_once_and_dt_elapsed_follows_state_tim
 
 
 def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller):
-    m = MpcInProcess(PARAMS)
+    m = Mpc(PARAMS)
     q_nom = np.arange(7.)
     m.request(state(), REFERENCE, {"cost_weights": dict(q_cost=2.), "posture": (.5, q_nom)})
     names = [event[0] for event in controller.events]
@@ -196,7 +196,7 @@ def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller
 
 @pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite", "effort"])
 def test_every_knot_is_checked(controller, bad):
-    m = MpcInProcess(PARAMS)
+    m = Mpc(PARAMS)
     fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)))
     assert mpc._checked(m, Plan(**fields), 1.)
     if bad == "shape":
@@ -230,7 +230,7 @@ class Thread(threading.Thread):
     def run(self):
         try:
             super().run()
-        except SystemExit:  # a worker that dies without replying
+        except SystemExit:  # a process that dies without replying
             pass
         finally:
             self.exitcode = 0
@@ -240,69 +240,69 @@ class Thread(threading.Thread):
 
 
 @pytest.fixture
-def worker(controller, monkeypatch):
+def process(controller, monkeypatch):
     monkeypatch.setattr(mpc, "_SPAWN", NS(Queue=Channel, Process=Thread))
-    workers = []
+    processes = []
     def make(params=PARAMS):
-        workers.append(MpcWorker(params))
-        return workers[-1]
+        processes.append(MpcProcess(params))
+        return processes[-1]
     yield make
-    for item in workers:
+    for item in processes:
         item.close()
 
 
-def test_worker_result_waits_for_its_reply(worker, controller):
-    w = worker()
-    assert (w.N, w.dt) == (N, DT)
-    assert w.result() is None  # nothing requested
+def test_process_result_waits_for_its_reply(process, controller):
+    p = process()
+    assert (p.N, p.dt) == (N, DT)
+    assert p.result() is None  # nothing requested
     controller.gate = threading.Event()
-    w.request(state(), REFERENCE)
-    assert w.result() is None  # solving
+    p.request(state(), REFERENCE)
+    assert p.result() is None  # solving
     with pytest.raises(RuntimeError, match="pending"):
-        w.request(state(2.), REFERENCE)
+        p.request(state(2.), REFERENCE)
     controller.gate.set()
-    plan = w.result(block=True)
+    plan = p.result(block=True)
     assert plan.t0 == 1. and plan.torques.shape == (N - 1, 7)
 
 
-def test_worker_rejects_a_reply_for_another_state(worker, controller):
-    w = worker()
+def test_process_rejects_a_reply_for_another_state(process, controller):
+    p = process()
     controller.gate = threading.Event()
-    w.request(state(), REFERENCE)
-    w._replies.put(Plan(.99, DT, np.zeros((N, 14)), np.ones((N - 1, 7))))
+    p.request(state(), REFERENCE)
+    p._replies.put(Plan(.99, DT, np.zeros((N, 14)), np.ones((N - 1, 7))))
     with pytest.raises(RuntimeError, match="does not match"):
-        w.result()
+        p.result()
     controller.gate.set()
 
 
-def test_worker_error_reply_raises_and_ends_the_worker(worker, controller):
-    w = worker()
+def test_an_error_reply_raises_and_ends_the_process(process, controller):
+    p = process()
     controller.torque = FloatingPointError("nonfinite")
-    w.request(state(), REFERENCE)
+    p.request(state(), REFERENCE)
     with pytest.raises(RuntimeError, match="FloatingPointError: nonfinite"):
-        w.result(block=True)
-    w._process.join(1.)
+        p.result(block=True)
+    p._process.join(1.)
     with pytest.raises(RuntimeError, match="exited unexpectedly"):
-        w.result()
+        p.result()
 
 
-def test_dead_worker_raises_at_the_next_call(worker, controller):
-    w = worker()
-    controller.torque = SystemExit(9)  # ends the worker without a reply
-    w.request(state(), REFERENCE)
-    w._process.join(1.)
+def test_a_dead_process_raises_at_the_next_call(process, controller):
+    p = process()
+    controller.torque = SystemExit(9)  # ends the process without a reply
+    p.request(state(), REFERENCE)
+    p._process.join(1.)
     with pytest.raises(RuntimeError, match="exited unexpectedly"):
-        w.result()
+        p.result()
 
 
-def test_unknown_update_raises_in_the_callers_process(worker, controller):
-    w = worker()
+def test_unknown_update_raises_in_the_callers_process(process, controller):
+    p = process()
     with pytest.raises(KeyError):
-        w.request(state(), REFERENCE, {"gravity": 0.})
-    assert w._requests.empty() and w.result() is None
+        p.request(state(), REFERENCE, {"gravity": 0.})
+    assert p._requests.empty() and p.result() is None
 
 
-def test_spawned_worker_reports_a_failed_build():
+def test_a_spawned_process_reports_a_failed_build():
     # A real spawned process: the build fails on the frame before any GPU work.
     with pytest.raises(RuntimeError, match="Missing end-effector frame"):
-        MpcWorker(replace(TIAGO, ee_frame="no_such_frame"))
+        MpcProcess(replace(TIAGO, ee_frame="no_such_frame"))

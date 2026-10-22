@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the historical random100 inputs once: one reach and one MPC worker per case."""
+"""Run the historical random100 inputs once: one reach and one MpcProcess per case."""
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import argparse
@@ -18,7 +18,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
 from experiments.reach import Reach, reach
-from tiago_mpc.mpc import TIAGO, MpcWorker
+from tiago_mpc.mpc import TIAGO, MpcProcess
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import FLANGE_FRAME, ROOT, fk
 
@@ -89,7 +89,7 @@ def main():
             lock = path.open("a")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             locks.append(lock)
-    MpcWorker(PARAMS).close()  # a shared setup failure (GATO build, model check) stops here, before any case
+    MpcProcess(PARAMS).close()  # a shared setup failure (GATO build, model check) stops here, before any case
     out.mkdir(parents=True, exist_ok=False)
     (out / "configuration.json").write_text(json.dumps(config, indent=2)+"\n")
     shutil.copyfile(__file__, out / "run.py")
