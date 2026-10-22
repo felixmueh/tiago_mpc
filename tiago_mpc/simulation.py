@@ -1,4 +1,9 @@
-"""Solve latency charged to the simulated plant, independently of wall pacing."""
+"""Solve latency charged to the simulated plant, independently of wall pacing.
+
+TODO(torque command, Felix 2026-10-22): the plant holds only the plan's first
+torque per control interval, as the ROS runner does. See the TODO above
+publish_checked in tiago_mpc/runner.py before changing either.
+"""
 from dataclasses import dataclass
 import math
 

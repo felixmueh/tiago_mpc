@@ -272,6 +272,20 @@ class RosMpcRunner:
             applied_at = None
             stopping = False
 
+            # ==========================================================================
+            # TODO(torque command, Felix 2026-10-22): NOT YET THE RIGHT COMMAND TYPE
+            # FOR REAL-TIME CONTROL OF THE ROBOT.
+            # Only the plan's first torque u0 is sent, then republished every I/O
+            # tick until the next reply or the lease ends. The rest of the plan is
+            # discarded, the torque steps at every update, and a torque planned for
+            # one knot (2 ms in tracking) is held for 10 ms or longer.
+            # Options (thesis workspace research/tiago-mpc-simplification-proposals.md,
+            # "Torque commands"): play back the plan per knot (zero-order hold, as
+            # GATO's transcription assumes); feedforward torque plus local feedback
+            # in a PAL real-time controller; possibly separate control modes for
+            # simulation and the robot. The simulation holds u0 the same way
+            # (tiago_mpc/simulation.py): change both together.
+            # ==========================================================================
             def publish_checked(reply, request):
                 # This guard is adjacent to every nonzero publication, including
                 # repeats and service-progress publication. Slow logging or a
@@ -358,7 +372,10 @@ class RosMpcRunner:
                     stopping = True
                 if not stopping and pending is None and now >= next_solve and state.seq != last_request_seq:
                     request_id += 1
-                    deadline = state.received_monotonic_sec + self.config.command_timeout_sec
+                    # A held torque must not outlive its plan: tracking plans span
+                    # only 31 x 2 ms = 62 ms, less than the 100 ms command lease.
+                    plan_s = (ready.details["N"] - 1) * ready.details["dt_s"]
+                    deadline = state.received_monotonic_sec + min(self.config.command_timeout_sec, plan_s)
                     pending = SolveRequest(request_id, state, self.task, elapsed, deadline,
                                            None if applied_at is None else now - applied_at)
                     request_q.put_nowait(pending)

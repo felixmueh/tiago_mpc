@@ -16,10 +16,10 @@ class TaskReference:
     target_xyz_m: tuple[float, float, float]
     generation: int = 1
     kind: str = "reach"
-    x_span_m: float = 0.24
-    y_amplitude_m: float = 0.08
+    x_span_m: float = 0.28
+    y_amplitude_m: float = 0.09
     period_s: float = 24.0
-    edge_clearance_m: float = 0.0
+    edge_clearance_m: float = 0.02
 
     def __post_init__(self):
         if self.kind not in {"reach", "figure8"}:

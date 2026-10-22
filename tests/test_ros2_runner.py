@@ -184,6 +184,13 @@ def test_normal_run_hands_back_and_records_original_command_lease(rig, tmp_path)
     assert saved["status"] == "arrived"
 
 
+
+def test_request_deadline_ends_no_later_than_the_plan(rig, tmp_path, monkeypatch):
+    monkeypatch.setitem(LIMITS, "dt_s", .002)  # tracking knots: 31 x 2 ms = 62 ms plan
+    rig.runner.run(tmp_path / "short-plan", execute=True)
+    request = rig.requests[0]
+    assert request.deadline_monotonic_sec - request.state.received_monotonic_sec == pytest.approx(.062)
+
 @pytest.mark.parametrize("fault,text,uncertain", [
     ("hang", "deadline", False), ("mismatched", "mismatched", False),
     ("switch", "expired", True), ("switch_death", "exited", True),
@@ -286,6 +293,7 @@ def test_uncontrolled_nonfinite_metadata_can_be_logged_without_relaxing_control_
 
 def test_reference_phase_is_time_based_and_orientation_unconstrained():
     ref = TaskReference((.5, .1, .2), kind="figure8")
-    assert ref.horizon(0., 2, .01)[0, 0] == pytest.approx(.5)
-    assert ref.horizon(6., 2, .01)[0, 0] == pytest.approx(.62)
+    # Default shape matches configs/tracking.json: 2 cm edge clearance, 28 cm x span.
+    assert ref.horizon(0., 2, .01)[0, 0] == pytest.approx(.52)
+    assert ref.horizon(6., 2, .01)[0, 0] == pytest.approx(.66)
     assert np.all(ref.horizon(6., 2, .01)[:, 3:] == 0)

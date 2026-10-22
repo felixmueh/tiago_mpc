@@ -10,7 +10,6 @@ import time
 import numpy as np
 
 from .protocol import SolveReply, SolveRequest, WorkerReady
-from .ros2 import RIGHT_ARM_JOINTS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,6 +72,7 @@ class MpcEngine:
             self._generation = request.task.generation
         step = self.controller.step(x_gpu, reference,
                                     dt_elapsed=request.dt_elapsed_s, budget_s=self.budget_s)
+        # TODO(torque command): only u0 leaves the worker; see tiago_mpc/runner.py.
         u = np.asarray(step.u, dtype=float)
         plan = np.asarray(step.xu_best, dtype=float).reshape(-1)
         if u.shape != (7,) or not np.isfinite(u).all():

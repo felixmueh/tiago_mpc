@@ -46,7 +46,7 @@ def build_controller(effective, *, cache_dir, ee_frame=EE_FRAME):
     """Build/check once; callers retain ownership of timing, state and I/O."""
     cache_dir = Path(cache_dir).resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["GATO_CACHE_DIR"] = str(cache_dir / "gato")
+    os.environ.setdefault("GATO_CACHE_DIR", str(cache_dir / "gato"))
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]
     import gato
     import pinocchio as pin
