@@ -12,10 +12,6 @@ client is constructed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
-from pathlib import Path
-import subprocess
-import sys
 import time
 from typing import Any, Callable, Sequence
 
@@ -39,7 +35,6 @@ DEFAULT_SEA_VELOCITY_FILTER_TAU_SEC = 0.01
 DEFAULT_TRAJECTORY_TOPIC = "/arm_right_controller/joint_trajectory"
 DEFAULT_CONTROLLER_MANAGER = "/controller_manager"
 DEFAULT_EFFORT_CONTROLLER = "gato_arm_effort_forward_runtime"
-DEFAULT_ROS_SETUP = "/opt/ros/humble/setup.bash"
 
 
 @dataclass(frozen=True)
@@ -63,56 +58,6 @@ class ArmState:
     @property
     def age_sec(self) -> float:
         return time.monotonic() - self.received_monotonic_sec
-
-def ensure_ros_environment(
-    setup_path: str | None = None,
-    *,
-    allow_reexec: bool = True,
-) -> None:
-    """Load ROS setup variables into this Python process if rclpy is missing."""
-    # TODO: consider usinga more canonical way to load ROS env variables.
-    try:
-        import rclpy  # noqa: F401
-    except ImportError:
-        pass
-    else:
-        return
-
-    if os.environ.get("TIAGO_MPC_ROS_SETUP_ATTEMPTED") == "1":
-        return
-
-    setup = Path(setup_path or os.environ.get("TIAGO_MPC_ROS_SETUP", os.environ.get("GATO_ROS_SETUP", DEFAULT_ROS_SETUP)))
-    if not setup.is_file():
-        return
-
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$1" >/dev/null 2>&1 && env -0',
-            "tiago_mpc_ros_setup",
-            str(setup),
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-    )
-    for entry in result.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
-        if not entry or "=" not in entry:
-            continue
-        key, value = entry.split("=", 1)
-        os.environ[key] = value
-    os.environ["TIAGO_MPC_ROS_SETUP_ATTEMPTED"] = "1"
-
-    for path in reversed(os.environ.get("PYTHONPATH", "").split(os.pathsep)):
-        if path and path not in sys.path:
-            sys.path.insert(0, path)
-
-    try:
-        import rclpy  # noqa: F401
-    except ImportError:
-        if allow_reexec and sys.argv and sys.argv[0] not in {"-", "-c"}:
-            os.execvpe(sys.executable, [sys.executable, *sys.argv], os.environ)
-
 
 def validate_controller_manager_interfaces() -> None:
     """Reject the known incompatible Humble layout before sending any RPCs.
@@ -143,9 +88,7 @@ def validate_controller_manager_interfaces() -> None:
             )
 
 
-def _ros_imports(setup_path: str | None = None) -> dict[str, Any]:
-    # TODO: if this runs in its own container with ROS already sourced import directly.
-    ensure_ros_environment(setup_path)
+def _ros_imports() -> dict[str, Any]:
     try:
         import rclpy
         from builtin_interfaces.msg import Duration
@@ -164,8 +107,9 @@ def _ros_imports(setup_path: str | None = None) -> dict[str, Any]:
         validate_controller_manager_interfaces()
     except ImportError as exc:
         raise RuntimeError(
-            "ROS 2 Python packages are not importable. Source ROS first, or set "
-            "TIAGO_MPC_ROS_SETUP to the setup.bash path for your ROS installation."
+            "ROS 2 Python packages are not importable. Source ROS 2 in the shell that "
+            "launches this program (for example `source /opt/ros/humble/setup.bash`, "
+            "or PAL's setup on the robot); tiago_mpc does not load it automatically."
         ) from exc
 
     return locals()
@@ -266,9 +210,8 @@ class TiagoRightArmClient:
         trajectory_topic: str = DEFAULT_TRAJECTORY_TOPIC,
         controller_manager: str = DEFAULT_CONTROLLER_MANAGER,
         effort_controller: str = DEFAULT_EFFORT_CONTROLLER,
-        setup_path: str | None = None,
     ) -> None:
-        self.ros = _ros_imports(setup_path)
+        self.ros = _ros_imports()
         # Resolve the optional dependency before creating a node or any controller RPC.
         sea_type = _sea_state_type() if sea_absolute else None
         self.sea_absolute = bool(sea_absolute)

@@ -6,6 +6,7 @@ import argparse
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import signal
 import sys
@@ -34,7 +35,6 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, help="explicit MPC configuration; defaults to configs/reaching.json")
     parser.add_argument("--budget-ms", type=float, help="optional advisory per-step SQP wall budget, milliseconds")
     parser.add_argument("--sea-absolute", action="store_true", help="use the ported SEA absolute feedback estimator")
-    parser.add_argument("--ros-setup", help="ROS setup file, including the compatible PAL overlay")
     parser.add_argument("--output", type=Path, help="fresh run directory under this checkout's _expr_data")
     args = parser.parse_args(argv)
     if args.execute and args.target is None:
@@ -61,6 +61,7 @@ def main(argv=None):
     if not output.resolve().is_relative_to((ROOT / "_expr_data").resolve()):
         parser.error("--output must be inside this checkout's _expr_data")
     print(json.dumps(dict(execute=args.execute, reference_frame=REFERENCE_FRAME,
+                         ros_distro=os.environ.get("ROS_DISTRO"),
                          end_effector_frame=EE_FRAME,
                          target_semantics="grasp-center target; figure8 uses anchor plus edge_clearance_m on +X",
                          runner=asdict(config), task=asdict(task), worker=asdict(worker),
@@ -78,8 +79,7 @@ def main(argv=None):
     previous_handler = signal.signal(signal.SIGTERM, terminate)
     try:
         application = RosMpcRunner(config, task, worker, safety,
-            arm_factory=lambda: TiagoRightArmClient(sea_absolute=args.sea_absolute,
-                                                    setup_path=args.ros_setup))
+            arm_factory=lambda: TiagoRightArmClient(sea_absolute=args.sea_absolute))
         summary = application.run(output, execute=args.execute)
     finally:
         signal.signal(signal.SIGTERM, previous_handler)

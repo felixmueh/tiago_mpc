@@ -27,7 +27,7 @@ def client(monkeypatch):
               create_publisher=lambda *args: publications.append(args), destroy_node=lambda: None)
     fake_ros = dict(rclpy=NS(ok=lambda: True, create_node=lambda name: node),
                     JointState=object, JointTrajectory=object, Float64MultiArray=object)
-    monkeypatch.setattr(ros, "_ros_imports", lambda setup: fake_ros)
+    monkeypatch.setattr(ros, "_ros_imports", lambda: fake_ros)
     monkeypatch.setattr(ros, "_sea_state_type", lambda: NS())
     monkeypatch.setitem(sys.modules, "rclpy.qos", NS(
         QoSProfile=lambda **kwargs: NS(**kwargs), ReliabilityPolicy=NS(BEST_EFFORT="best_effort")))

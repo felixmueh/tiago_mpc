@@ -41,7 +41,7 @@ def transport(monkeypatch):
                          spin_once=spin_once), JointState=object,
                 JointTrajectory=Trajectory, JointTrajectoryPoint=NS,
                 Float64MultiArray=NS, Duration=NS)
-    monkeypatch.setattr(ros, '_ros_imports', lambda setup: fake)
+    monkeypatch.setattr(ros, '_ros_imports', lambda: fake)
     monkeypatch.setattr(ros, '_sea_state_type', lambda: NS())
     monkeypatch.setitem(sys.modules, 'rclpy.qos', NS(
         QoSProfile=lambda **kwargs: NS(**kwargs),
@@ -201,3 +201,17 @@ def test_optional_ros_import_does_not_require_gpu_or_legacy_gato():
         'assert "pinocchio" not in sys.modules'],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_missing_ros_raises_source_hint(monkeypatch):
+    import builtins
+    real = builtins.__import__
+
+    def fail(name, *args, **kwargs):
+        if name == 'rclpy':
+            raise ImportError(name)
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', fail)
+    with pytest.raises(RuntimeError, match='Source ROS 2 in the shell'):
+        ros._ros_imports()

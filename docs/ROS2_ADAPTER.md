@@ -32,12 +32,12 @@ node. Use a compatible installed PAL overlay, and select the intended DDS
 domain/network before launching. This repository does not build that overlay
 or select a physical robot network automatically.
 
-Prefer sourcing ROS in the launch shell. `TIAGO_MPC_ROS_SETUP` (legacy
-`GATO_ROS_SETUP` also accepted) can name a setup file for the inherited lazy
-environment loader. It imports setup variables and can re-exec a script once
-when native ROS libraries require startup environment changes. With neither
-variable set, it tries `/opt/ros/humble/setup.bash`; this alone does not supply
-the required PAL interface overlay.
+Source ROS in the launching shell, for example
+`source /opt/ros/humble/setup.bash` plus the compatible PAL overlay, or PAL's
+setup on the robot. The package never loads a ROS environment or re-executes
+the process; if the ROS packages cannot be imported, constructing the client
+raises a `RuntimeError` that says so. The ROS runner records `ROS_DISTRO` in
+its startup record.
 
 ## Feedback and the frequency fix
 
