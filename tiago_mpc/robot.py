@@ -15,6 +15,7 @@ import time
 
 import numpy as np
 
+from .clock import Clock
 from .loops import LEASE_S
 from .plan import State
 from .ros2 import TiagoRightArmClient
@@ -62,12 +63,14 @@ class RosPlant:
         if not safety.enabled or tuple(safety.controlled_joint_names) != RIGHT_ARM_JOINTS:
             raise ValueError("the robot needs the safety worker on the controlled right-arm joints")
         self.execute, self.checks, self.safety = execute, checks, safety
-        self.settings = dict(clock="wall", execute=execute, sea_absolute=sea_absolute,
+        # Gazebo would use Clock.external() fed from /clock, with the ROS stamps as State.t.
+        self.clock = Clock.wall()
+        self.settings = dict(clock=self.clock.kind, execute=execute, sea_absolute=sea_absolute,
                              checks=asdict(checks), safety=asdict(safety),
                              ros_distro=os.environ.get("ROS_DISTRO"),
                              activated=False, restored=None, cleanup_errors=[])
         self.monitor = self._initial = self._last = None
-        self._seq, self._stamp, self._tick = -1, None, None
+        self._seq, self._stamp = -1, None
         self._activated = self._uncertain = False
         self.client = TiagoRightArmClient(sea_absolute=sea_absolute)
 
@@ -86,12 +89,14 @@ class RosPlant:
         self._initial = client.read_state(timeout_sec=c.state_age_s, after_seq=first.seq,
                                           max_age_sec=c.state_age_s)
         self._ready(self._check(self._initial))
-        self._last, self._tick = self._initial, time.monotonic()
+        self._last = self._initial
+
+    def now(self):
+        return self.clock.now()
 
     def state(self):
         """The checked state, t its monotonic receipt time."""
         self._last = s = self._fresh()
-        # Gazebo may need the ROS stamp instead (its real-time factor can differ from 1); open.
         return State(s.received_monotonic_sec, s.q, s.qd, s.joint_positions, s.joint_velocities)
 
     def apply(self, command):
@@ -101,13 +106,8 @@ class RosPlant:
             self._activate(command)
 
     def advance(self, t):
-        """Wait one command period (t minus this tick's state time) after the previous tick,
-        or after now when late. Receipt times lag the wall clock, so t itself may be past."""
-        period, now = t - self._last.received_monotonic_sec, time.monotonic()
-        self._tick += period
-        if self._tick <= now:
-            self._tick = now + period
-        time.sleep(self._tick - now)
+        """Wait until the clock reaches t; late: return at once."""
+        time.sleep(max(0., t - self.clock.now()))
 
     def stop(self):
         """Zero torque and handback to PAL's position controller; nothing before activation.
@@ -154,7 +154,7 @@ class RosPlant:
         """Fresh, finite, within the limits, in order, and the rest of the body still."""
         if s is None:
             raise RuntimeError("joint state unavailable")
-        age = time.monotonic() - s.received_monotonic_sec
+        age = self.clock.wall_time() - s.received_monotonic_sec
         if not math.isfinite(age) or age < 0 or age > self.checks.state_age_s:
             raise RuntimeError("joint state stale or invalid receipt time")
         if not math.isfinite(s.stamp_sec):
@@ -212,7 +212,7 @@ class RosPlant:
 
         def progress():
             self._fresh()
-            if time.monotonic() >= hold_until:
+            if self.clock.now() >= hold_until:
                 raise RuntimeError("effort activation outlasted the command lease")
             self.client.publish_effort(command)
 

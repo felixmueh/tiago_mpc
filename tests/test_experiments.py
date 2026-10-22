@@ -76,6 +76,7 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, monkeypatch,
     assert summary["ticks"] == 6 and summary["plans"] == 5
     with np.load(tmp_path / name / "trajectory.npz") as saved:
         np.testing.assert_allclose(saved["time_s"], np.arange(6) * .01, atol=1e-12)
+        np.testing.assert_array_equal(saved["state_time_s"], saved["time_s"])  # simulation clock
         # Fixed(10 ms) latency: the first plan takes effect at the second tick.
         assert np.isnan(saved["command"][-1]).all()
         assert np.isnan(saved["command"][0]).all() == (name == "reach")

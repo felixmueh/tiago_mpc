@@ -7,7 +7,7 @@ import pytest
 
 from experiments import figure8 as f8, reach as rc
 from test_loops import Mpc, Task
-from tiago_mpc import robot
+from tiago_mpc import clock as clock_module, robot
 from tiago_mpc.loops import run_robot
 from tiago_mpc.ros2 import ArmState
 from tiago_mpc.safety import CollisionSafetySettings
@@ -107,6 +107,7 @@ def rig(monkeypatch):
     clock = Clock()
     arm = Arm(clock)
     monkeypatch.setattr(robot, "time", clock)
+    monkeypatch.setattr(clock_module, "time", clock)  # the plant's Clock.wall()
     monkeypatch.setattr(robot, "TiagoRightArmClient", lambda **kwargs: arm)
     monkeypatch.setattr(robot, "AsyncSafetyMonitor", Monitor)
     return NS(clock=clock, arm=arm)
@@ -235,15 +236,15 @@ def test_a_failed_handback_is_reported(rig):
     assert plant.settings["restored"] is False
 
 
-def test_advance_keeps_the_command_period_on_the_wall_clock(rig):
+def test_advance_waits_until_its_clock_reaches_the_deadline(rig):
     plant = robot.RosPlant()
     plant.start()
-    start = rig.clock.now
-    for k in range(1, 4):
-        s = plant.state()
-        rig.clock.now += .003  # the loop body
-        plant.advance(s.t + .01)
-        assert rig.clock.now == pytest.approx(start + .01 * k, abs=1e-4)
+    deadline = plant.now() + .01
+    plant.advance(deadline)
+    assert plant.now() == pytest.approx(deadline, abs=1e-12)
+    rig.clock.now += .02  # late: at once
+    plant.advance(deadline + .01)
+    assert plant.now() == pytest.approx(deadline + .02, abs=1e-12)
 
 
 def test_run_robot_activates_once_and_hands_back(rig):

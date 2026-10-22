@@ -24,7 +24,8 @@ class PlanEnded(RuntimeError):
 
 @dataclass(frozen=True)
 class State:
-    """t in seconds (robot: monotonic receipt time); arm q and qd in native coordinates.
+    """t: the time the state was measured, in seconds in the plant clock's domain (robot:
+    monotonic receipt time); arm q and qd in native coordinates.
 
     The robot path adds the full body's named joint values for the safety check."""
     t: float
@@ -62,8 +63,10 @@ class Plan:
 
 @dataclass(frozen=True)
 class Tick:
-    """What callbacks see once per command tick: command is None before the first plan
+    """What callbacks see once per command tick: its execution time t and the latest
+    state (state.t may be older and repeat); command is None before the first plan
     and on the last tick; new marks the tick at which the plan took effect."""
+    t: float
     state: State
     command: np.ndarray | None
     plan: Plan | None

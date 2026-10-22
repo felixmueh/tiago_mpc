@@ -13,30 +13,35 @@ from gato.common import rk4
 import numpy as np
 import pinocchio as pin
 
+from .clock import Clock
 from .dynamics import plant_rk4
 from .plan import State
 from .tiago import ARM_URDF, Q_START
 
 
 class SimPlant:
-    """Starts at rest in q (default: the comfortable pose) at t = 0.
+    """Starts at rest in q (default: the comfortable pose) when the run starts.
 
-    realtime=True makes advance wait for the wall clock (for run_robot).
-    model and data are the Pinocchio handles.
+    clock is Clock.simulation() by default; Clock.wall() runs in real time (for
+    run_robot). State.t is the integrated time, in the clock's domain. model and
+    data are the Pinocchio handles.
     """
 
-    def __init__(self, q=Q_START, qd=None, *, substep, friction=None, realtime=False):
+    def __init__(self, q=Q_START, qd=None, *, substep, friction=None, clock=None):
         self.model = pin.buildModelFromUrdf(str(ARM_URDF))
         self.data = self.model.createData()
-        self.friction, self.substep, self.realtime = friction, substep, realtime
-        self.settings = dict(friction=friction and asdict(friction), substep_s=substep,
-                             clock="wall" if realtime else "simulation")
-        self.t, self.q = 0., np.array(q, dtype=float)
+        self.friction, self.substep = friction, substep
+        self.clock = Clock.simulation() if clock is None else clock
+        self.settings = dict(friction=friction and asdict(friction), substep_s=substep, clock=self.clock.kind)
+        self.q = np.array(q, dtype=float)
         self.qd = np.zeros(7) if qd is None else np.array(qd, dtype=float)
-        self.command, self._wall_start = np.zeros(7), None
+        self.command = np.zeros(7)
 
     def start(self):
-        self._wall_start = time.monotonic() - self.t
+        self.t = self.clock.now()
+
+    def now(self):
+        return self.clock.now()
 
     def state(self):
         return State(self.t, self.q.copy(), self.qd.copy())
@@ -45,7 +50,8 @@ class SimPlant:
         self.command = np.array(command, dtype=float)
 
     def advance(self, t):
-        """Integrate to t with the held command; realtime: then wait until t."""
+        """Integrate to t with the held command, then advance the simulation clock to t
+        or wait until the wall clock reaches t (late: return at once)."""
         while self.t < t - 1e-12:
             h = min(self.substep, t - self.t)
             if self.friction is None:
@@ -56,8 +62,10 @@ class SimPlant:
                 raise FloatingPointError("Nonfinite simulated state")
             self.q, self.qd, self.t = q, qd, self.t + h
         self.t = t  # the tick's time, instead of accumulating substep rounding
-        if self.realtime:
-            time.sleep(max(0., self._wall_start + t - time.monotonic()))
+        if self.clock.kind == "simulation":
+            self.clock.advance(t - self.clock.now())
+        else:
+            time.sleep(max(0., t - self.clock.now()))
 
     def stop(self):
         self.command = np.zeros(7)

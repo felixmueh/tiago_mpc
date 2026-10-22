@@ -12,11 +12,18 @@ time t, counted from the time of the plan's state) and sends it to the plant,
 which holds it until the next tick. The MPC runs in its own process; on the
 robot, so does the safety check.
 
+Each plant owns a `Clock` (`tiago_mpc/clock.py`: wall, simulation or external
+time). The loop runs on the plant's execution time `plant.now()`: it samples
+plans, checks leases and schedules ticks and control updates with it. `State.t`
+is when the state was measured, in the same domain, and a plan starts at its
+state's time; on the robot a state can be older than the tick and repeat.
+
 ```
 tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, MpcInProcess, MpcWorker),
-              plan.py (State, Plan, Tick), laws.py, loops.py (run, guard), sim.py (SimPlant),
-              robot.py (RosPlant), ros2.py (ROS 2 client), safety.py, record.py (Record)
+              plan.py (State, Plan, Tick), clock.py (Clock), laws.py, loops.py (run, guard),
+              sim.py (SimPlant), robot.py (RosPlant), ros2.py (ROS 2 client), safety.py,
+              record.py (Record)
 experiments/  reach.py, figure8.py, random100/, replay.py
 scripts/      setup.sh, prepare_models.py, prepare_safety_model.py
 ```
@@ -55,7 +62,8 @@ python experiments/reach.py --command-period .002 --update-period .01
 python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random100/README.md
 ```
 
-- **Simulation runs on a simulated clock.** `--latency` charges each solve a
+- **Simulation runs on `SimPlant`'s simulation clock**; `SimPlant(clock=Clock.wall())`
+  runs in real time, with `run_robot`. `--latency` charges each solve a
   fixed time in seconds (default 0) or, with `measured`, its own wall time. A
   plan takes effect at the first command tick at or after its request time plus
   the charge; no new request is made while a plan is pending.
@@ -90,7 +98,8 @@ record = reach(SimPlant(substep=.003), run=partial(run_simulation, latency=Fixed
 ```
 
 - A **control law** is a function `law(plan, t, state) -> command`;
-  **callbacks** see every `Tick` (state, command, plan, whether it is new).
+  **callbacks** see every `Tick` (execution time, state, command, plan,
+  whether it is new).
 - `SimPlant(friction=...)` sets the **plant's** losses, `MpcParams.friction`
   the **predictor's**; the run records both.
 - **Per-solve solver changes** come from the task's optional `updates(t)`,
@@ -126,10 +135,11 @@ python experiments/figure8.py --plant robot --execute --target X_M Y_M Z_M --dur
   complete `MpcParams`, the task, the plant model and settings (robot: checks,
   `ROS_DISTRO`, handback), and the results (arrival or tracking error,
   raw-limit excess, solve work).
-- `trajectory.npz`: per tick the time, state (native q, qd) and command (NaN
-  when none was sent); per plan its start time, knot states, knot torques and
-  solve stats (`plan_*`); plus the experiment's arrays.
-- `replay.npz`: the visualizer replay, exported after `record.save()` by
+- `trajectory.npz`: per tick the execution time (`time_s`), the state's time
+  (`state_time_s`), state (native q, qd) and command (NaN when none was sent);
+  per plan its start time, knot states, knot torques and solve stats
+  (`plan_*`); plus the experiment's arrays. Times count from the first state's.
+- `replay.npz`: the visualizer replay on execution time, exported after `record.save()` by
   `experiments/replay.py:save_replay` (`../tiago_mpc_visualizer/docs/replay-format.md`).
 
 More: [docs/robot.md](docs/robot.md) (robot path and checks),

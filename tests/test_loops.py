@@ -11,14 +11,18 @@ from tiago_mpc.plan import Plan, State
 
 
 class Plant:
-    def __init__(self):
-        self.t, self.calls, self.applied = 0., [], []
+    """On a simulation clock; measure(t) is the time of the latest state at time t."""
+    def __init__(self, measure=lambda t: t):
+        self.t, self.measure, self.calls, self.applied = 0., measure, [], []
 
     def start(self):
         self.calls.append("start")
 
+    def now(self):
+        return self.t
+
     def state(self):
-        return State(self.t, np.zeros(7), np.zeros(7))
+        return State(self.measure(self.t), np.zeros(7), np.zeros(7))
 
     def apply(self, command):
         self.applied.append((self.t, command))
@@ -67,8 +71,8 @@ class Task:
         return t >= self.done_at - 1e-9
 
 
-def go(mpc, task=Task(), loop=run_simulation, duration=.1, update_period=.01, **kw):
-    plant, ticks = Plant(), []
+def go(mpc, task=Task(), loop=run_simulation, duration=.1, update_period=.01, plant=None, **kw):
+    plant, ticks = plant or Plant(), []
     result = loop(plant, mpc, task, callbacks=[ticks.append], command_period=.01,
                   update_period=update_period, duration=duration, **kw)
     return plant, ticks, result
@@ -76,7 +80,7 @@ def go(mpc, task=Task(), loop=run_simulation, duration=.1, update_period=.01, **
 
 def commanded(ticks):
     """(t, knot torque) of each tick with a command."""
-    return [(round(k.state.t, 6), k.command[0]) for k in ticks if k.command is not None]
+    return [(round(k.t, 6), k.command[0]) for k in ticks if k.command is not None]
 
 
 def test_zero_latency_commands_each_plan_at_its_own_tick():
@@ -84,7 +88,7 @@ def test_zero_latency_commands_each_plan_at_its_own_tick():
     assert not done and plant.calls == ["start", "stop"]
     assert commanded(ticks) == [(0., 1.), (.01, 1.), (.02, 1.)]
     assert [k.new for k in ticks] == [True, True, True, False]
-    assert ticks[-1].command is None and ticks[-1].state.t == pytest.approx(.03)
+    assert ticks[-1].command is None and ticks[-1].t == pytest.approx(.03)
 
 
 @pytest.mark.parametrize("latency", [Fixed(.025), Measured()])
@@ -126,6 +130,33 @@ def test_the_lease_ends_100_ms_after_the_plans_state():
     assert mpc.requests == [(0., None), (.01, None)]
 
 
+def test_plans_are_sampled_at_execution_time_when_measurements_repeat():
+    """Commands every 10 ms, a new measurement every 20 ms, one plan (10 ms knots)."""
+    plant = Plant(measure=lambda t: math.floor(t / .02 + 1e-9) * .02)
+    _, ticks, _ = go(Mpc(replies=1), plant=plant, duration=.04, update_period=1.)
+    assert [round(k.state.t, 6) for k in ticks[:4]] == [0., 0., .02, .02]
+    assert commanded(ticks) == [(0., 1.), (.01, 2.), (.02, 3.), (.03, 4.)]  # knots 0, 1, 2, 3
+
+
+def test_a_stale_state_cannot_extend_the_lease():
+    """The state's time stands still; each new plan starts from it, so the lease ends
+    100 ms after it, on execution time."""
+    mpc, plant = Mpc(N=32), Plant(measure=lambda t: 0.)
+    with pytest.raises(RuntimeError, match="lease expired"):
+        go(mpc, plant=plant, duration=1.)
+    assert all(t == 0. for t, _ in mpc.requests)  # every plan starts at the stale state
+    assert len(plant.applied) >= 10 and max(t for t, _ in plant.applied) < .1
+
+
+def test_ticks_keep_their_rate_and_a_late_tick_skips_the_missed_ones():
+    class Late(Plant):  # returns 5 ms after the deadline at 20 ms, 15 ms after the one at 40 ms
+        def advance(self, t):
+            self.t = {.02: .025, .04: .055}.get(round(t, 6), t)
+
+    _, ticks, _ = go(Mpc(), loop=run_robot, plant=Late(), duration=.07)
+    assert [round(k.t, 6) for k in ticks] == [0., .01, .025, .03, .055, .065, .075]
+
+
 def test_past_the_plans_end_faults_and_stops():
     plant, ticks = Plant(), []
     with pytest.raises(RuntimeError, match="lease expired"):  # 30 ms plan: lease ends with it
@@ -139,7 +170,7 @@ def test_a_dead_worker_is_noticed_within_one_tick_and_stops_the_plant():
     mpc, plant = Mpc(), Plant()
 
     def die(tick):
-        mpc.dead = tick.state.t >= .02
+        mpc.dead = tick.t >= .02
 
     with pytest.raises(RuntimeError, match="exited"):
         run_robot(plant, mpc, Task(), callbacks=[die], command_period=.01, update_period=.05, duration=1.)

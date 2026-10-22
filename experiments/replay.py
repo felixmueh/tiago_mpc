@@ -21,8 +21,8 @@ VERSION = 1
 
 
 def export_replay(record):
-    """Write <record.out>/replay.npz: the executed states and commands, the task's
-    reference at each tick and every plan; nothing for fewer than two ticks."""
+    """Write <record.out>/replay.npz on execution time: the state and command at each
+    tick, the task's reference and every plan; nothing for fewer than two ticks."""
     trajectory = record.trajectory
     time_s, state, command = trajectory["time_s"], trajectory["state"], trajectory["command"]
     if len(time_s) < 2:

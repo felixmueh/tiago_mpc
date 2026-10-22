@@ -2,8 +2,9 @@
 
 - summary.json: commit and source status, status, parameters, plant model, task,
   and what the experiment adds to record.summary;
-- trajectory.npz: per command tick the time, state and command (NaN: none sent);
-  per plan (plan_*) its start time, knots and solve stats; plus record.arrays.
+- trajectory.npz: per command tick its execution time (time_s), the state's time
+  (state_time_s), state and command (NaN: none sent); per plan (plan_*) its start
+  time, knots and solve stats; plus record.arrays. Times count from the first state's.
 """
 from __future__ import annotations
 
@@ -45,11 +46,12 @@ class Record:
 
     @cached_property
     def trajectory(self):
-        """The buffered ticks as arrays, computed once after the run; times from the first tick."""
+        """The buffered ticks as arrays, computed once after the run."""
         ticks = self.ticks
         t0 = ticks[0].state.t if ticks else 0.
         plans = [k.plan for k in ticks if k.new]
-        out = dict(time_s=np.array([k.state.t - t0 for k in ticks]),
+        out = dict(time_s=np.array([k.t - t0 for k in ticks]),
+                   state_time_s=np.array([k.state.t - t0 for k in ticks]),
                    state=np.array([np.r_[k.state.q, k.state.qd] for k in ticks]).reshape(-1, 14),
                    command=np.array([np.full(7, np.nan) if k.command is None else k.command
                                      for k in ticks]).reshape(-1, 7),

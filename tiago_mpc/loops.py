@@ -1,10 +1,11 @@
-"""The command loop: one body, two clocks.
+"""The command loop, on the plant's clock.
 
-Once per command tick, run reads the plant's state, asks the MPC for plans,
-turns the latest plan into a command with a control law and sends it to the
-plant, which holds it until the next tick. run_robot uses each plan once it
-arrives (wall clock); run_simulation charges each solve a latency on the
-simulated clock, Fixed(s) or Measured().
+Once per command tick, run reads the plant's state and execution time, asks the
+MPC for plans, turns the latest plan into a command with a control law and sends
+it to the plant, which holds it until the next tick. The state's time is when it
+was measured; plans, the lease and the schedules run on execution time. run_robot
+uses each plan once it arrives (wall clock); run_simulation charges each solve a
+latency on the simulation clock, Fixed(s) or Measured().
 """
 from __future__ import annotations
 
@@ -59,7 +60,7 @@ class Schedule:
 class Pending:
     """The one outstanding solve.
 
-    Without latency (wall clock) its plan is used once it arrives. On the simulated
+    Without latency (wall clock) its plan is used once it arrives. On the simulation
     clock the loop waits for it, and it takes effect at the first tick at or after
     its request time plus the charged latency.
     """
@@ -94,8 +95,10 @@ def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
         command_period, update_period, duration, latency=None):
     """Run task on plant until task.done(state, t) or for duration seconds.
 
-    t is the time since the first state. Returns whether the task is done. The
-    last tick, which sees the task done or the time up, sends no command but
+    The task's t is counted from the first state's time: execution time for done
+    and the duration, the state's time for its reference. Returns whether the task
+    is done. Ticks are command_period apart; a late tick skips the missed ones.
+    The last tick, which sees the task done or the time up, sends no command but
     reaches the callbacks. Garbage collection pauses while it runs: a full
     collection over the buffered ticks takes several milliseconds.
     """
@@ -105,33 +108,35 @@ def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
     # enabled in between (e.g. collecting at safe points); to be discussed (todo.org).
     gc.disable()
     try:
-        start = None
+        start = deadline = None
         while True:
-            s = plant.state()
+            s, t = plant.state(), plant.now()  # measurement and execution time
             start = s.t if start is None else start
-            t = s.t - start
-            done = task.done(s, t)
-            end = done or t >= duration - _TOLERANCE
+            done = task.done(s, t - start)
+            end = done or t - start >= duration - _TOLERANCE
             # Without a pending solve, result() still notices a dead worker within one tick.
-            new = pending.ready(s.t) if pending else mpc.result()
+            new = pending.ready(t) if pending else mpc.result()
             if new is not None:
                 plan, pending = new, None
-            if pending is None and not end and due(s.t):
-                mpc.request(s, task.reference(t, mpc.N, mpc.dt),
-                            task.updates(t) if hasattr(task, "updates") else None)
-                pending = Pending(mpc, s.t, latency)
-                if (now := pending.ready(s.t)) is not None:  # zero latency: this tick
+            if pending is None and not end and due(t):
+                mpc.request(s, task.reference(s.t - start, mpc.N, mpc.dt),
+                            task.updates(s.t - start) if hasattr(task, "updates") else None)
+                pending = Pending(mpc, t, latency)
+                if (now := pending.ready(t)) is not None:  # zero latency: this tick
                     new, plan, pending = now, now, None
             command = None
             if plan is not None and not end:
-                command = guard(law(plan, s.t, s), plan, s.t)
+                command = guard(law(plan, t, s), plan, t)
                 plant.apply(command)
-            tick = Tick(s, command, plan, new is not None)
+            tick = Tick(t, s, command, plan, new is not None)
             for callback in callbacks:
                 callback(tick)
             if end:
                 return done
-            plant.advance(s.t + command_period)  # robot: wait; simulation: integrate
+            if deadline is None or deadline + command_period <= t:
+                deadline = t  # the first tick, or late: skip the missed ticks
+            deadline += command_period
+            plant.advance(deadline)  # the plant integrates to it, waits for it, or both
     finally:
         try:
             plant.stop()  # zero torque and handback, first
@@ -140,7 +145,7 @@ def run(plant, mpc, task, law=sample_knot, callbacks=(), *,
 
 
 def run_robot(*args, **kw):
-    """Wall clock: the robot, Gazebo or SimPlant(realtime=True); plans are used on arrival."""
+    """Wall clock: the robot, Gazebo or SimPlant(clock=Clock.wall()); plans are used on arrival."""
     return run(*args, latency=None, **kw)
 
 

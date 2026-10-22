@@ -1,9 +1,10 @@
-"""SimPlant: today's RK4 integration, held commands and the real-time clock."""
+"""SimPlant: today's RK4 integration, held commands, and the simulation and wall clocks."""
 from gato.common import rk4
 import numpy as np
 import pytest
 
 from tiago_mpc import sim
+from tiago_mpc.clock import Clock
 from tiago_mpc.dynamics import plant_rk4
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import urdf_friction
@@ -24,26 +25,30 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, subste
                  else plant_rk4(plant.model, plant.data, q, qd, U, h, friction))
         t += h
     s = plant.state()
-    assert s.t == .01
+    assert s.t == plant.now() == .01 and plant.settings["clock"] == "simulation"
     np.testing.assert_array_equal(s.q, q)
     np.testing.assert_array_equal(s.qd, qd)
     plant.stop()
     np.testing.assert_array_equal(plant.command, np.zeros(7))
 
 
-def test_realtime_waits_for_the_wall_clock(monkeypatch):
-    clock, slept = [100.], []
-    monkeypatch.setattr(sim.time, "monotonic", lambda: clock[0])
+def test_on_the_wall_clock_advance_integrates_then_waits_for_it(monkeypatch):
+    wall, slept = [100.], []
+    monkeypatch.setattr(sim.time, "monotonic", lambda: wall[0])  # also the Clock's
     monkeypatch.setattr(sim.time, "sleep", slept.append)
-    plant = SimPlant(substep=.01, realtime=True)
+    plant = SimPlant(substep=.01, clock=Clock.wall())
     plant.start()
-    clock[0] += .004
-    plant.advance(.01)
-    assert slept == [pytest.approx(.006)]
+    assert plant.state().t == 100.
+    wall[0] += .004
+    plant.advance(100.01)
+    assert slept == [pytest.approx(.006)] and plant.state().t == 100.01
+    wall[0] += .03  # late: integrates to the deadline, no wait
+    plant.advance(100.02)
+    assert slept[1] == 0. and plant.state().t == 100.02
     assert plant.settings["clock"] == "wall"
 
 
-def test_run_robot_on_a_realtime_simplant():
+def test_run_robot_on_a_wall_clock_simplant():
     """The robot's loop on the wall clock, with gravity-holding plans from a fake Mpc."""
     import time
     from dataclasses import replace
@@ -52,7 +57,7 @@ def test_run_robot_on_a_realtime_simplant():
     from tiago_mpc.loops import run_robot
     from tiago_mpc.mpc import TIAGO
 
-    plant, ticks = SimPlant(substep=.003, realtime=True), []
+    plant, ticks = SimPlant(substep=.003, clock=Clock.wall()), []
     q0, start = plant.q.copy(), time.monotonic()
     assert not run_robot(plant, Mpc(replace(TIAGO, N=8)), Task(), callbacks=[ticks.append],
                          command_period=.01, update_period=.01, duration=.2)

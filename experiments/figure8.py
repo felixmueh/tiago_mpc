@@ -75,7 +75,7 @@ def figure8(plant, run=run_simulation, task=Figure8(), params=FIGURE8, law=sampl
             update_period=update_period or params.dt_s,
             duration=task.period_s if duration is None else min(task.period_s, duration))
         trajectory = record.trajectory
-        t = trajectory["time_s"]
+        t = trajectory["state_time_s"]  # when each position was measured
         xyz = np.array([fk(q, params.ee_frame) for q in trajectory["state"][:, :7]])
         error = np.linalg.norm(xyz - task.path(t), axis=1)
         excess = limit_excess(trajectory)

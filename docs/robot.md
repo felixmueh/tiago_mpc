@@ -47,7 +47,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 | `RosPlant.state()` | receipt age ≤ 100 ms; finite stamp; seven finite q, qd within the URDF position and speed limits; sequence never reversed; a new sample has a later ROS stamp (a clock reset faults); full named body state; every other body joint within 0.02 rad (torso 5 mm) of its start value; the state goes to the safety worker, whose faults latch |
 | loop (`run`) | `plant.start()` before the first tick; `task.done` before any command (a met goal never activates effort control); no command before the first plan; `plant.stop()` first on exit |
 | `MpcWorker.result()` | every knot finite and within the raw effort limits; expected knot interval; the plan answers the pending request; an error reply or a dead worker raises, polled every tick |
-| `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; time before the lease end t₀ + min(100 ms, plan length) |
+| `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; execution time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time |
 
 The checks raise; nothing retries. Limits are the reduced arm URDF's; the
 tolerances are fields of `Checks` in `robot.py`.
@@ -76,11 +76,15 @@ tolerances are fields of `Checks` in `robot.py`.
 
 ## Clock
 
-`State.t` is the monotonic receipt time of the state. It drives the leases and
-the reference phase. `advance()` sleeps one command period after the previous
-tick, re-anchored to now when late. **Open for Gazebo:** with a real-time factor
-other than 1, the ROS stamp (simulation time) may be needed; the comment in
-`RosPlant.state()` marks this.
+`RosPlant` runs on `Clock.wall()`. `State.t` is the state's monotonic receipt
+time, in the same domain; it starts the plan and the reference phase. The loop
+reads the execution time `plant.now()` at every tick and samples the plan,
+checks the lease and schedules with it, so a repeated or stale state cannot
+extend a lease. The loop sets each tick's deadline one command period after the
+previous one (a late tick skips the missed ones); `advance()` waits until the
+clock reaches it. Freshness compares receipt times with `Clock.wall_time()`.
+**Open for Gazebo:** `Clock.external()` fed from `/clock`, with the ROS stamps
+as `State.t` (a comment in `RosPlant.__init__`); not implemented.
 
 ## ROS client
 
@@ -106,8 +110,9 @@ other than 1, the ROS stamp (simulation time) may be needed; the comment in
   (TODO in `ros2.py`). SIGKILL or a host crash skips the handback; what the
   robot's onboard controllers then do is unknown.
 - On the wall clock the plan in use expires 100 ms after its state; if the
-  next plan arrives later, the run faults. The default reach with a real-time
-  `SimPlant` faulted this way after 0.38 s, when one solve hit the ADMM
-  iteration cap (61 ms); `--latency measured` reproduces it (2026-10-22).
+  next plan arrives later, the run faults. The default reach with
+  `SimPlant(clock=Clock.wall())` faulted this way after 0.38 s, when one solve
+  hit the ADMM iteration cap (61 ms); `--latency measured` reproduces it
+  (2026-10-22).
 - Startup needs a real full-body posture that passes the safety worker; the
   comfortable arm with every other joint at zero fails it ([safety.md](safety.md)).
