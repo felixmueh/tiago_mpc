@@ -7,14 +7,14 @@ runner selects that frame. `manifest.json` lists the task IDs in their fixed
 order, and `inputs/` holds one NPZ per task.
 
 ```bash
-.venv/bin/python experiments/random100/run.py --dry-run     # effective settings only
+.venv/bin/python experiments/random100/run.py --dry-run     # parameters only
 .venv/bin/python experiments/random100/run.py               # all 100 cases
 .venv/bin/python experiments/random100/run.py --pairs 8990  # a subset
 .venv/bin/python experiments/random100/analyze.py <output-directory>
 ```
 
-- **Run:** uses `configs/reaching.json` unless `--config` is given. Each case
-  runs once, in order, in its own `examples/reach_sim.py` process, writing to a
+- **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`) with the
+  flange as end-effector frame (`PARAMS` in `run.py`). Each case runs once, in order, in its own `examples/reach_sim.py` process, writing to a
   fresh directory under `_expr_data/`. The runner takes the shared GPU locks.
 - **Outcomes:** arrival (position error at most 5 cm and joint-speed L1 at most
   1 rad/s within 8 simulated seconds) and simulated physical-limit compliance
@@ -24,6 +24,3 @@ order, and `inputs/` holds one NPZ per task.
 - **Analysis:** `analyze.py` needs no GPU. It checks each case's initial state,
   recomputes joint, speed and torque limit excesses from all saved plant
   samples, and writes a case table, a plot and a short report next to the run.
-- **Explicit `--config`:** such a file is resolved against an old base
-  configuration, not the current defaults (see `tiago_mpc/configuration.py`).
-  To vary the defaults, copy the complete `configs/reaching.json` and edit it.

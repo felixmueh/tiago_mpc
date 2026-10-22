@@ -21,20 +21,20 @@ Q_CHECK = np.array([-0.39, -1.73, -0.38, -2.35, 0.0, -1.21, 0.04])
 Q_DELTA_CHECK = np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
 
 
-def runtime_urdf(cache_dir, joint_dynamics=None):
+def runtime_urdf(cache_dir, friction=None):
     """Resolve assets and normalize negative axes only in the generated GPU copy.
 
     The files go to <cache_dir>/models/<hash of both>/, so concurrent processes with
-    different configurations never share a path."""
+    different coefficients never share a path."""
     manifest = json.loads((ROOT / "models/manifest.json").read_text())
     for relative, info in manifest.items():
         path = ROOT / "models" / relative
         if hashlib.sha256(path.read_bytes()).hexdigest() != info["sha256"]:
             raise ValueError(f"Model asset differs from manifest (or is an LFS pointer): {path}")
     tree = ET.parse(URDF)
-    if joint_dynamics is not None:
+    if friction is not None:
         from .joint_dynamics import configure_urdf
-        configure_urdf(tree, joint_dynamics)
+        configure_urdf(tree, friction)
     for mesh in tree.iter("mesh"):
         path = ROOT / "models/tiago_pro/meshes" / Path(mesh.attrib["filename"]).name
         if not path.is_file():
@@ -95,11 +95,11 @@ def ee_position(model, data, q, frame_id):
     return data.oMf[frame_id].translation.copy()
 
 
-def check_model(solver, model, data, frame_id, signs, prediction_losses=None, *, q_goal=None):
+def check_model(solver, model, data, frame_id, signs, friction=None, *, q_goal=None):
     """Same two-pose FK/dynamics check as the existing reaching simulation."""
     import pinocchio as pin
-    if prediction_losses is not None:
-        return _check_dissipative_model(solver, model, data, frame_id, signs, prediction_losses)
+    if friction is not None:
+        return _check_dissipative_model(solver, model, data, frame_id, signs, friction)
 
     from gato.common import rk4
 
@@ -122,18 +122,18 @@ def check_model(solver, model, data, frame_id, signs, prediction_losses=None, *,
     return errors
 
 
-def _check_dissipative_model(solver, model, data, frame_id, signs, prediction_losses):
+def _check_dissipative_model(solver, model, data, frame_id, signs, friction):
     """Value/A-block checks against the same constant-acceleration predictor step."""
     import pinocchio as pin
     from .joint_dynamics import passive_torque
 
     q = Q_CHECK.copy()
     v = np.array([.3, -.35, .4, -.45, .5, -.55, .6])
-    u = pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, prediction_losses)
+    u = pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, friction)
     x = np.r_[q, v]; ss = np.tile(signs, 2)
     def native_predictor(state, h):
         qn, vn = state[:7], state[7:]
-        acceleration = pin.aba(model, data, qn, vn, u-passive_torque(vn, prediction_losses)).copy()
+        acceleration = pin.aba(model, data, qn, vn, u-passive_torque(vn, friction)).copy()
         return np.r_[qn+vn*h+.5*acceleration*h*h, vn+acceleration*h]
     checks = {}
     expected_ee = ee_position(model, data, q, frame_id)
@@ -158,7 +158,7 @@ def _check_dissipative_model(solver, model, data, frame_id, signs, prediction_lo
     np.testing.assert_allclose(analytic_native, fd, atol=2e-3, rtol=1e-2)
     checks["analytic_A_native_FD_max_abs_error"] = float(np.max(np.abs(analytic_native-fd)))
     checks["derivative_scope"] = "one signed nonzero-velocity state; no zero crossing; native ABA + constant-acceleration predictor integration"
-    if prediction_losses and prediction_losses["model"] == "coulomb_tanh_viscous":
+    if friction.width_rad_s is not None:
         # A cheap extra preflight for new widths: the maximum tanh slope is at rest.
         v = np.zeros(7)
         u = pin.rnea(model, data, q, v, np.zeros(7)).copy()

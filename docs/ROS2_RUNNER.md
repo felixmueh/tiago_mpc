@@ -7,7 +7,7 @@ do not require ROS packages or initialize ROS. Source a compatible ROS/PAL
 environment only when constructing a ROS client.
 
 The worker and simulation examples call the same package helpers in
-`configuration.py`, `model_runtime.py`, `joint_dynamics.py` and `controller.py`.
+`mpc.py`, `model_runtime.py` and `joint_dynamics.py`.
 The worker no longer dynamically imports example scripts. Only the simulation
 loops use the fixed/measured latency model described in the README; ROS keeps
 its measured feedback, monotonic leases and independent safety process.
@@ -83,7 +83,7 @@ Effective settings/units are printed; the operator must type
 `EXECUTE` before the ROS client is constructed. This command has not been run
 against a robot during implementation.
 
-The runner uses committed `configs/reaching.json`: N32/10 ms, ADMM-only limits
+The runner uses `TIAGO` (`tiago_mpc/mpc.py`): N32/10 ms, ADMM-only limits
 and the selected planning margins. Execution requires PAL position mode and a
 stationary arm within 0.05 rad per joint of comfortable_high_clearance:
 `[-0.39, -1.73, -0.38, -2.35, 0, -1.21, 0.04]`.
@@ -93,10 +93,10 @@ must stay near their initial measured values. Observed wheel/gripper movement
 is rejected; unobserved locked joints remain a limitation. Keep the mobile base
 and grippers stationary.
 
-`--task figure8 --config configs/tracking.json` uses the target as the reference
+`--task figure8` uses `FIGURE8` and the target as the reference
 anchor, with the selected 2 cm +X edge clearance, 28 cm x span, 9 cm y amplitude
-and 24 s period. Use `--duration 24` for a cycle. The selected configuration
-provides 4/8 XYZ costs, ADMM-only limits and the smooth friction/damping
+and 24 s period. Use `--duration 24` for a cycle. These parameters
+provide 4/8 XYZ costs, ADMM-only limits and the smooth friction/damping
 predictor (width .03 rad/s). Physical feedback is measured; no simulated plant
 or passive torque is applied in the ROS I/O process. Reaching retains its own
 loss-free predictor default. No ROS tracking qualification is claimed.

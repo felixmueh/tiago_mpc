@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from tiago_mpc import runner as r
+from tiago_mpc.mpc import TIAGO
 from tiago_mpc.mpc_worker import WorkerConfig
 from tiago_mpc.protocol import SolveReply, SolveRequest, TaskReference, WorkerReady
 from tiago_mpc.ros2 import ArmState, RIGHT_ARM_JOINTS
@@ -167,7 +168,7 @@ def make_rig(monkeypatch, config=r.RunnerConfig()):
     # Geometry and real process checks have their own tests. This fixture
     # deliberately replaces only the boundary conversion to avoid Pinocchio.
     monkeypatch.setattr(r, "safety_state", lambda snapshot: snapshot)
-    runner = r.RosMpcRunner(config, TaskReference((.6, .1, .2)), WorkerConfig(),
+    runner = r.RosMpcRunner(config, TaskReference((.6, .1, .2)), WorkerConfig(TIAGO),
         SafetySettings(), arm_factory=lambda: arm, monitor_factory=lambda **kw: monitor,
         context=ctx, clock=clock, sleep=clock.sleep)
     return NS(runner=runner, clock=clock, arm=arm, monitor=monitor, ctx=ctx,
@@ -273,7 +274,7 @@ def test_handback_failure_is_reported(rig, tmp_path):
 def test_safety_cannot_be_disabled_or_monitor_a_different_arm():
     for safety in (SafetySettings(False), SafetySettings(True, ("arm_left_1_joint",))):
         with pytest.raises(ValueError):
-            r.RosMpcRunner(r.RunnerConfig(), TaskReference((0., 0., 0.)), WorkerConfig(), safety)
+            r.RosMpcRunner(r.RunnerConfig(), TaskReference((0., 0., 0.)), WorkerConfig(TIAGO), safety)
 
 
 def test_guards_check_source_velocity_expiry_torque_and_body_motion(rig):
@@ -309,7 +310,7 @@ def test_uncontrolled_nonfinite_metadata_can_be_logged_without_relaxing_control_
 
 def test_reference_phase_is_time_based_and_orientation_unconstrained():
     ref = TaskReference((.5, .1, .2), kind="figure8")
-    # Default shape matches configs/tracking.json: 2 cm edge clearance, 28 cm x span.
+    # Default shape: 2 cm edge clearance, 28 cm x span.
     assert ref.horizon(0., 2, .01)[0, 0] == pytest.approx(.52)
     assert ref.horizon(6., 2, .01)[0, 0] == pytest.approx(.66)
     assert np.all(ref.horizon(6., 2, .01)[:, 3:] == 0)

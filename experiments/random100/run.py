@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run the historical random100 inputs once with the current TIAGo ADMM example."""
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import argparse
 import csv
@@ -16,7 +17,11 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
-from tiago_mpc.configuration import load_configuration
+from tiago_mpc.mpc import TIAGO
+
+# The historical tasks track the flange. Each case runs reach_sim, which gets only
+# the frame (--ee-frame) and otherwise uses TIAGO, so edit both together.
+PARAMS = replace(TIAGO, ee_frame="arm_right_tool_joint")
 
 
 def aggregate(out, rows, expected):
@@ -40,10 +45,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output", type=Path)
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--config", type=Path, help="JSON overrides against the historical base; default configs/reaching.json")
     p.add_argument("--pairs", type=int, nargs="+", help="Declared diagnostic subset; default all100")
     args = p.parse_args()
-    config_path, settings, effective = load_configuration(args.config)
     manifest = json.loads((HERE / "manifest.json").read_text())
     ids = manifest["task_ids"]
     if len(ids) != 100 or len(set(ids)) != 100:
@@ -61,13 +64,12 @@ def main():
             if not np.allclose(a["reference"].reshape(32, 6)[:, :3], a["target_xyz"], atol=1e-6):
                 raise ValueError(f"Nonconstant or inconsistent position target: {name}")
     config = dict(input_source_commit=manifest["source_commit"], task_ids=ids,
-                  end_effector_frame="arm_right_tool_joint",
+                  end_effector_frame=PARAMS.ee_frame,
                   application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-                  configuration_overrides=settings,
-                  effective_configuration=effective,
-                  configuration_file=str(config_path.resolve()),
-                  cohort=config_path.stem+"-position-only-fixed-clock-8s",
-                  differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, public runtime overrides recorded in configuration_overrides and per-case effective settings. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/position goals/order; no original goal posture is used as a trajectory seed.")
+                  source_status=subprocess.check_output(["git", "status", "--short"], cwd=ROOT, text=True),
+                  params=asdict(PARAMS),
+                  cohort="reaching-position-only-fixed-clock-8s",
+                  differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, parameters recorded in params and per case. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/position goals/order; no original goal posture is used as a trajectory seed.")
     if args.dry_run:
         print(json.dumps(config, indent=2)); return 0
     out = (args.output or ROOT / "_expr_data" /
@@ -84,15 +86,13 @@ def main():
     (out / "configuration.json").write_text(json.dumps(config, indent=2)+"\n")
     shutil.copyfile(__file__, out / "run.py")
     shutil.copyfile(HERE / "manifest.json", out / "input_manifest.json")
-    shutil.copyfile(config_path, out / "config.json")
     shutil.copytree(HERE / "inputs", out / "inputs")
     rows = []
     for index, task in enumerate(ids):
         case = out / f"pair_{task:05d}"
         cmd = [sys.executable, str(ROOT / "examples/reach_sim.py"), "--input",
                str(out / "inputs" / f"random_{task:05d}.npz"), "--output", str(case)]
-        cmd.extend(["--config", str(out / "config.json"),
-                    "--ee-frame", config["end_effector_frame"]])
+        cmd.extend(["--ee-frame", config["end_effector_frame"]])
         start = time.perf_counter()
         with (out / f"pair_{task:05d}.log").open("w") as log:
             try:

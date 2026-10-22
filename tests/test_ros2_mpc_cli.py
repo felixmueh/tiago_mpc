@@ -34,25 +34,24 @@ def test_cancelled_execution_creates_no_ros_client_or_runner(cli, monkeypatch):
     assert cli.main(["--execute", "--target", ".5", ".1", ".2"]) == 2
 
 
-def test_tracking_shape_comes_from_selected_config_before_ros(cli, monkeypatch):
-    tasks = []
+@pytest.mark.parametrize("name", ["reach", "figure8"])
+def test_task_selects_its_mpc_parameters_before_ros(cli, monkeypatch, name):
+    started = []
     class Runner:
-        def __init__(self, config, task, *args, **kwargs):
-            tasks.append(task)
+        def __init__(self, config, task, worker, *args, **kwargs):
+            started.append((task, worker))
         def run(self, output, **kwargs):
             return {"status": "checked"}
     monkeypatch.setattr(cli, "RosMpcRunner", Runner)
-    assert cli.main(["--task", "figure8", "--target", ".3", "-.2", ".1",
-                     "--config", str(cli.ROOT / "configs/tracking.json")]) == 0
-    task = tasks[0]
-    assert (task.x_span_m, task.y_amplitude_m, task.period_s, task.edge_clearance_m) == (.28, .09, 24., .02)
-    assert task.target_xyz_m == (.3, -.2, .1)
+    assert cli.main(["--task", name, "--target", ".3", "-.2", ".1"]) == 0
+    task, worker = started[0]
+    assert task.kind == name and task.target_xyz_m == (.3, -.2, .1)
+    assert worker.params == (cli.FIGURE8 if name == "figure8" else cli.TIAGO)
 
 
 @pytest.mark.parametrize("args", [
     ["--execute"], ["--duration", "nan"], ["--target", "inf", "0", "0"],
-    ["--budget-ms", "-1"], ["--output", "/tmp/not-this-worktree"],
-    ["--execute", "--task", "figure8", "--target", ".5", ".1", ".2"]])
+    ["--budget-ms", "-1"], ["--output", "/tmp/not-this-worktree"]])
 def test_invalid_launch_fails_before_ros(cli, args):
     with pytest.raises(SystemExit) as result:
         cli.main(args)

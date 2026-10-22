@@ -15,7 +15,7 @@ from .protocol import SolveReply, SolveRequest, WorkerReady
 
 @dataclass(frozen=True)
 class WorkerConfig:
-    config_path: str | None = None
+    params: MpcParams  # tiago_mpc.mpc; picklable, so it crosses to the spawned worker
     budget_s: float | None = None
 
     def __post_init__(self):
@@ -42,17 +42,14 @@ class MpcEngine:
     @classmethod
     def build(cls, config):
         """Initialize and check the model in the worker, before WorkerReady."""
-        from .configuration import load_configuration
-        from .controller import build_controller
         from .model_runtime import ee_position
+        from .mpc import build_controller
 
-        selected, _, effective = load_configuration(config.config_path)
-        setup = build_controller(effective)
-        details = dict(setup.details, configuration_file=str(selected.resolve()))
-        return cls(setup.controller, signs=setup.signs,
-                   n=effective["N"], dt_s=effective["dt_s"],
+        params = config.params
+        setup = build_controller(params)
+        return cls(setup.controller, signs=setup.signs, n=params.N, dt_s=params.dt_s,
                    ee_position=lambda q: ee_position(setup.model, setup.data, q, setup.frame_id),
-                   budget_s=config.budget_s, details=details)
+                   budget_s=config.budget_s, details=setup.details)
 
     def solve(self, request):
         q, qd = np.asarray(request.state.q, dtype=float), np.asarray(request.state.qd, dtype=float)

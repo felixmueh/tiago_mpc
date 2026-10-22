@@ -11,7 +11,10 @@ from .ros2 import ArmState
 
 @dataclass(frozen=True)
 class TaskReference:
-    """Position reference in the reduced arm's torso-root frame, metres."""
+    """Position reference in the reduced arm's torso-root frame, metres.
+
+    The figure-eight dimensions and period default to the figure-eight protocol.
+    """
 
     target_xyz_m: tuple[float, float, float]
     generation: int = 1
@@ -41,18 +44,16 @@ class TaskReference:
         out = np.zeros((n, 6), dtype=np.float32)
         out[:, :3] = self.target_xyz_m
         if self.kind == "figure8":
-            out[:, :3] = figure8_reference(elapsed_s + np.arange(n)*dt_s, self.target_xyz_m,
-                dict(period_s=self.period_s, x_span_m=self.x_span_m,
-                     y_amplitude_m=self.y_amplitude_m, edge_clearance_m=self.edge_clearance_m))
+            out[:, :3] = figure8_reference(elapsed_s + np.arange(n)*dt_s, self.target_xyz_m, self)
         return out
 
 
 def figure8_reference(times, start_xyz, shape):
-    """Shared horizontal figure-eight in the reduced arm's root frame."""
-    phase = 2*np.pi*np.asarray(times)/shape["period_s"]
+    """Shared horizontal figure-eight in the reduced arm's root frame (shape: a TaskReference)."""
+    phase = 2*np.pi*np.asarray(times)/shape.period_s
     xyz = np.broadcast_to(start_xyz, (len(phase), 3)).copy()
-    xyz[:, 0] += shape["edge_clearance_m"] + .5*shape["x_span_m"]*(1-np.cos(phase))
-    xyz[:, 1] += shape["y_amplitude_m"]*np.sin(2*phase)
+    xyz[:, 0] += shape.edge_clearance_m + .5*shape.x_span_m*(1-np.cos(phase))
+    xyz[:, 1] += shape.y_amplitude_m*np.sin(2*phase)
     return xyz
 
 

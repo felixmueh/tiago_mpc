@@ -2,6 +2,7 @@
 """Horizontal figure-eight, with explicit plant/predictor losses."""
 from __future__ import annotations
 import argparse
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import importlib.metadata
 import json
@@ -15,15 +16,20 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from tiago_mpc.configuration import load_configuration
-from tiago_mpc.controller import build_controller
-from tiago_mpc.joint_dynamics import validate, passive_torque, plant_rk4, model_receipt
-from tiago_mpc.model_runtime import URDF, EE_FRAME, Q_CHECK, ee_position, runtime_urdf
+from tiago_mpc.joint_dynamics import passive_torque, plant_rk4, model_receipt, urdf_friction
+from tiago_mpc.model_runtime import Q_CHECK, ee_position, runtime_urdf
+from tiago_mpc.mpc import FIGURE8, build_controller
 from tiago_mpc.plant_cache import cache_root
-from tiago_mpc.protocol import figure8_reference as reference
+from tiago_mpc.protocol import TaskReference, figure8_reference as reference
 from tiago_mpc.plan import Plan, knot_torques
 from tiago_mpc.simulation import control_intervals, control_segments
-DEFAULT_PROTOCOL = ROOT/"configs/tracking.json"
+
+# Its defaults: 0.28 m span, 0.09 m amplitude, 0.02 m clearance, 24 s period. The run
+# lasts one period and starts at the arm's start position.
+TASK = TaskReference((0., 0., 0.), kind="figure8")
+SIM_DT_S = 1e-4  # plant RK4 substep
+SECONDARY_METRICS_START_S = 1.0
+PLANT_FRICTION = urdf_friction()  # hard sign; the predictor's may differ
 
 
 def git(*args, cwd=ROOT):
@@ -35,11 +41,12 @@ def metrics(error):
                 p95_m=float(np.percentile(error, 95)), max_m=float(np.max(error)))
 
 
-def main():
+def main(argv=None, params=FIGURE8, plant_friction=PLANT_FRICTION):
+    """params: the MPC; plant_friction: the simulated plant's joint losses.
+    --losses selects which of the two frictions are used."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--losses", choices=("neither", "plant-only", "smooth-predictor"),
                         default="smooth-predictor", help="Default: hard-sign plant and smooth GATO predictor")
-    parser.add_argument("--config", type=Path, default=DEFAULT_PROTOCOL)
     parser.add_argument("--output", type=Path, required=True, help="fresh directory")
     parser.add_argument("--build-only", action="store_true")
     parser.add_argument("--stop-on-raw-limit", action="store_true",
@@ -48,18 +55,16 @@ def main():
                         help="charge fixed latency or measured controller wall time to the plant")
     parser.add_argument("--solve-time-s", type=float, default=0., help="fixed solve latency in seconds (default zero)")
     parser.add_argument("--control-update-period-s", type=float, help="nominal seconds between control updates (default: the knot interval dt_s)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         control_intervals(1. if args.control_update_period_s is None else args.control_update_period_s, 0.,
                           mode=args.solve_time_mode, fixed_s=args.solve_time_s)
     except ValueError as exc:
         parser.error(str(exc))
-    _, settings, effective = load_configuration(args.config)
-    losses = validate(settings["joint_dynamics"])
-    plant_losses = losses if args.losses != "neither" else None
-    prediction_losses = effective["prediction_joint_dynamics"] if args.losses == "smooth-predictor" else None
-    effective["prediction_joint_dynamics"] = prediction_losses
-    n, dt, sim_dt, duration = (settings["N"], settings["dt_s"], settings["sim_dt_s"], settings["duration_s"])
+    plant_losses = plant_friction if args.losses != "neither" else None
+    if args.losses != "smooth-predictor":
+        params = replace(params, friction=None)
+    n, dt, sim_dt, duration = params.N, params.dt_s, SIM_DT_S, TASK.period_s
     update_period_s = dt if args.control_update_period_s is None else args.control_update_period_s
     if (int(n) != n or n < 2 or not np.isfinite([dt, sim_dt, duration]).all()
             or min(dt, sim_dt, duration) <= 0 or sim_dt > dt):
@@ -68,23 +73,23 @@ def main():
         raise ValueError("Duration must contain complete controller intervals")
     args.output.mkdir(parents=True, exist_ok=False); out = args.output
     for source in (Path(__file__), *(ROOT/"tiago_mpc"/name for name in
-            ("configuration.py", "controller.py", "model_runtime.py", "joint_dynamics.py", "simulation.py",
+            ("mpc.py", "model_runtime.py", "joint_dynamics.py", "simulation.py",
              "protocol.py", "plan.py"))):
         shutil.copyfile(source, out/source.name)
-    shutil.copyfile(args.config, out/"protocol.json")
-    result = dict(status="setup", losses=args.losses, configuration=settings,
+    result = dict(status="setup", losses=args.losses, params=asdict(params),
+        plant_friction=plant_losses and asdict(plant_losses),
+        sim_dt_s=sim_dt, duration_s=duration, secondary_metrics_start_s=SECONDARY_METRICS_START_S,
         repository_commit=git("rev-parse", "HEAD"), repository_status=git("status", "--short"),
         gato_commit=git("rev-parse", "HEAD", cwd=ROOT/"external/gato"),
         gato_status=git("status", "--short", cwd=ROOT/"external/gato"),
         versions={k:importlib.metadata.version(k) for k in ("gato-mpc", "grid-rbd", "pin", "numpy")},
-        plant_joint_dynamics=plant_losses, prediction_joint_dynamics=prediction_losses,
         timing=dict(mode=args.solve_time_mode, fixed_s=args.solve_time_s,
                     measured_source="MPCController.step wall_s",
                     control_update_period_s=update_period_s,
                     previous_plan_during_solve=True, initial_control="zero torque"),
         reference_alignment="At solve time t controller reference knots are t+k*dt, k=0..N-1; state errors use reference at the same state timestamp, including t=0 and t=24s.",
         predictor_integration="upstream constant acceleration (named trapezoidal); native plant uses RK4 substeps",
-        orientation="unconstrained", collisions="not checked", end_effector_frame=EE_FRAME,
+        orientation="unconstrained", collisions="not checked", end_effector_frame=params.ee_frame,
         initial_warm_start="state hold, zero actuator torque; identical across cohorts",
         torque_convention="Saved applied torque is actuator torque; passive resisting torque is subtracted internally in ABA at every RK4 stage.")
     times, states, xyzs, refs, controls, passive, solve_us, wall_s, work, row_viol = [], [], [], [], [], [], [], [], [], []
@@ -92,7 +97,7 @@ def main():
     charged_s, update_s, solve_start_s = [], [], []
     exit_code = 1
     try:
-        setup = build_controller(effective)
+        setup = build_controller(params)
         controller = setup.controller
         solver = controller.solver
         model, data, fid, signs = setup.model, setup.data, setup.frame_id, setup.signs
@@ -103,24 +108,22 @@ def main():
         ss = np.tile(signs, 2)
         q0 = Q_CHECK.copy(); x = np.r_[q0, np.zeros(7)]
         start_xyz = ee_position(model, data, q0, fid)
+        task = replace(TASK, target_xyz_m=tuple(start_xyz))
         result.update(q_start_rad=q0.tolist(), start_xyz_m=start_xyz.tolist(), gpu_joint_coordinate_signs=signs.tolist(),
-            effective_configuration=effective, generator_adapter=setup.details["generator_adapter"],
-            effective_solver_params=effective["solver_params"],
+            task=asdict(task), generator_adapter=setup.details["generator_adapter"],
             model_checks=setup.details["model_step_max_abs_errors"])
         result["model_receipt"] = model_receipt(solver, setup.details["plant_name"], setup.gpu_urdf_path)
         (out/"model_receipt.json").write_text(json.dumps(result["model_receipt"], indent=2)+"\n")
         if args.build_only:
             result["status"] = "model_checked"
             return 0
-        result.update(admm_effective=effective["controller"]["limits_kw"],
-            admm_linsys_policy=controller.admm_linsys, reset_rho_each_step=controller.reset_rho_each_step,
-            raw_limits=dict(lower_position_rad=model.lowerPositionLimit.tolist(), upper_position_rad=model.upperPositionLimit.tolist(),
+        result.update(raw_limits=dict(lower_position_rad=model.lowerPositionLimit.tolist(), upper_position_rad=model.upperPositionLimit.tolist(),
                             velocity_rad_s=model.velocityLimit.tolist(), effort_nm=model.effortLimit.tolist()))
         controller.reset(x*ss)
         def record(t):
             times.append(t); states.append(x.copy())
             xyzs.append(ee_position(model, data, x[:7], fid))
-            refs.append(reference(np.array([t]), start_xyz, settings["figure8"])[0])
+            refs.append(reference(np.array([t]), start_xyz, task)[0])
             if args.stop_on_raw_limit and (np.any(x[:7] < model.lowerPositionLimit-1e-5)
                     or np.any(x[:7] > model.upperPositionLimit+1e-5)
                     or np.any(np.abs(x[7:]) > model.velocityLimit+1e-5)):
@@ -130,7 +133,7 @@ def main():
         previous_plan = None
         while t < duration-1e-9:
             horizon = np.zeros((n, 6), dtype=np.float32)
-            horizon[:, :3] = reference(t+np.arange(n)*dt, start_xyz, settings["figure8"])
+            horizon[:, :3] = reference(t+np.arange(n)*dt, start_xyz, task)
             solve_start_s.append(t)
             step = controller.step(x*ss, horizon.ravel(), dt_elapsed=elapsed)
             u = np.asarray(step.u, dtype=float)*signs
@@ -174,8 +177,8 @@ def main():
             speed_rad_s=float(max(0., np.max(np.abs(state_array[:, 7:])-model.velocityLimit))),
             actuator_torque_nm=float(max(0., np.max(np.abs(torque_array)-model.effortLimit))))
         result.update(status="completed", metrics_full_cycle=metrics(error),
-            metrics_after_initial_1s=(metrics(error[np.asarray(times)>=settings["secondary_metrics_start_s"]])
-                if np.any(np.asarray(times)>=settings["secondary_metrics_start_s"]) else None),
+            metrics_after_initial_1s=(metrics(error[np.asarray(times)>=SECONDARY_METRICS_START_S])
+                if np.any(np.asarray(times)>=SECONDARY_METRICS_START_S) else None),
             max_limit_excess=excess, limits_pass=bool(max(excess.values())<=1e-5),
             solve_calls=len(solve_us), solve_time_median_ms=float(np.median(solve_us)/1000),
             controller_wall_median_ms=float(np.median(wall_s)*1000),

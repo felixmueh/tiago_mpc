@@ -1,5 +1,4 @@
 """Passive-model registration and receipts without constructing a CUDA solver."""
-from pathlib import Path
 from types import SimpleNamespace
 import json
 
@@ -7,19 +6,15 @@ import gato
 import numpy as np
 import pytest
 
-from tiago_mpc.configuration import load_configuration
 from tiago_mpc.joint_dynamics import model_receipt, register_robot
-
-ROOT = Path(__file__).resolve().parents[1]
+from tiago_mpc.mpc import FIGURE8, TIAGO
 
 
 def test_tracking_registers_smooth_losses_and_reaching_stays_loss_free(monkeypatch):
     calls = []
     monkeypatch.setattr(gato, "register_robot", lambda *args, **kwargs: calls.append((args, kwargs)))
-    for config_path in (None, ROOT / "configs/tracking.json"):
-        _, _, effective = load_configuration(config_path)
-        register_robot("test", "arm.urdf", n_points=effective["N"], ee_frame="tcp",
-                       config=effective["prediction_joint_dynamics"])
+    for params in (TIAGO, FIGURE8):
+        register_robot("test", "arm.urdf", n_points=params.N, ee_frame="tcp", friction=params.friction)
     assert calls[0] == (("test", "arm.urdf"), dict(N=[32], ee_frame="tcp", jobs=1))
     assert calls[1] == (("test", "arm.urdf"),
                         dict(N=[32], ee_frame="tcp", jobs=1, joint_friction_smoothing=.03))

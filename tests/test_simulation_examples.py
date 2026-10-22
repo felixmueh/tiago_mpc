@@ -1,8 +1,8 @@
 """Exercise example timing and saved telemetry with a deterministic controller."""
+from dataclasses import asdict, replace
 import importlib.util
 import json
 from pathlib import Path
-import sys
 import tempfile
 from types import SimpleNamespace as NS
 import xml.etree.ElementTree as ET
@@ -11,7 +11,9 @@ import numpy as np
 import pinocchio as pin
 import pytest
 
+from tiago_mpc.joint_dynamics import urdf_friction
 from tiago_mpc.model_runtime import URDF, EE_FRAME
+from tiago_mpc.mpc import FIGURE8, TIAGO
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,26 +39,20 @@ def run_example(example, mode, fixed, wall, output_root, monkeypatch, *, duratio
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     tracking = example == "track_figure8"
-    settings = json.loads((ROOT / "configs" / ("tracking.json" if tracking else "reaching.json")).read_text())
-    settings.update(N=n, dt_s=period)
-    if with_losses:  # opt-in reaching friction, with tracking's coefficients and width
-        tracking_settings = json.loads((ROOT / "configs/tracking.json").read_text())
-        settings.update({key: tracking_settings[key]
-                         for key in ("joint_dynamics", "predictor_smoothing_rad_s")})
+    params = replace(FIGURE8 if tracking else TIAGO, N=n, dt_s=period)
+    plant = None
+    if with_losses:  # opt-in reaching friction, with the figure eight's predictor
+        params, plant = replace(params, friction=FIGURE8.friction), urdf_friction()
     if tracking:
-        settings.update(sim_dt_s=min(.003, period, control_update_period or period), duration_s=duration,
-                        secondary_metrics_start_s=.01)
-        settings["figure8"]["period_s"] = duration
-        settings["joint_dynamics"]["coulomb_nm"][0] = 1.234
-    config = output_root / f"{name}-config.json"
-    config.write_text(json.dumps(settings))
+        monkeypatch.setattr(module, "SIM_DT_S", min(.003, period, control_update_period or period))
+        monkeypatch.setattr(module, "SECONDARY_METRICS_START_S", .01)
+        monkeypatch.setattr(module, "TASK", replace(module.TASK, period_s=duration))
+        plant = replace(module.PLANT_FRICTION, coulomb_nm=(1.234,) + module.PLANT_FRICTION.coulomb_nm[1:])
     out = output_root / name
-    argv = [example, "--config", str(config), "--output", str(out),
-            "--solve-time-mode", mode, "--solve-time-s", str(fixed)]
+    argv = ["--output", str(out), "--solve-time-mode", mode, "--solve-time-s", str(fixed)]
     argv += ["--losses", "plant-only"] if tracking else ["--hold", "--timeout", str(duration)]
     if control_update_period is not None:
         argv += ["--control-update-period-s", str(control_update_period)]
-    monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(module, "git", lambda *args, **kwargs: "test")
     monkeypatch.setattr(module.importlib.metadata, "version", lambda name: "test")
 
@@ -78,10 +74,10 @@ def run_example(example, mode, fixed, wall, output_root, monkeypatch, *, duratio
 
     def integrate(model, data, q, v, u, h, *losses):
         applied.append((u.copy(), h))
-        if settings.get("joint_dynamics") is None:
+        if plant is None:
             assert losses == ()
         else:
-            assert losses == (settings["joint_dynamics"],)
+            assert losses == (plant,)
         return q + .001 * h * u, v.copy()
 
     controller.step = step
@@ -89,14 +85,8 @@ def run_example(example, mode, fixed, wall, output_root, monkeypatch, *, duratio
                frame_id=model.getFrameId(EE_FRAME), signs=np.ones(7),
                urdf_path=URDF, gpu_urdf_path=URDF,
                details=dict(model_step_max_abs_errors=[], generator_adapter="stub", plant_name="stub"))
-    def build(effective, **kwargs):
-        if tracking:
-            assert effective["prediction_joint_dynamics"] is None
-        elif not with_losses:
-            assert effective["prediction_joint_dynamics"] is None
-        else:
-            assert effective["prediction_joint_dynamics"] == {
-                **settings["joint_dynamics"], "model": "coulomb_tanh_viscous", "smoothing_rad_s": .03}
+    def build(built):
+        assert built == (params if with_losses else replace(params, friction=None))
         return setup
     monkeypatch.setattr(module, "build_controller", build)
     monkeypatch.setattr(module, "plant_rk4", integrate)
@@ -106,8 +96,8 @@ def run_example(example, mode, fixed, wall, output_root, monkeypatch, *, duratio
         monkeypatch.setattr(module, "model_receipt", lambda *args: {})
         prepare = module.runtime_urdf
         monkeypatch.setattr(module, "runtime_urdf", lambda cache, losses: prepare(output_root / "plant", losses))
-    assert module.main() == 0
-    return NS(out=out, calls=calls, applied=applied, settings=settings, module=module, tracking=tracking)
+    assert module.main(argv, params=params, plant_friction=plant) == 0
+    return NS(out=out, calls=calls, applied=applied, plant=plant, module=module, tracking=tracking)
 
 
 def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypatch,
@@ -115,12 +105,10 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
     # Plans cover the charged time of the previous plan (up to 14 ms after its 10 ms update).
     run = run_example(example, mode, fixed, wall, output_root, monkeypatch,
                       duration=duration, period=period, with_losses=with_losses, n=n)
-    out, calls, applied, settings, module, tracking = (
-        run.out, run.calls, run.applied, run.settings, run.module, run.tracking)
-    if not tracking:
-        summary = json.loads((out / "summary.json").read_text())
-        assert summary["simulator_joint_dynamics"] == settings.get("joint_dynamics")
-        assert (summary["prediction_joint_dynamics"] is None) == (not with_losses)
+    out, calls, applied, module, tracking = run.out, run.calls, run.applied, run.module, run.tracking
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["plant_friction"] == json.loads(json.dumps(run.plant and asdict(run.plant)))
+    assert (summary["params"]["friction"] is None) == (not with_losses)
     if tracking:
         joint = ET.parse(out / "plant.urdf").find(".//joint[@name='arm_right_1_joint']/dynamics")
         assert float(joint.get("friction")) == 1.234
@@ -145,10 +133,10 @@ def run_example_check(example, mode, fixed, wall, starts, output_root, monkeypat
         if tracking:
             start_xyz = trajectory["ee_xyz_m"][0]
             for call, start in zip(calls, starts):
-                expected = module.reference(start + np.arange(n) * period, start_xyz, settings["figure8"])
+                expected = module.reference(start + np.arange(n) * period, start_xyz, module.TASK)
                 np.testing.assert_allclose(call[1].reshape(n, 6)[:, :3], expected, atol=1e-7)
             np.testing.assert_allclose(trajectory["reference_xyz_m"],
-                module.reference(trajectory["time_s"], start_xyz, settings["figure8"]))
+                module.reference(trajectory["time_s"], start_xyz, module.TASK))
 
 
 @pytest.mark.parametrize("example", ["reach_sim", "track_figure8"])
@@ -165,7 +153,7 @@ def test_example_delays_actuation_and_advances_reference(
 
 @pytest.mark.parametrize("period", [.01, .002])  # the 10 ms default and the earlier 2 ms knots
 def test_default_tracking_clock_does_not_add_a_roundoff_solve(output_root, monkeypatch, period):
-    assert json.loads((ROOT / "configs/tracking.json").read_text())["dt_s"] == .01
+    assert FIGURE8.dt_s == .01
     run_example_check("track_figure8", "fixed", 0., .001, np.arange(round(24. / period)) * period,
                       output_root, monkeypatch, duration=24., period=period)
 

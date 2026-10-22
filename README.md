@@ -64,7 +64,7 @@ warm-start policy and timing. The joint-6 GPU-boundary coordinate conversion
 remains required: the separate native-axes PR is not included in this pin.
 GRiD 0.5.3 handles rotated inertial origins; our current reduced arm already has
 zero inertial RPY, so no inertia normalization or URDF change is needed.
-Zero soft-limit weights remain explicit in both default configurations. GRiD
+Zero soft-limit weights remain explicit in both default parameter sets. GRiD
 0.5.3 still evaluates their barrier expressions; it provides no public switch to
 skip that work. This update leaves those calculations and ADMM unchanged.
 The 0.1.2 validation repeated one full default tracking cycle (26.536 mm RMS)
@@ -73,8 +73,7 @@ limits passed, including all returned tracking plans. See `VERIFICATION.md`.
 
 ## The example
 
-`examples/reach_sim.py` uses the complete reaching defaults in
-`configs/reaching.json`:
+`examples/reach_sim.py` uses the TIAGo defaults, `TIAGO` in `tiago_mpc/mpc.py`:
 
 - Fixed-base, seven-joint right arm; comfortable high-clearance start.
 - One reachable position goal, computed by FK from a nearby joint pose.
@@ -106,10 +105,8 @@ registered signed-axis model needs nonzero helper storage and traps on launch.
 Startup checks compare end-effector FK and one GPU/Pinocchio dynamics step at
 both task poses before starting the MPC loop. By default, reaching uses
 rigid-body dynamics without passive joint damping/friction in both the plant and
-the predictor. Losses are opt-in: add `joint_dynamics` and
-`predictor_smoothing_rad_s` (as in `configs/tracking.json`) to a reaching
-configuration for hard-sign losses in the plant and the smooth tanh law in the
-predictor. Such a run became unstable in its first 10 ms control interval on
+the predictor. Losses are opt-in: pass `main` a `plant_friction` (hard sign) and
+params with a predictor `friction` (smooth tanh), as the figure eight does. Such a run became unstable in its first 10 ms control interval on
 2026-10-22. The visualizer's
 [friction diagnosis](../tiago_mpc_visualizer/docs/friction.md) attributes this
 to viscous damping against joint 7's link-only inertia, which is stiff for
@@ -127,8 +124,8 @@ physical-model validation is implied.
 
 Runs save `summary.json`, `trajectory.npz` and `reach.png` in fresh timestamped
 directories under `_expr_data/reaching/`. Histories contain all 3 ms plant states/applied
-torques and per-solve timing/constraint violations. The selected JSON and configuration resolver are copied into each output.
-The summary records source identities, effective settings, arrival and
+torques and per-solve timing/constraint violations. The parameter and setup sources are copied into each output.
+The summary records source identities, the complete parameters, arrival and
 independent simulated limit checks.
 Exit status is nonzero on timeout, execution error or a simulated limit violation.
 Failed outputs are retained; the script does not retry.
@@ -138,12 +135,12 @@ Failed outputs are retained; the script does not retry.
 `experiments/random100/` runs 100 fixed random-posture starts with one position
 goal each, in simulation only. See [its README](experiments/random100/README.md).
 
-`examples/reach_sim.py` and the random100 runner select `configs/reaching.json`
-when `--config` is omitted. An explicit `--config` file is resolved against an
-old base configuration, not the current defaults; to vary the defaults, copy the
-complete `configs/reaching.json` and edit it.
+Parameters are the frozen dataclass `MpcParams` (`tiago_mpc/mpc.py`); vary them
+in code with `dataclasses.replace`, for example
+`replace(TIAGO, solver=TIAGO.solver.replace(mu=1.))`. Friction coefficients
+default to the reduced URDF's (`urdf_friction` in `tiago_mpc/joint_dynamics.py`).
 
-Both simulation examples share model preparation, configuration, controller
+Both simulation examples share model preparation, parameters, controller
 construction and limit setup with the ROS worker. Their simulation loops and
 the ROS I/O/safety processes remain separate.
 
@@ -211,7 +208,7 @@ binaries, environment and run results are ignored. The application remote is
 
 ## Figure-eight tracking
 
-`examples/track_figure8.py` uses `configs/tracking.json`. Felix selected running
+`examples/track_figure8.py` uses `FIGURE8` in `tiago_mpc/mpc.py`. Felix selected running
 end-effector XYZ weight **4** and terminal XYZ weight **8**. Joint-velocity
 regularization remains **0.01** and actuator-torque regularization **1e-6**.
 Orientation and joint-posture objectives are inactive. All three soft-limit
@@ -259,8 +256,7 @@ joint states, task reference, actuator torques, predictions and effective settin
 remain in that output. `--losses plant-only` retains plant losses and disables
 predictor losses; `--losses neither` disables both for an explicit comparison.
 Hard-sign prediction from the old compatibility adapter is not offered: its
-reviewed historical implementation requires a different GATO pin. Explicit
-`--config` files retain their own coefficients and settings.
+reviewed historical implementation requires a different GATO pin.
 
 Use `experiments/tools.py:save_replay` for the shared interactive viewer handoff;
 see `../tiago_mpc_visualizer/docs/replay-format.md`. The completed experiment

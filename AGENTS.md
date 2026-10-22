@@ -12,8 +12,8 @@ confirmation intact. No ROS/PAL or physical execution is qualified by this port.
 
 The worker uses the current nominal grasp TCP and task configurations. Reaching
 and tracking enable the smooth friction/damping predictor at width .03 rad/s
-by default; `configs/tracking.json` also supplies the figure-eight dimensions
-and edge clearance. Do not apply passive losses twice or
+by default; the figure-eight dimensions and edge clearance are the
+`TaskReference` defaults. Do not apply passive losses twice or
 infer the ROS update rate from the knot interval; I/O remains 10 ms by
 default. Existing ADMM parameters and zero soft costs are unchanged.
 
@@ -45,7 +45,7 @@ explicit request; neutral fallback geometry remains a limitation. He accepted
 the existing separate configuration-file reads; no snapshot change is requested.
 The later consolidation shares model/configuration/controller setup between
 simulation and the ROS worker through normal package imports. Keep setup in
-`configuration.py`, `model_runtime.py`, `joint_dynamics.py` and `controller.py`;
+`mpc.py`, `model_runtime.py` and `joint_dynamics.py`;
 do not add dynamic example imports or duplicate setup in callers.
 Simulation supports `fixed` (configurable seconds, default zero) and `measured`
 (complete controller-step wall time) solve latency. Continue the previous plan
@@ -139,7 +139,7 @@ cohorts and outcomes rather than relabeling or silently regenerating them.
 ## Reaching and tracking defaults — Felix, 2026-10-21
 
 Felix selected running end-effector XYZ cost **4** and terminal XYZ cost **8**.
-`configs/tracking.json` owns tracking settings: qd_cost=.01, u_cost=1e-6,
+`FIGURE8` in `tiago_mpc/mpc.py` owns tracking settings: qd_cost=.01, u_cost=1e-6,
 all three soft-limit costs zero (ADMM-only limits), actual right-arm losses,
 tanh predictor width .03 rad/s, hard-sign plant, N32 and .1 ms RK4 plant; the
 knot interval is 10 ms since 2026-10-22 (plan sampling below), 2 ms before.
@@ -147,7 +147,7 @@ The separate 24 s 4/8 tracking check completed (26.536 mm full-cycle RMS;
 sampled executed and planned raw limits passed); old 8/1600 results do not
 qualify 4/8. Keep armature inactive
 in both models. Preserve historical protocols and raw cohorts unchanged.
-Reaching also uses running/terminal XYZ weights 4/8 in `configs/reaching.json`.
+Reaching also uses running/terminal XYZ weights 4/8 in `TIAGO` (`tiago_mpc/mpc.py`).
 As selected on 2026-10-22, both reaching and tracking default to actual right-arm
 losses: hard-sign Coulomb plus viscous damping in the simulated plant, smooth
 tanh Coulomb plus viscous damping in the predictor at width .03 rad/s. Explicit

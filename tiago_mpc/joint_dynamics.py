@@ -1,7 +1,8 @@
 """Explicit hard-sign plant and smooth GATO predictor passive joint laws."""
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass
+import math
 from pathlib import Path
 
 import numpy as np
@@ -9,43 +10,51 @@ import numpy as np
 JOINT_NAMES = [f"arm_right_{i}_joint" for i in range(1, 8)]
 
 
-def validate(config):
-    if config is None:
-        return None
-    if set(config) - {"smoothing_rad_s"} != {"model", "coulomb_nm", "viscous_nm_s_per_rad", "provenance"}:
-        raise ValueError("joint_dynamics requires model, coulomb_nm, viscous_nm_s_per_rad, provenance")
-    if config["model"] not in ("coulomb_sign_viscous", "coulomb_tanh_viscous"):
-        raise ValueError("Expected coulomb_sign_viscous or coulomb_tanh_viscous")
-    for key in ("coulomb_nm", "viscous_nm_s_per_rad"):
-        values = np.asarray(config[key], dtype=float)
-        if values.shape != (7,) or not np.isfinite(values).all() or np.any(values < 0):
-            raise ValueError(f"{key} must contain seven finite nonnegative coefficients")
-    if not isinstance(config["provenance"], str) or not config["provenance"].strip():
-        raise ValueError("joint_dynamics provenance must describe the coefficient assumptions")
-    if config["model"] == "coulomb_tanh_viscous":
-        widths = np.broadcast_to(np.asarray(config.get("smoothing_rad_s"), dtype=float), (7,))
-        if not np.isfinite(widths).all() or np.any(widths <= 0):
-            raise ValueError("smoothing_rad_s must be positive finite widths")
-    return config
+@dataclass(frozen=True)
+class Friction:
+    """Joint losses: Coulomb plus viscous, per native arm joint.
+
+    The Coulomb term is tanh(v/width_rad_s), the smooth law GATO predicts, or
+    sign(v) without a width (hard sign, simulated plant only).
+    """
+    coulomb_nm: tuple[float, ...]
+    viscous_nm_s_per_rad: tuple[float, ...]
+    width_rad_s: float | None = None
+
+    def __post_init__(self):
+        for key in ("coulomb_nm", "viscous_nm_s_per_rad"):
+            values = tuple(float(v) for v in getattr(self, key))
+            if len(values) != 7 or not all(math.isfinite(v) and v >= 0 for v in values):
+                raise ValueError(f"{key} must contain seven finite nonnegative coefficients")
+            object.__setattr__(self, key, values)
+        if self.width_rad_s is not None and not (math.isfinite(self.width_rad_s) and self.width_rad_s > 0):
+            raise ValueError("width_rad_s must be finite and positive")
 
 
-def passive_torque(velocity, config):
+def urdf_friction(width_rad_s=None):
+    """The reduced arm URDF's friction and damping coefficients (the only default)."""
+    import pinocchio as pin
+    from .model_runtime import URDF
+    model = pin.buildModelFromUrdf(str(URDF))
+    return Friction(tuple(model.friction), tuple(model.damping), width_rad_s)
+
+
+def passive_torque(velocity, friction):
     """Positive resisting bias: subtract from actuator torque before ABA."""
     v = np.asarray(velocity, dtype=float)
-    if config is None:
+    if friction is None:
         return np.zeros_like(v)
-    friction = (np.tanh(v / np.asarray(config["smoothing_rad_s"]))
-                if config["model"] == "coulomb_tanh_viscous" else np.sign(v))
-    return np.asarray(config["viscous_nm_s_per_rad"])*v + np.asarray(config["coulomb_nm"])*friction
+    coulomb = np.sign(v) if friction.width_rad_s is None else np.tanh(v / friction.width_rad_s)
+    return np.asarray(friction.viscous_nm_s_per_rad)*v + np.asarray(friction.coulomb_nm)*coulomb
 
 
-def plant_rk4(model, data, q, velocity, actuator_torque, dt, config):
+def plant_rk4(model, data, q, velocity, actuator_torque, dt, friction):
     """Native-coordinate RK4 with passive torque recomputed at every stage."""
     import pinocchio as pin
 
     def acceleration(q_stage, v_stage):
         return pin.aba(model, data, q_stage, v_stage,
-                       actuator_torque-passive_torque(v_stage, config)).copy()
+                       actuator_torque-passive_torque(v_stage, friction)).copy()
     k1q = velocity
     k1v = acceleration(q, velocity)
     k2q = velocity + dt*k1v/2
@@ -58,17 +67,15 @@ def plant_rk4(model, data, q, velocity, actuator_torque, dt, config):
             velocity + dt*(k1v+2*k2v+2*k3v+k4v)/6)
 
 
-def configure_urdf(tree, config):
+def configure_urdf(tree, friction):
     """Write only generated copies. Dissipation coefficients survive axis flips."""
-    if config is None:
+    if friction is None:
         return
     import xml.etree.ElementTree as ET
     joints = [j for j in tree.iter("joint") if j.get("type") != "fixed"]
     if [j.get("name") for j in joints] != JOINT_NAMES:
         raise ValueError("Passive coefficients require the native seven-joint TIAGo ordering")
-    for joint, c, b in zip(joints, config["coulomb_nm"], config["viscous_nm_s_per_rad"]):
-        joint.append(ET.Comment(" " + config["provenance"] +
-                                "; Nm / Nm s per rad; coefficients only, runtime force law is explicit. "))
+    for joint, c, b in zip(joints, friction.coulomb_nm, friction.viscous_nm_s_per_rad):
         dynamics = joint.find("dynamics")
         if dynamics is None:
             dynamics = ET.SubElement(joint, "dynamics")
@@ -76,16 +83,16 @@ def configure_urdf(tree, config):
         dynamics.set("damping", repr(float(b)))
 
 
-def register_robot(name, urdf_path, *, n_points, ee_frame, config):
+def register_robot(name, urdf_path, *, n_points, ee_frame, friction):
     """Use public GATO registration; passive prediction is explicitly opt-in."""
     import gato
-    if config is None:
+    if friction is None:
         gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame, jobs=1)
         return None
-    if config["model"] != "coulomb_tanh_viscous":
+    if friction.width_rad_s is None:
         raise ValueError("GATO prediction supports smooth Coulomb friction; hard sign is plant-only")
     return gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame,
-                               jobs=1, joint_friction_smoothing=config["smoothing_rad_s"])
+                               jobs=1, joint_friction_smoothing=friction.width_rad_s)
 
 
 def model_receipt(solver, name, gpu_path):

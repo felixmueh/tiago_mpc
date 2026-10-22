@@ -9,6 +9,7 @@ import numpy as np
 import pinocchio as pin
 
 from tiago_mpc import model_runtime as runtime
+from tiago_mpc.joint_dynamics import Friction
 
 
 class ModelRuntimeTests(unittest.TestCase):
@@ -43,8 +44,7 @@ class ModelRuntimeTests(unittest.TestCase):
         solver = Mock()
         solver.ee_pos.return_value = expected
         solver.sim_forward.side_effect = reached_dynamics
-        losses = dict(model='coulomb_tanh_viscous', smoothing_rad_s=.03,
-                      coulomb_nm=[1.] * 7, viscous_nm_s_per_rad=[1.] * 7)
+        losses = Friction([1.] * 7, [1.] * 7, .03)
         with self.assertRaisesRegex(RuntimeError, 'FK check passed'):
             runtime.check_model(solver, model, data, flange, np.ones(7), losses)
         solver.sim_forward.assert_called_once()

@@ -79,11 +79,11 @@ def main():
     first = rows[0]
     setting_line = (f"N{first['N']}, B1, {1000*first['dt_s']:g} ms feedback/knots, "
                     f"{1000*first['sim_dt_s']:g} ms Pinocchio RK4, "
-                    f"SQP{first['solver_params']['max_sqp_iters']}/PCG{first['solver_params']['max_pcg_iters']}, "
+                    f"SQP{first['params']['solver']['max_sqp_iters']}/PCG{first['params']['solver']['max_pcg_iters']}, "
                     f"{(first['N']-1)*first['dt_s']:.3g} s preview, "
-                    f"terminal weight {first['solver_params']['N_cost']:g}, {first['timeout_s']:g} simulated seconds.")
-    admm_settings = first.get("admm_effective", first["admm_defaults"])
-    bound_settings = first.get("configuration", {}).get("limit_bounds", {})
+                    f"terminal weight {first['params']['solver']['N_cost']:g}, {first['timeout_s']:g} simulated seconds.")
+    admm_settings = first["params"]["admm"]
+    bound_settings = {k: first["params"][k] for k in ("joint_margin_rad", "velocity_fraction", "effort_fraction")}
     result = dict(counts=saved["counts"], raw_audit_cases=len(audits),
                   violating_episodes={k:sum(a["max_excess"][k] > 1e-5 for a in audits)
                                       for k in ("joint", "speed", "torque")},
@@ -112,7 +112,7 @@ def main():
     axes[1].axhline(50, color="gray", ls="--", label="50 mm arrival threshold")
     axes[1].set(xlabel="Frozen task order", ylabel="Final position error (mm)", yscale="log")
     axes[1].legend()
-    fig.suptitle(f"Frozen random100 — ADMM, N{first['N']}, SQP{first['solver_params']['max_sqp_iters']}, {1000*first['dt_s']:g} ms fixed clock")
+    fig.suptitle(f"Frozen random100 — ADMM, N{first['N']}, SQP{first['params']['solver']['max_sqp_iters']}, {1000*first['dt_s']:g} ms fixed clock")
     fig.tight_layout(); fig.savefig(out / "overview.png", dpi=160); fig.savefig(out / "overview.pdf")
     counts = result["counts"]
     from matplotlib.backends.backend_pdf import PdfPages
@@ -123,7 +123,7 @@ def main():
             f"Arrivals: {counts['arrivals']}/100. Arrived within all sampled physical limits: {counts['valid_arrivals']}/100. Full-run limit passes: {counts['full_limit_passes']}/100. Timeouts: {counts['timeouts']}. Execution errors: {counts['execution_errors']}.",
             f"Episodes violating joint position / speed / torque: {result['violating_episodes']['joint']} / {result['violating_episodes']['speed']} / {result['violating_episodes']['torque']}. Maximum excess: {result['max_excess']['joint']:.6g} rad / {result['max_excess']['speed']:.6g} rad/s / {result['max_excess']['torque']:.6g} Nm. Categories can overlap. Independent saved-state audits agree with all completed-case labels.",
             "All 100 original random-posture start/goal pairs ran once in frozen order. "+setting_line+" Arrival means <=50 mm position error and joint-speed L1 <=1 rad/s, no dwell. Orientation unconstrained. No collision or robot qualification.",
-            "ADMM settings: "+json.dumps(admm_settings)+". Explicit bound overrides: "+json.dumps(bound_settings)+". Physical limits remain the original URDF values.",
+            "ADMM settings: "+json.dumps(admm_settings)+". Planning bounds: "+json.dumps(bound_settings)+". Physical limits remain the original URDF values.",
             config['differences_from_historical'],
             "Finite-budget ADMM does not guarantee feasibility. Fixed simulation pacing leaves solver latency unpaid. Timings are diagnostics, not a benchmark comparison. No within-cohort retuning, retries, clipping, candidate vetoes or solver repairs. Earlier diagnostic configuration attempts, if present, remain separate. Successful episodes stop on arrival, so this does not assess later settling.",
             "Application: "+config['application_commit'],
@@ -165,7 +165,7 @@ actual inner modes/work are retained. GATO is unchanged upstream aeacf16,
 GRiD 0.5.1; GTX1070 sm61 / CUDA12.9 / float.
 
 Effective ADMM settings: `{json.dumps(admm_settings)}`.
-Explicit row-bound overrides: `{json.dumps(bound_settings)}`; the physical
+Planning bounds: `{json.dumps(bound_settings)}`; the physical
 URDF limits used for grading remain unchanged.
 
 {config['differences_from_historical']}

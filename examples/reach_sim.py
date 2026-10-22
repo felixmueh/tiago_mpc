@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import importlib.metadata
 import json
@@ -20,8 +21,7 @@ sys.path.insert(0, str(ROOT))
 import gato
 import pinocchio as pin
 from gato.common import rk4
-from tiago_mpc.configuration import load_configuration
-from tiago_mpc.controller import build_controller
+from tiago_mpc.mpc import TIAGO, build_controller
 from tiago_mpc.model_runtime import (URDF, EE_FRAME, Q_CHECK, Q_DELTA_CHECK,
                                      ee_position, runtime_urdf as prepare_urdf,
                                      check_model as check_predictor)
@@ -31,6 +31,7 @@ from tiago_mpc.simulation import control_intervals, control_segments
 from tiago_mpc.joint_dynamics import plant_rk4
 
 SIM_DT_S = 0.003
+SAVE_PLAN_STEPS = 5
 TIMEOUT_S, POSITION_TOL_M, SPEED_L1_TOL_RAD_S = 8.0, 0.05, 1.0
 Q_START_RAD = Q_CHECK.copy()
 # A reachable target is FK(q_start + delta); q_goal is NOT a posture objective.
@@ -42,8 +43,8 @@ def git(*args, cwd=ROOT):
 
 
 # Keep the viewer's existing example API while sharing the implementation.
-def runtime_urdf(joint_dynamics=None):
-    native, gpu, signs, _, _ = prepare_urdf(cache_root(), joint_dynamics)
+def runtime_urdf(friction=None):
+    native, gpu, signs, _, _ = prepare_urdf(cache_root(), friction)
     return native, gpu, signs
 
 
@@ -51,43 +52,39 @@ def check_model(solver, model, data, fid, q_goal, signs):
     return check_predictor(solver, model, data, fid, signs, q_goal=q_goal)
 
 
-def main():
+def main(argv=None, params=TIAGO, plant_friction=None):
+    """params: the MPC; plant_friction: the simulated plant's joint losses (None: loss-free)."""
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--hold", action="store_true", help="target the initial tool position")
     p.add_argument("--timeout", type=float, default=TIMEOUT_S, help="simulated seconds")
     p.add_argument("--output", type=Path, help="fresh output directory")
     p.add_argument("--build-only", action="store_true", help="build and check model conventions")
-    p.add_argument("--ee-frame", choices=(EE_FRAME, "arm_right_tool_joint"), default=EE_FRAME,
-                   help="tracked point; default nominal grasp center, flange for historical tasks")
+    p.add_argument("--ee-frame", choices=(EE_FRAME, "arm_right_tool_joint"),
+                   help="tracked point; default params.ee_frame (nominal grasp center), flange for historical tasks")
     p.add_argument("--input", type=Path, help="frozen experiment NPZ with initial_state/target_xyz/reference")
-    p.add_argument("--config", type=Path, help="JSON overrides against the historical base; default configs/reaching.json")
     p.add_argument("--solve-time-mode", choices=("fixed", "measured"), default="fixed",
                    help="charge fixed latency or measured controller wall time to the plant")
     p.add_argument("--solve-time-s", type=float, default=0., help="fixed solve latency in seconds (default zero)")
     p.add_argument("--control-update-period-s", type=float, help="nominal seconds between control updates (default: the knot interval dt_s)")
-    args = p.parse_args()
+    args = p.parse_args(argv)
     try:
         control_intervals(1. if args.control_update_period_s is None else args.control_update_period_s, 0.,
                           mode=args.solve_time_mode, fixed_s=args.solve_time_s)
     except ValueError as exc:
         p.error(str(exc))
-    ee_frame = args.ee_frame
+    if args.ee_frame is not None:
+        params = replace(params, ee_frame=args.ee_frame)
+    ee_frame = params.ee_frame
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         p.error("--timeout must be finite and positive")
-    try:
-        config_path, settings, effective = load_configuration(args.config)
-    except (ValueError, TypeError) as exc:
-        p.error(str(exc))
-    n_points, knot_dt = effective["N"], effective["dt_s"]
+    n_points, knot_dt = params.N, params.dt_s
     update_period_s = knot_dt if args.control_update_period_s is None else args.control_update_period_s
-    plant_losses = settings.get("joint_dynamics")
-    controller_options = effective["controller"]
+    plant_losses = plant_friction
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     out = args.output or ROOT / "_expr_data" / "reaching" / stamp
     out.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(__file__, out / "reach_sim.py")
-    shutil.copyfile(config_path, out / "config.json")
-    for name in ("configuration.py", "controller.py", "model_runtime.py", "joint_dynamics.py",
+    for name in ("mpc.py", "model_runtime.py", "joint_dynamics.py",
                  "simulation.py", "plan.py"):
         shutil.copyfile(ROOT / "tiago_mpc" / name, out / name)
     result = dict(status="started", execution_stage="setup", mode="hold" if args.hold else "reach",
@@ -101,11 +98,7 @@ def main():
                   N=n_points, dt_s=knot_dt, prediction_horizon_s=(n_points-1)*knot_dt,
                   sim_dt_s=SIM_DT_S, timeout_s=args.timeout,
                   position_tol_m=POSITION_TOL_M, speed_l1_tol_rad_s=SPEED_L1_TOL_RAD_S,
-                  solver_params=effective["solver_params"], configuration=settings,
-                  configuration_file=str(config_path.resolve()),
-                  effective_configuration=effective, limits="admm", linsys="pcg",
-                  simulator_joint_dynamics=plant_losses,
-                  prediction_joint_dynamics=effective["prediction_joint_dynamics"],
+                  params=asdict(params), plant_friction=plant_losses and asdict(plant_losses),
                   timing=dict(mode=args.solve_time_mode, fixed_s=args.solve_time_s,
                               measured_source="MPCController.step wall_s",
                               control_update_period_s=update_period_s,
@@ -117,7 +110,7 @@ def main():
     predicted_states, prediction_errors = [], []
     exit_code = 1
     try:
-        setup = build_controller(effective, ee_frame=ee_frame)
+        setup = build_controller(params)
         controller = setup.controller
         model, data, fid, signs = setup.model, setup.data, setup.frame_id, setup.signs
         gpu_path = setup.gpu_urdf_path
@@ -168,10 +161,6 @@ def main():
         print(f"Target displacement: {result['initial_distance_m']*1000:.1f} mm", flush=True)
         result["status"] = "building_model"
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
-        result.update(reset_rho_each_step=controller.reset_rho_each_step,
-                      admm_defaults=controller.LIMIT_DEFAULTS["admm"],
-                      admm_effective={**controller.LIMIT_DEFAULTS["admm"], **controller_options.get("limits_kw", {})},
-                      admm_linsys_policy=controller.admm_linsys)
         result.update(status="running", execution_stage="episode")
         (out / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
         x = x_start.copy()
@@ -187,7 +176,7 @@ def main():
             stats = step.solve.stats
             predicted_next = np.asarray(step.solve.xu)[0, 21:35]*state_signs
             predicted_states.append(predicted_next.copy())
-            if len(work) < int(settings.get("save_plan_steps", 0)):
+            if len(work) < SAVE_PLAN_STEPS:
                 np.savez_compressed(out / f"plan_{len(work):04d}.npz", state=x,
                                     reference=reference, xu=step.solve.xu, signs=signs)
             work.append(dict(sqp=int(np.sum(stats.sqp_iters)),

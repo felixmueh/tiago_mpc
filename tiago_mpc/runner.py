@@ -210,10 +210,8 @@ class RosMpcRunner:
             ["git", "status", "--porcelain"], cwd=root, text=True).strip())
         source = output / "source"
         source.mkdir()
-        for name in ("runner.py", "protocol.py", "plan.py", "ros2.py", "mpc_worker.py", "model_runtime.py", "configuration.py", "controller.py", "joint_dynamics.py", "safety.py"):
+        for name in ("runner.py", "protocol.py", "plan.py", "ros2.py", "mpc_worker.py", "model_runtime.py", "mpc.py", "joint_dynamics.py", "safety.py"):
             shutil.copyfile(root / "tiago_mpc" / name, source / name)
-        selected_config = Path(self.worker_config.config_path or root / "configs/reaching.json")
-        shutil.copyfile(selected_config, output / "mpc-config.json")
         arm = monitor = process = stop = request_q = response_q = None
         process_started = False
         mode_attempted = False

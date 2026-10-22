@@ -5,6 +5,7 @@ name per variant would let two variants overwrite each other in a shared cache,
 so the name hashes everything compiled into the module. The hash is a cache key,
 not provenance.
 """
+from dataclasses import asdict
 import hashlib
 import json
 import os
@@ -29,9 +30,8 @@ def cache_root() -> Path:
     return root
 
 
-def plant_name(gpu_urdf_path, ee_frame: str, losses=None) -> str:
+def plant_name(gpu_urdf_path, ee_frame: str, friction=None) -> str:
     """tiago_right_<hash> over the GPU URDF bytes, end-effector frame and predictor
-    friction configuration as passed to registration (coefficients and width)."""
-    config = json.dumps(losses and {k: v for k, v in losses.items() if k != "provenance"},
-                        sort_keys=True).encode()
+    friction as passed to registration (coefficients and width)."""
+    config = json.dumps(friction and asdict(friction), sort_keys=True).encode()
     return "tiago_right_" + digest(Path(gpu_urdf_path).read_bytes(), ee_frame.encode(), config)
