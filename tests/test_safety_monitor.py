@@ -179,12 +179,11 @@ class CollisionPortTests(unittest.TestCase):
         self.assertEqual(len(joints), 4)
         self.assertTrue(all(joint.get('type') == 'fixed' for joint in joints))
 
-    def test_current_and_reviewed_mesh_geometry_is_finite(self):
+    def test_safety_mesh_geometry_is_finite(self):  # the full model's meshes: test_models.py
         import hppfcl
         loader = hppfcl.MeshLoader()
-        meshes = [*sorted(FULL_URDF.parent.glob('meshes/*.stl')),
-                  *sorted(s.DEFAULT_COLLISION_URDF_PATH.parent.glob('meshes/*.stl'))]
-        self.assertEqual(len(meshes), 53)
+        meshes = sorted(s.DEFAULT_COLLISION_URDF_PATH.parent.glob('meshes/*.stl'))
+        self.assertEqual(len(meshes), 18)
         for path in meshes:
             with self.subTest(mesh=str(path.relative_to(s.REPO_ROOT))):
                 mesh = loader.load(str(path))

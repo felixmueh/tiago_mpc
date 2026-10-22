@@ -115,9 +115,7 @@ class ModelTests(unittest.TestCase):
                 self.assertTrue(np.isfinite(mesh.vertices()).all())
 
     def test_full_visual_and_collision_geometry_load(self):
-        data = ROOT / '_expr_data/canonical-model-correction-20261020'
-        data.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=data) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             tree = ET.parse(FULL)
             for mesh in tree.iter('mesh'):
                 mesh.set('filename', str(MODELS / 'tiago_pro/meshes' / Path(mesh.get('filename')).name))
