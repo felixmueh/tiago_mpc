@@ -19,6 +19,7 @@ from tiago_mpc.configuration import load_configuration
 from tiago_mpc.controller import build_controller
 from tiago_mpc.joint_dynamics import validate, passive_torque, plant_rk4, model_receipt
 from tiago_mpc.model_runtime import URDF, EE_FRAME, Q_CHECK, ee_position, runtime_urdf
+from tiago_mpc.plant_cache import cache_root
 from tiago_mpc.protocol import figure8_reference as reference
 from tiago_mpc.simulation import control_intervals
 DEFAULT_PROTOCOL = ROOT/"configs/tracking.json"
@@ -85,12 +86,12 @@ def main():
     charged_s, update_s, solve_start_s = [], [], []
     exit_code = 1
     try:
-        setup = build_controller(effective, cache_dir=ROOT / ".cache")
+        setup = build_controller(effective)
         controller = setup.controller
         solver = controller.solver
         model, data, fid, signs = setup.model, setup.data, setup.frame_id, setup.signs
         # Rigid inertias match; passive plant losses are explicit ABA input.
-        plant_path, _, _, _, _ = runtime_urdf(ROOT / ".cache/plant", plant_losses)
+        plant_path, _, _, _, _ = runtime_urdf(cache_root(), plant_losses)
         shutil.copyfile(plant_path, out/"plant.urdf")
         shutil.copyfile(setup.gpu_urdf_path, out/"prediction.urdf")
         ss = np.tile(signs, 2)

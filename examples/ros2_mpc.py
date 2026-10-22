@@ -50,8 +50,7 @@ def main(argv=None):
                 raise ValueError("Unknown figure-eight shape fields")
         task = TaskReference(tuple(args.target or (0., 0., 0.)), kind=args.task, **shape)
         worker = WorkerConfig(None if args.config is None else str(args.config.resolve()),
-                              None if args.budget_ms is None else args.budget_ms / 1000.,
-                              str(ROOT / "_expr_data/runtime/mpc-cache"))
+                              None if args.budget_ms is None else args.budget_ms / 1000.)
     except (ValueError, OSError, TypeError) as exc:
         parser.error(str(exc))
     from tiago_mpc.safety import CollisionSafetySettings

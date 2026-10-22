@@ -7,21 +7,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+from .plant_cache import ROOT, digest
+
 URDF = ROOT / "models/tiago_right/tiago_right_arm.urdf"
 EE_FRAME = "arm_right_grasp_joint"
-PLANT = "tiago_mpc_right"
 Q_CHECK = np.array([-0.39, -1.73, -0.38, -2.35, 0.0, -1.21, 0.04])
 Q_DELTA_CHECK = np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
 
 
 def runtime_urdf(cache_dir, joint_dynamics=None):
-    """Resolve assets and normalize negative axes only in the generated GPU copy."""
+    """Resolve assets and normalize negative axes only in the generated GPU copy.
+
+    The files go to <cache_dir>/models/<hash of both>/, so concurrent processes with
+    different configurations never share a path."""
     manifest = json.loads((ROOT / "models/manifest.json").read_text())
     for relative, info in manifest.items():
         path = ROOT / "models" / relative
@@ -40,9 +44,7 @@ def runtime_urdf(cache_dir, joint_dynamics=None):
         joint.find("child").get("link") for joint in tree.iter("joint")}
     if len(root_link) != 1:
         raise ValueError("Expected one native arm root frame")
-    out = Path(cache_dir) / "models/tiago_right_arm.urdf"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    _write_urdf(out, tree)
+    native_payload = _urdf_bytes(tree)
     signs, names = [], []
     for joint in tree.iter("joint"):
         if joint.get("type") == "fixed":
@@ -64,15 +66,25 @@ def runtime_urdf(cache_dir, joint_dynamics=None):
                 lo, hi = float(safety.get("soft_lower_limit")), float(safety.get("soft_upper_limit"))
                 safety.set("soft_lower_limit", repr(-hi))
                 safety.set("soft_upper_limit", repr(-lo))
+    gpu_payload = _urdf_bytes(tree)
+    out = Path(cache_dir) / "models" / digest(native_payload, gpu_payload) / "tiago_right_arm.urdf"
     gpu_path = out.with_name("tiago_right_grid.urdf")
-    _write_urdf(gpu_path, tree)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomic(out, native_payload)
+    _write_atomic(gpu_path, gpu_payload)
     return out, gpu_path, np.asarray(signs), tuple(names), root_link.pop()
 
 
-def _write_urdf(path, tree):
-    payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-    if not path.exists() or path.read_bytes() != payload:
-        path.write_bytes(payload)
+def _urdf_bytes(tree):
+    return ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
+
+
+def _write_atomic(path, payload):
+    if path.exists() and path.read_bytes() == payload:
+        return
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(payload)
+    os.replace(tmp, path)
 
 
 def ee_position(model, data, q, frame_id):

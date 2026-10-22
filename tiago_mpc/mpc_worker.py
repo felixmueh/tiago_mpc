@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from pathlib import Path
 import queue
 import time
 
@@ -11,14 +10,12 @@ import numpy as np
 
 from .protocol import SolveReply, SolveRequest, WorkerReady
 
-ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True)
 class WorkerConfig:
     config_path: str | None = None
     budget_s: float | None = None
-    cache_dir: str | None = None
 
     def __post_init__(self):
         if self.budget_s is not None and (not math.isfinite(self.budget_s) or self.budget_s <= 0):
@@ -49,8 +46,7 @@ class MpcEngine:
         from .model_runtime import ee_position
 
         selected, _, effective = load_configuration(config.config_path)
-        setup = build_controller(effective, cache_dir=Path(
-            config.cache_dir or ROOT / "_expr_data/runtime/mpc-cache"))
+        setup = build_controller(effective)
         details = dict(setup.details, configuration_file=str(selected.resolve()))
         return cls(setup.controller, signs=setup.signs,
                    n=effective["N"], dt_s=effective["dt_s"],

@@ -7,7 +7,8 @@ import sys
 
 import numpy as np
 
-from .model_runtime import EE_FRAME, PLANT, check_model, runtime_urdf
+from .model_runtime import EE_FRAME, check_model, runtime_urdf
+from .plant_cache import cache_root, plant_name
 
 
 def set_bounds(solver, model, signs, bounds):
@@ -42,11 +43,9 @@ class MpcSetup:
     details: dict
 
 
-def build_controller(effective, *, cache_dir, ee_frame=EE_FRAME):
+def build_controller(effective, *, ee_frame=EE_FRAME):
     """Build/check once; callers retain ownership of timing, state and I/O."""
-    cache_dir = Path(cache_dir).resolve()
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("GATO_CACHE_DIR", str(cache_dir / "gato"))
+    cache_dir = cache_root()  # exports GATO_CACHE_DIR before gato is imported
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]
     import gato
     import pinocchio as pin
@@ -63,7 +62,7 @@ def build_controller(effective, *, cache_dir, ee_frame=EE_FRAME):
     if frame_id >= model.nframes:
         raise ValueError(f"Missing end-effector frame {ee_frame}")
     n, dt_s = effective["N"], effective["dt_s"]
-    plant = PLANT + "_smooth" if losses else PLANT
+    plant = plant_name(gpu_path, ee_frame, losses)
     adapter = register_robot(plant, gpu_path, n_points=n, ee_frame=ee_frame, config=losses)
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=n, dt=dt_s,
                        plant_type=plant, params=gato.SolverParams(**effective["solver_params"]))

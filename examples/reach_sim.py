@@ -22,9 +22,10 @@ import pinocchio as pin
 from gato.common import rk4
 from tiago_mpc.configuration import load_configuration
 from tiago_mpc.controller import build_controller
-from tiago_mpc.model_runtime import (URDF, EE_FRAME, PLANT, Q_CHECK, Q_DELTA_CHECK,
+from tiago_mpc.model_runtime import (URDF, EE_FRAME, Q_CHECK, Q_DELTA_CHECK,
                                      ee_position, runtime_urdf as prepare_urdf,
                                      check_model as check_predictor)
+from tiago_mpc.plant_cache import cache_root
 from tiago_mpc.simulation import control_intervals
 from tiago_mpc.joint_dynamics import plant_rk4
 
@@ -41,7 +42,7 @@ def git(*args, cwd=ROOT):
 
 # Keep the viewer's existing example API while sharing the implementation.
 def runtime_urdf(joint_dynamics=None):
-    native, gpu, signs, _, _ = prepare_urdf(ROOT / ".cache", joint_dynamics)
+    native, gpu, signs, _, _ = prepare_urdf(cache_root(), joint_dynamics)
     return native, gpu, signs
 
 
@@ -110,7 +111,7 @@ def main():
     predicted_states, prediction_errors = [], []
     exit_code = 1
     try:
-        setup = build_controller(effective, cache_dir=ROOT / ".cache", ee_frame=ee_frame)
+        setup = build_controller(effective, ee_frame=ee_frame)
         controller = setup.controller
         model, data, fid, signs = setup.model, setup.data, setup.frame_id, setup.signs
         gpu_path = setup.gpu_urdf_path

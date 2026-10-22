@@ -32,7 +32,14 @@ GATO is a Git submodule in `external/gato`, pinned to commit
 `f7be8b75dae562400f84816883e7bb848b9874fa`, upstream **GATO 0.1.2**
 (`bd60b24`) plus our opt-in smooth-joint-friction and runtime-width contributions. Its dependencies
 pin `grid-rbd==0.5.3`. The first run generates TIAGo dynamics and compiles just the
-N32 CUDA module (several minutes); later runs reuse `.cache/gato`. The
+N32 CUDA module (several minutes); later runs reuse the shared GATO cache:
+`GATO_CACHE_DIR` if set (host runs use `.cache/host-gato`), otherwise `.cache/gato`.
+The simulations, the ROS worker and `examples/ros2_mpc.py` all use it. Plants are
+named `tiago_right_<8 hex>` over the GPU URDF bytes, the end-effector frame and the
+predictor friction configuration (`tiago_mpc/plant_cache.py`), so different variants
+never overwrite each other and the same variant reuses its module; the hash is a
+cache key, not provenance, and the name is saved as `plant_name`. Generated URDFs
+live in `<cache>/models/<hash>/`. The
 contribution adds opt-in passive prediction; default-off reaching retains
 the existing rigid-body model. The submodule uses the published
 `felixmueh/GATO` fork; its exact commit is pinned above. These contributions are
