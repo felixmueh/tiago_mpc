@@ -73,11 +73,11 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05)
         record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.TIAGO, N=4)), task=task, out=tmp_path / name,
-                          run=partial(run_simulation, latency=Fixed(.01)))
+                          run=partial(run_simulation, latency=Fixed(.01)), command_period=.01)
     else:
         task = f8.Figure8(period_s=.05)
         record = f8.figure8(SimPlant(substep=1e-4, friction=urdf_friction()), Mpc(replace(f8.FIGURE8, N=4)),
-                            task=task, out=tmp_path / name)
+                            task=task, out=tmp_path / name, command_period=.01)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     assert summary["status"] == ("timeout" if name == "reach" else "completed")
     assert summary["params"]["N"] == 4 and summary["task"]["type"] == type(task).__name__
@@ -120,7 +120,7 @@ def test_duration_caps_the_tasks_own(tmp_path):
     record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.TIAGO, N=4)), task=rc.Reach(timeout_s=.06),
                       out=tmp_path / "r", duration=.02)
     assert record.summary["status"] == "timeout" and record.summary["duration_cap_s"] == .02
-    assert len(record.ticks) == 3  # 0, 10 and 20 ms
+    assert len(record.ticks) == 11  # 0, 2, ..., 20 ms: the default command period
 
 
 def test_a_run_without_solves_reports_zero_work(tmp_path):

@@ -68,7 +68,7 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
 python experiments/reach.py                    # one reach from the comfortable pose
 python experiments/figure8.py                  # one 24 s figure eight
 python experiments/reach.py --latency measured --output _expr_data/reach/measured
-python experiments/reach.py --command-period .002 --update-period .01
+python experiments/reach.py --command-period .01   # command ticks at the knot interval
 python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random100/README.md
 ```
 
@@ -86,9 +86,10 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
   the arm still held: with `MpcParams.warmup` (default), GATO's warm-up solve
   (the solver's own iteration limit, no time limit) seeds the first solve, and
   its time counts against no plan's lease.
-- **Rates:** `--command-period` sets the command rate, `--update-period` the
-  control rate; both default to the knot interval `dt_s` (10 ms) and may differ
-  from it. `--duration S` ends a run after at most S seconds.
+- **Rates:** `--command-period` sets the command rate (default 2 ms, 500 Hz,
+  in simulation and on the robot), `--update-period` the control rate (default
+  the knot interval `dt_s`, 10 ms); either may differ from the knot interval.
+  `--duration S` ends a run after at most S seconds.
 - **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps; arrival within
   5 cm at a joint-speed L1 norm of at most 1 rad/s, timeout 8 s.
 - **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, hard sign

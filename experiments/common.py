@@ -44,7 +44,8 @@ def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None,
                    out=None, done_status="done", evaluate=None):
     """Run task with mpc on plant for at most duration seconds, save the Record in out
     (default: _expr_data/<task>/<UTC time>/) and export its replay; returns the Record.
-    The periods default to the knot interval mpc.dt.
+    The command period defaults to 2 ms (500 Hz), the update period to the knot
+    interval mpc.dt.
 
     The status is done_status when the task is done, "timeout" when the duration ends
     first, "interrupted" (Ctrl-C, SIGTERM) or "error" (both raise again). A run that
@@ -53,7 +54,7 @@ def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None,
     """
     record = Record(out, task=task, params=mpc.params, plant=plant)
     try:
-        done = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or mpc.dt,
+        done = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or .002,
                    update_period=update_period or mpc.dt, duration=duration)
         trajectory = record.trajectory
         excess = limit_excess(trajectory)
@@ -89,7 +90,7 @@ def arguments(description, argv):
     parser.add_argument("--target", nargs=3, type=float, metavar=("X_M", "Y_M", "Z_M"),
                         help="reach target or figure-eight start, metres in torso_lift_link (required with --execute)")
     parser.add_argument("--latency", type=latency, default=Fixed(), help="sim: seconds per solve, or 'measured'")
-    parser.add_argument("--command-period", type=float, help="seconds (default: the knot interval)")
+    parser.add_argument("--command-period", type=float, help="seconds (default: 0.002, 500 Hz)")
     parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
     parser.add_argument("--duration", type=float, help="seconds: cap the task's own duration")
     parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/<task>/)")
