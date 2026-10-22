@@ -109,9 +109,16 @@ explicit runtime choices in each task configuration, beyond the URDF tags.
 For a loss-free reaching comparison, copy the complete configuration, remove
 `joint_dynamics` and `predictor_smoothing_rad_s`, and select it with `--config`.
 Explicit historical configurations without these fields remain loss-free.
-The newly selected reaching friction default has not received a GPU task
-qualification; earlier loss-free reaching checks do not qualify it. No physical
-robot qualification is implied.
+The newly selected reaching friction default failed its first bounded native
+check: the initial prediction was finite, but after the first 10 ms control
+interval with the example's 3 ms RK4 substeps, the simulated state grew extremely
+large and the second prediction was nonfinite. A separate visualizer check with
+1 ms plant substeps and simulator-only friction also became unstable in its first
+10 ms interval. Both outcomes are retained in
+`../tiago_mpc_visualizer/_expr_data/friction/native/`. The cause has not been
+established; these defaults are not qualified for stable motion. Earlier
+loss-free reaching checks do not qualify them. No timestep or solver tuning was
+applied, and no physical robot qualification is implied.
 
 ```bash
 # Build/codegen and check model conventions, without a reaching episode:
