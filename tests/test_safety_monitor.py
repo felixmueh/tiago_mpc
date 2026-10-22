@@ -139,7 +139,8 @@ class CollisionPortTests(unittest.TestCase):
             joint = active.find(f"joint[@name='arm_right_{index}_joint']")
             comments = ' '.join(child.text or '' for child in joint if child.tag is ET.Comment)
             self.assertIn('TIAGO_MPC dynamics:', comments)
-            self.assertIn('Actual values supplied by Felix 2026-10-21', comments)
+            self.assertIn('values supplied by Felix 2026-10-21', comments)
+            self.assertIn('QUESTIONABLE', comments)
             self.assertNotIn('ASSUMED', comments)
 
     def test_collision_overlay_and_reviewed_source_are_retained_exactly(self):

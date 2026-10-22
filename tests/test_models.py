@@ -67,7 +67,8 @@ class ModelTests(unittest.TestCase):
                     self.assertEqual(joint.find('tiago_mpc').attrib, {'armature': str(armature[i])})
                     self.assertEqual(float(joint.find('limit').get('effort')), 43 if i < 2 else 26)
                     comments = ' '.join(child.text or '' for child in joint if child.tag is ET.Comment)
-                    self.assertIn('Actual values supplied by Felix 2026-10-21', comments)
+                    self.assertIn('values supplied by Felix 2026-10-21', comments)
+                    self.assertIn('QUESTIONABLE', comments)
                     self.assertIn('custom metadata', comments)
                     self.assertNotIn('ASSUMED', comments)
 

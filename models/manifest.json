@@ -140,15 +140,15 @@
     "sha256": "00e72531f701fe9571fc7f27fff061b212ef5b6390ffb4bddd9a519c3e931b4e"
   },
   "tiago_pro/tiago_pro.urdf": {
-    "bytes": 109793,
-    "sha256": "f451e2cc41e210d51f3f3d3d300bade445eb2c45f981f33428fcded2756b9406"
+    "bytes": 111922,
+    "sha256": "d3bee28167bb6c796d1e7b63b49f6ab01f30ae5d749e5288c6b2729fa283257f"
   },
   "tiago_pro/tiago_pro_sim_source.urdf": {
     "bytes": 106848,
     "sha256": "c8d51a1e8cf363740a394ea272b9961a122a7bcfc418a6186088552cd907d3e6"
   },
   "tiago_right/tiago_right_arm.urdf": {
-    "bytes": 12696,
-    "sha256": "316fc8035eb96b368b294f850d0901cc5548382cd75f980af5d344e5a1d5b3d4"
+    "bytes": 14307,
+    "sha256": "b925e6be80bef52fe194493c874793e7bd16f90e6cc4658f34b5110c1b9f36ca"
   }
 }

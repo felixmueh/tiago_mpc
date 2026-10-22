@@ -47,6 +47,29 @@ PARAMETERS = {
         (.56, 2.95, .27, 26),
     ),
 }
+# Physical right-arm fit of 2026-10-16 (figure-eight runs; residual torque
+# against the loss-free RNEA, b*v + c*sign(v) + o for |v| > .02 rad/s; pooled
+# "all_fig8_physical" in thesis research/physical-tiago-20261016/model-mismatch/
+# data/fits.json). Columns: Coulomb Nm, viscous Nm s/rad. Joints 5 to 7 barely
+# moved, so they have no fit.
+IDENTIFIED_RIGHT = {1: (2.01, 4.44), 2: (2.39, 5.07), 3: (2.03, 2.87), 4: (1.91, 2.82)}
+# Written into both URDFs before <robot>: outside the root element, so the
+# generated GPU copy and GATO's codegen key do not change. XML comments must
+# not contain "--".
+CAUTION = '''<!-- TIAGO_MPC caution (2026-10-22): the arm friction, damping and armature
+     values below are QUESTIONABLE. They are the supplied table of 2026-10-21,
+     not an identification, and no public PAL file contains the armature.
+     Right arm, physical fit of 2026-10-16 (joints 1 to 4): Coulomb 2.01, 2.39,
+     2.03, 1.91 Nm (1.2 to 2.1x the supplied values), viscous 4.44, 5.07, 2.87,
+     2.82 Nm s/rad (0.5 to 0.94x), breakaway 10 to 25 % above Coulomb. Joints 5
+     to 7 and the left arm are not identified.
+     Stiffness: with link-only inertia (joint 7: 0.00077 kg m^2) the supplied
+     damping gives joint 7 a 0.26 ms time constant. Explicit integration then
+     needs steps below 0.45 ms (RK4, worst pose) or knots below 0.32 ms
+     (GATO's explicit update); with the armature active the limits are 114 ms
+     and 82 ms. See tiago_mpc_visualizer/docs/friction.md and, in the thesis
+     workspace, research/armature-support-and-stiff-joint-damping.md. -->
+'''
 
 
 def patch_dynamics(text, sides=("left", "right")):
@@ -63,8 +86,17 @@ def patch_dynamics(text, sides=("left", "right")):
 
                 def replace_dynamics(dynamics):
                     indent = dynamics[1]
-                    comment = (f'{indent}<!-- TIAGO_MPC dynamics: Actual values supplied by Felix '
-                               '2026-10-21; friction Nm, damping Nm s/rad; armature kg m^2 '
+                    if side == "right" and i in IDENTIFIED_RIGHT:
+                        fit = ('physical fit 2026-10-16: friction {0} Nm, damping {1} Nm s/rad'
+                               .format(*IDENTIFIED_RIGHT[i]))
+                    else:
+                        fit = 'not identified on the physical arm'
+                    # One comment per joint, as before: the GPU model is written
+                    # from this file, and GATO's codegen key hashes its bytes,
+                    # including the whitespace a removed comment leaves behind.
+                    comment = (f'{indent}<!-- TIAGO_MPC dynamics: QUESTIONABLE values supplied by '
+                               f'Felix 2026-10-21 ({fit}; see the caution above <robot>); '
+                               'friction Nm, damping Nm s/rad; armature kg m^2 '
                                'is custom metadata, not enabled by URDF loaders. -->')
                     return (comment + '\n' + f'{indent}<dynamics damping="{b}" friction="{c}" />'
                             + '\n' + f'{indent}<tiago_mpc armature="{armature}" />')
@@ -81,6 +113,15 @@ def patch_dynamics(text, sides=("left", "right")):
             text, count = re.subn(pattern, patch_joint, text, flags=re.DOTALL)
             if count != 1:
                 raise ValueError(f"Expected one {name}, got {count}")
+    return text
+
+
+def add_caution(text):
+    """Put the parameter caution right before <robot>, replacing an earlier one."""
+    text = re.sub(r'(?s)<!-- TIAGO_MPC caution.*?-->\r?\n', '', text)
+    text, count = re.subn(r'(?m)^(?=<robot\b)', lambda m: CAUTION, text, count=1)
+    if count != 1:
+        raise ValueError("Expected one <robot> element")
     return text
 
 
@@ -112,8 +153,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify prepared models/manifest without writing")
     args = parser.parse_args()
-    full = patch_dynamics(SOURCE.read_text())
-    arm = add_grasp_frame(patch_dynamics(ARM.read_text(), sides=("right",)))
+    full = add_caution(patch_dynamics(SOURCE.read_text()))
+    arm = add_caution(add_grasp_frame(patch_dynamics(ARM.read_text(), sides=("right",))))
     manifest = json.dumps(asset_manifest(full, arm), indent=2, sort_keys=True) + '\n'
     outputs = {FULL: full, ARM: arm, MODELS / "manifest.json": manifest}
     for path, expected in outputs.items():
