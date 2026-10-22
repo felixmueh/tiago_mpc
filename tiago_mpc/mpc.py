@@ -8,6 +8,7 @@ share one interface: request(state, reference, updates=None), result(block=False
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 import math
 import multiprocessing as mp
 import os
@@ -20,8 +21,7 @@ import numpy as np
 
 from .dynamics import Friction, passive_torque
 from .plan import Plan
-from .plant_cache import cache_root, plant_name
-from .tiago import GRASP_FRAME, Q_REACH, Q_START, fk, limits, runtime_urdf
+from .tiago import ARM_URDF, GRASP_FRAME, Q_REACH, Q_START, ROOT, digest, fk, limits, runtime_urdf
 
 
 @dataclass(frozen=True)
@@ -95,31 +95,41 @@ def set_bounds(solver, model, signs, params):
         solver.set_row_group_bounds(group, -fraction * raw, fraction * raw)
 
 
-def register_robot(name, urdf_path, *, n_points, ee_frame, friction):
-    """Use public GATO registration; passive prediction is explicitly opt-in."""
-    import gato
-    if friction is None:
-        gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame, jobs=1)
-        return
-    gato.register_robot(name, urdf_path, N=[n_points], ee_frame=ee_frame,
-                        jobs=1, joint_friction_smoothing=friction.width_rad_s)
+def cache_root() -> Path:
+    """GATO_CACHE_DIR if set (host runs), else <repo>/.cache/gato; exported for GATO."""
+    root = Path(os.environ.get("GATO_CACHE_DIR") or ROOT / ".cache/gato").expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    os.environ["GATO_CACHE_DIR"] = str(root)
+    return root
+
+
+# GATO compiles one CUDA module per registered plant name and N (minutes). A fixed name
+# per variant would let two variants overwrite each other in a shared cache, so the
+# name hashes everything compiled into the module. The hash is a cache key, not provenance.
+def plant_name(gpu_urdf_path, ee_frame: str, friction=None) -> str:
+    """tiago_right_<hash> over the GPU URDF bytes, end-effector frame and predictor
+    friction as passed to registration (coefficients and width)."""
+    config = json.dumps(friction and asdict(friction), sort_keys=True).encode()
+    return "tiago_right_" + digest(Path(gpu_urdf_path).read_bytes(), ee_frame.encode(), config)
 
 
 def build_controller(params: MpcParams):
     """Build and check the GATO controller; returns it and the GPU coordinate signs."""
     cache_dir = cache_root()  # exports GATO_CACHE_DIR before GATO compiles or loads
+    # GATO's build calls cmake by name: use this environment's pinned one (part of GATO's module key).
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]
     import gato
     import pinocchio as pin
 
     friction, ee_frame, n = params.friction, params.ee_frame, params.N
-    path, gpu_path, signs = runtime_urdf(cache_dir, friction)
-    model = pin.buildModelFromUrdf(str(path))
+    gpu_path, signs = runtime_urdf(cache_dir, friction)
+    model = pin.buildModelFromUrdf(str(ARM_URDF))
     data = model.createData()
     if model.getFrameId(ee_frame) >= model.nframes:
         raise ValueError(f"Missing end-effector frame {ee_frame}")
     plant = plant_name(gpu_path, ee_frame, friction)
-    register_robot(plant, gpu_path, n_points=n, ee_frame=ee_frame, friction=friction)
+    gato.register_robot(plant, gpu_path, N=[n], ee_frame=ee_frame, jobs=1,
+                        **({} if friction is None else dict(joint_friction_smoothing=friction.width_rad_s)))
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=n, dt=params.dt_s,
                        plant_type=plant, params=params.solver)
     check_model(solver, model, data, ee_frame, signs, friction)
@@ -132,75 +142,31 @@ def build_controller(params: MpcParams):
 
 
 def check_model(solver, model, data, ee_frame, signs, friction=None):
-    """The GPU model against Pinocchio's native one: FK and one dynamics step at two poses."""
+    """The GPU model against Pinocchio's native one at two poses: FK; moving and at rest
+    (the steepest tanh slope), one step of 1 ms and of dt against GATO's constant-
+    acceleration (trapezoidal) step, and the first knot's A-block against finite
+    differences of that step. Without friction the passive torque is zero."""
     import pinocchio as pin
-    if friction is not None:
-        return _check_dissipative_model(solver, model, data, ee_frame, signs, friction)
 
-    from gato.common import rk4
+    def step(x, u, h):
+        q, v = x[:7], x[7:]
+        a = pin.aba(model, data, q, v, u - passive_torque(v, friction)).copy()
+        return np.r_[q + v*h + .5*a*h*h, v + a*h]
 
+    ss = np.tile(signs, 2)
     for q in (Q_START, Q_REACH):
-        expected = fk(q, ee_frame)
-        if not np.allclose(solver.ee_pos(q * signs), expected, atol=1e-5, rtol=1e-4):
-            raise ValueError("GATO/Pinocchio end-effector frames disagree")
-        v = np.array([0.10, -0.08, 0.06, -0.04, 0.02, -0.07, 0.03])
-        u = pin.rnea(model, data, q, v, np.zeros(7)) + np.linspace(-0.3, 0.3, 7)
-        state_signs = np.tile(signs, 2)
-        gpu = np.asarray(solver.sim_forward((np.r_[q, v] * state_signs)[None],
-                                            (u * signs)[None], 0.003))[0] * state_signs
-        q_next, v_next = rk4(model, data, q, v, u, 0.003)
-        error = float(np.max(np.abs(gpu - np.r_[q_next, v_next])))
-        if not np.isfinite(gpu).all() or error > 2e-3:
-            raise ValueError(f"GATO/Pinocchio one-step disagreement: {error:.6g}")
-    solver.reset()
-
-
-def _check_dissipative_model(solver, model, data, ee_frame, signs, friction):
-    """Value/A-block checks against the same constant-acceleration predictor step."""
-    import pinocchio as pin
-
-    q = Q_START.copy()
-    v = np.array([.3, -.35, .4, -.45, .5, -.55, .6])
-    u = pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, friction)
-    x = np.r_[q, v]; ss = np.tile(signs, 2)
-    def native_predictor(state, h):
-        qn, vn = state[:7], state[7:]
-        acceleration = pin.aba(model, data, qn, vn, u-passive_torque(vn, friction)).copy()
-        return np.r_[qn+vn*h+.5*acceleration*h*h, vn+acceleration*h]
-    expected_ee = fk(q, ee_frame)
-    actual_ee = np.asarray(solver.ee_pos(q*signs))
-    np.testing.assert_allclose(actual_ee, expected_ee, atol=1e-5, rtol=1e-4)
-    for h in (.001, solver.dt):
-        expected = native_predictor(x, h)
-        actual = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], h))[0]*ss
-        np.testing.assert_allclose(actual, expected, atol=2e-3, rtol=1e-3)
-    xu = np.tile(np.r_[x*ss, u*signs], solver.N)[:-7]
-    kkt = solver.debug_setup_kkt(xu[None], (x*ss)[None], np.zeros((1, solver.N*6)))
-    analytic_gpu = np.asarray(kkt["A"])[0].reshape(solver.N, 14, 14)[0].T
-    analytic_native = ss[:, None]*analytic_gpu*ss[None, :]
-    fd = np.empty((14, 14)); epsilon = 1e-5
-    for j in range(14):
-        delta = np.eye(14)[j]*epsilon
-        plus, minus = x+delta, x-delta
-        fp, fm = native_predictor(plus, solver.dt), native_predictor(minus, solver.dt)
-        fd[:, j] = (fp-fm)/(2*epsilon)
-    np.testing.assert_allclose(analytic_native, fd, atol=2e-3, rtol=1e-2)
-    if friction.width_rad_s is not None:
-        # A cheap extra preflight for new widths: the maximum tanh slope is at rest.
-        v = np.zeros(7)
-        u = pin.rnea(model, data, q, v, np.zeros(7)).copy()
-        x = np.r_[q, v]
-        actual = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], solver.dt))[0]*ss
-        expected = native_predictor(x, solver.dt)
-        np.testing.assert_allclose(actual, expected, atol=2e-3, rtol=1e-3)
-        xu = np.tile(np.r_[x*ss, u*signs], solver.N)[:-7]
-        kkt = solver.debug_setup_kkt(xu[None], (x*ss)[None], np.zeros((1, solver.N*6)))
-        analytic_gpu = np.asarray(kkt["A"])[0].reshape(solver.N, 14, 14)[0].T
-        analytic_native = ss[:, None]*analytic_gpu*ss[None, :]
-        for j in range(14):
-            delta = np.eye(14)[j]*epsilon
-            fd[:, j] = (native_predictor(x+delta, solver.dt)-native_predictor(x-delta, solver.dt))/(2*epsilon)
-        np.testing.assert_allclose(analytic_native, fd, atol=2e-3, rtol=1e-2)
+        np.testing.assert_allclose(solver.ee_pos(q*signs), fk(q, ee_frame), atol=1e-5, rtol=1e-4)
+        for v in (np.array([.3, -.35, .4, -.45, .5, -.55, .6]), np.zeros(7)):
+            x, u = np.r_[q, v], pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, friction)
+            for h in (.001, solver.dt):
+                gpu = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], h))[0]*ss
+                np.testing.assert_allclose(gpu, step(x, u, h), atol=2e-3, rtol=1e-3)
+            xu = np.tile(np.r_[x*ss, u*signs], solver.N)[:-7]
+            kkt = solver.debug_setup_kkt(xu[None], (x*ss)[None], np.zeros((1, solver.N*6)))
+            a_block = ss[:, None]*np.asarray(kkt["A"])[0].reshape(solver.N, 14, 14)[0].T*ss
+            fd = np.array([step(x + d, u, solver.dt) - step(x - d, u, solver.dt)
+                           for d in np.eye(14)*1e-5]).T / 2e-5
+            np.testing.assert_allclose(a_block, fd, atol=2e-3, rtol=1e-2)
     solver.reset()
 
 

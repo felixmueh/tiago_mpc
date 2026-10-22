@@ -16,12 +16,11 @@ import traceback
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(HERE.parents[1]))
 from experiments.reach import Reach, reach
 from tiago_mpc.mpc import TIAGO, MpcWorker
 from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import FLANGE_FRAME, fk
+from tiago_mpc.tiago import FLANGE_FRAME, ROOT, fk
 
 PARAMS = replace(TIAGO, ee_frame=FLANGE_FRAME)  # the historical tasks track the flange
 

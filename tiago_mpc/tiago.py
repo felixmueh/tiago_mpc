@@ -19,8 +19,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from .dynamics import Friction
-from .plant_cache import ROOT, digest
 
+ROOT = Path(__file__).resolve().parents[1]  # the repository
 ARM_URDF = ROOT / "models/tiago_right/tiago_right_arm.urdf"  # the reduced right arm
 FULL_URDF = ROOT / "models/tiago_pro/tiago_pro.urdf"  # the whole robot (safety, replays)
 RIGHT_ARM_JOINTS = tuple(f"arm_right_{i}_joint" for i in range(1, 8))  # native order
@@ -75,13 +75,21 @@ def fk(q, frame=GRASP_FRAME):
     return data.oMf[model.getFrameId(frame)].translation.copy()
 
 
-def runtime_urdf(cache_dir, friction=None):
-    """The native URDF and its GPU copy, and the GPU coordinate signs.
+def digest(*parts: bytes) -> str:
+    """Eight hex characters over the parts (length-prefixed, so order and splits matter)."""
+    h = hashlib.sha256()
+    for part in parts:
+        h.update(len(part).to_bytes(8, "little") + part)
+    return h.hexdigest()[:8]
 
-    Both copies resolve the mesh paths and carry friction's coefficients, if given;
-    the GPU copy turns negative joint axes positive, with their limits. The files go
-    to <cache_dir>/models/<hash of both>/, so concurrent processes with different
-    coefficients never share a path."""
+
+def runtime_urdf(cache_dir, friction=None):
+    """The GPU URDF and the GPU coordinate signs.
+
+    A copy of the reduced arm with resolved mesh paths and friction's coefficients, if
+    given, whose negative joint axes are turned positive, with their limits. It goes to
+    <cache_dir>/models/<hash>/, so concurrent processes with different coefficients
+    never share a path."""
     manifest = json.loads((ROOT / "models/manifest.json").read_text())
     for relative, info in manifest.items():
         path = ROOT / "models" / relative
@@ -106,7 +114,6 @@ def runtime_urdf(cache_dir, friction=None):
         if not path.is_file():
             raise FileNotFoundError(path)
         mesh.set("filename", str(path))
-    native_payload = _urdf_bytes(tree)
     signs = []
     for joint in joints:
         axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
@@ -125,17 +132,11 @@ def runtime_urdf(cache_dir, friction=None):
                 lo, hi = float(safety.get("soft_lower_limit")), float(safety.get("soft_upper_limit"))
                 safety.set("soft_lower_limit", repr(-hi))
                 safety.set("soft_upper_limit", repr(-lo))
-    gpu_payload = _urdf_bytes(tree)
-    out = Path(cache_dir) / "models" / digest(native_payload, gpu_payload) / "tiago_right_arm.urdf"
-    gpu_path = out.with_name("tiago_right_grid.urdf")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    _write_atomic(out, native_payload)
-    _write_atomic(gpu_path, gpu_payload)
-    return out, gpu_path, np.asarray(signs)
-
-
-def _urdf_bytes(tree):
-    return ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
+    payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
+    path = Path(cache_dir) / "models" / digest(payload) / "tiago_right_grid.urdf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomic(path, payload)
+    return path, np.asarray(signs)
 
 
 def _write_atomic(path, payload):

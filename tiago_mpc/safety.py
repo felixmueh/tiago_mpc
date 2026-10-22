@@ -22,10 +22,9 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from .tiago import FULL_URDF, RIGHT_ARM_JOINTS
+from .tiago import FULL_URDF, RIGHT_ARM_JOINTS, ROOT as REPO_ROOT
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_COLLISION_URDF_PATH = (
     REPO_ROOT / "models" / "safety" / "collision_alpha_wrap_a3_o25_cap001"
     / "tiago_pro_collision_alpha_wrap_a3_o25_cap001.urdf"

@@ -14,7 +14,7 @@ robot, so does the safety check.
 
 ```
 tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction laws),
-              plant_cache.py, mpc.py (MpcParams, TIAGO, MpcInProcess, MpcWorker),
+              mpc.py (MpcParams, TIAGO, plant names, MpcInProcess, MpcWorker),
               plan.py (State, Plan, Tick), laws.py, loops.py (run, guard), sim.py (SimPlant),
               robot.py (RosPlant), ros2.py (ROS 2 client), safety.py, record.py (Record)
 experiments/  reach.py, figure8.py, random100/, replay.py

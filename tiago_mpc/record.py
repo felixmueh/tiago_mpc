@@ -16,7 +16,7 @@ import subprocess
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+from .tiago import ROOT
 
 
 def _git(*args, cwd=ROOT):

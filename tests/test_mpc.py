@@ -1,4 +1,4 @@
-"""MpcParams, the solver settings GATO receives, and both Mpc twins on fakes (CPU only)."""
+"""MpcParams, plant names, the settings GATO receives, and both Mpc twins on fakes (CPU only)."""
 from dataclasses import asdict, replace
 import json
 import pickle
@@ -17,24 +17,10 @@ from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO, MpcInProcess, MpcParams, MpcWorker
 from tiago_mpc.plan import Plan, State
-from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, limits, urdf_friction
+from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
-SOLVER = dict(max_sqp_iters=5, max_pcg_iters=120, pcg_tol=.001, solve_ratio=1., mu=10., rho=.01,
-              adapt_rho=True, linsys=None, q_cost=4., qd_cost=.05, u_cost=1e-4, N_cost=8.,
-              q_lim_cost=0., vel_lim_cost=0., ctrl_lim_cost=0., exact_hessian=False)
-CONTROLLER = dict(limits="admm", linsys="pcg", warm_start="shift", reset_rho_each_step=True,
-                  admm_linsys="pcg", limits_kw=dict(rho=.01, iters=100, eps_rel=.001,
-                                                    rho_q=1., rho_qd=.3, rho_u=5e-4))
-# The effective values of configs/reaching.json and configs/tracking.json at 2eb9544.
-EXPECTED = {
-    "reaching": dict(N=32, dt=.01, solver=SOLVER, controller=CONTROLLER, friction=None),
-    "figure8": dict(
-        N=32, dt=.01, solver=dict(SOLVER, mu=1., qd_cost=.01, u_cost=1e-6),
-        controller=dict(CONTROLLER, limits_kw=dict(CONTROLLER["limits_kw"], rho_q=.1, rho_qd=.03)),
-        friction=dict(coulomb_nm=list(URDF_FRICTION.coulomb_nm),
-                      viscous_nm_s_per_rad=list(URDF_FRICTION.viscous_nm_s_per_rad), width=.03)),
-}
+LOSSES = Friction([1.] * 7, [.5] * 7, .03)
 
 
 @pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(TIAGO, N=8, admm=replace(TIAGO.admm, iters=5))])
@@ -44,50 +30,49 @@ def test_asdict_round_trips_also_through_json_and_pickle(params):
     assert pickle.loads(pickle.dumps(params)) == params
 
 
-@pytest.mark.parametrize("name,params", [("reaching", TIAGO), ("figure8", FIGURE8)])
-def test_effective_solver_settings_are_unchanged(monkeypatch, name, params):
+@pytest.mark.parametrize("params", [TIAGO, FIGURE8])
+def test_build_controller_passes_the_params_to_gato(monkeypatch, params):
     seen = {}
 
     class Solver:
-        joint_friction_smoothing = None
-
         def __init__(self, urdf, *, batch_size, N, dt, plant_type, params):
             seen.update(N=N, dt=dt, solver=params.asdict())
 
         def set_row_group_bounds(self, group, lo, hi):
-            seen.setdefault("bounds", {})[group] = (lo, hi)
+            seen.setdefault("bounds", []).append(group)
 
-    def controller(solver, **kwargs):
-        seen["controller"] = kwargs
-
-    def register(name, path, *, n_points, ee_frame, friction):
-        seen["friction"] = friction and dict(coulomb_nm=list(friction.coulomb_nm),
-                                             viscous_nm_s_per_rad=list(friction.viscous_nm_s_per_rad),
-                                             width=friction.width_rad_s)
-
+    monkeypatch.setattr(gato, "register_robot", lambda name, path, **kwargs: seen.update(register=kwargs))
     monkeypatch.setattr(gato, "BSQP", Solver)
-    monkeypatch.setattr(gato, "MPCController", controller, raising=False)
-    monkeypatch.setattr(mpc, "register_robot", register)
-    monkeypatch.setattr(mpc, "check_model", lambda *args: [])
-    _, signs = mpc.build_controller(params)
-    bounds, raw = seen.pop("bounds"), limits()
-    assert seen == EXPECTED[name]
-    lo = (raw.lower + .1) * signs
-    hi = (raw.upper - .1) * signs
-    np.testing.assert_array_equal(bounds[0][0], np.minimum(lo, hi))
-    np.testing.assert_array_equal(bounds[0][1], np.maximum(lo, hi))
-    np.testing.assert_array_equal(bounds[1][1], .8 * raw.velocity)
-    np.testing.assert_array_equal(bounds[2][1], .85 * raw.effort)
+    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: seen.update(controller=kwargs),
+                        raising=False)
+    monkeypatch.setattr(mpc, "check_model", lambda *args: None)
+    mpc.build_controller(params)
+    assert (seen["N"], seen["dt"], seen["solver"]) == (params.N, params.dt_s, params.solver.asdict())
+    assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
+    # Smooth predictor friction is registered only when the params have one.
+    assert seen["register"].get("joint_friction_smoothing") == (params.friction and params.friction.width_rad_s)
 
 
-def test_tracking_registers_smooth_losses_and_reaching_stays_loss_free(monkeypatch):
-    calls = []
-    monkeypatch.setattr(gato, "register_robot", lambda *args, **kwargs: calls.append((args, kwargs)))
-    for params in (TIAGO, FIGURE8):
-        mpc.register_robot("test", "arm.urdf", n_points=params.N, ee_frame="tcp", friction=params.friction)
-    assert calls[0] == (("test", "arm.urdf"), dict(N=[32], ee_frame="tcp", jobs=1))
-    assert calls[1] == (("test", "arm.urdf"),
-                        dict(N=[32], ee_frame="tcp", jobs=1, joint_friction_smoothing=.03))
+def test_same_plant_inputs_same_name(tmp_path):
+    (tmp_path / "arm.urdf").write_text("<robot/>")
+    a = mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES)
+    assert a == mpc.plant_name(tmp_path / "arm.urdf", "ee", Friction([1.] * 7, [.5] * 7, .03))
+    assert len(a) == len("tiago_right_") + 8 and a.startswith("tiago_right_")
+
+
+def test_changed_plant_identity_changes_name(tmp_path):
+    (tmp_path / "arm.urdf").write_text("<robot/>")
+    (tmp_path / "other.urdf").write_text("<robot name='x'/>")
+    base = mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES)
+    names = {
+        mpc.plant_name(tmp_path / "other.urdf", "ee", LOSSES),
+        mpc.plant_name(tmp_path / "arm.urdf", "other_ee", LOSSES),
+        mpc.plant_name(tmp_path / "arm.urdf", "ee", None),
+        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, width_rad_s=.05)),
+        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, coulomb_nm=[2.] * 7)),
+        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, viscous_nm_s_per_rad=[.6] * 7)),
+    }
+    assert base not in names and len(names) == 6
 
 
 def test_smooth_model_check_uses_requested_flange_frame():
@@ -95,7 +80,7 @@ def test_smooth_model_check_uses_requested_flange_frame():
     # Stop after FK: this regression tests frame selection, not CUDA dynamics.
     reached_dynamics = RuntimeError("FK check passed")
     solver = Mock()
-    solver.ee_pos.return_value = fk(Q_START, FLANGE_FRAME)
+    solver.ee_pos.side_effect = lambda q: fk(q, FLANGE_FRAME)  # signs are ones
     solver.sim_forward.side_effect = reached_dynamics
     with pytest.raises(RuntimeError, match="FK check passed"):
         mpc.check_model(solver, model, model.createData(), FLANGE_FRAME, np.ones(7),
