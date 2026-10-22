@@ -76,7 +76,9 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
   runs in real time, with `run_robot`. `--latency` charges each solve a
   fixed time in seconds (default 0) or, with `measured`, its own wall time. A
   plan takes effect at the first command tick at or after its request time plus
-  the charge; no new request is made while a plan is pending.
+  the charge; no new request is made while a plan is pending. Until the first
+  command, `SimPlant` holds its start state, as PAL's position controller holds
+  the arm until effort control starts.
 - **Rates:** `--command-period` sets the command rate, `--update-period` the
   control rate; both default to the knot interval `dt_s` (10 ms) and may differ
   from it. `--duration S` ends a run after at most S seconds.

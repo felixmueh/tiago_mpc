@@ -20,7 +20,8 @@ from .tiago import ARM_URDF, Q_START
 
 
 class SimPlant:
-    """Starts at rest in q (default: the comfortable pose) when the run starts.
+    """Starts at rest in q (default: the comfortable pose) when the run starts and stays
+    there until the first command.
 
     clock is Clock.simulation() by default; Clock.wall() runs in real time (for
     run_robot). State.t is the integrated time, in the clock's domain. model and
@@ -36,7 +37,7 @@ class SimPlant:
         self.settings = dict(friction=friction and asdict(friction), substep_s=substep, clock=self.clock.kind)
         self.q = np.array(q, dtype=float)
         self.qd = np.zeros(7) if qd is None else np.array(qd, dtype=float)
-        self.command: np.ndarray = np.zeros(7)
+        self.command: np.ndarray | None = None
 
     def start(self) -> None:
         self.t = self.clock.now()
@@ -66,7 +67,9 @@ class SimPlant:
         (apply on the simulation clock, or a deadline that apply passed on the wall clock)."""
         if t - self.t <= 1e-12:
             return
-        while self.t < t - 1e-12:
+        # No command yet: the state stays while time moves on, as the robot's onboard position
+        # controller holds the arm until the first command activates effort control.
+        while self.command is not None and self.t < t - 1e-12:
             h = min(self.substep, t - self.t)
             if self.friction is None:
                 q, qd = rk4(self.model, self.data, self.q, self.qd, self.command, h)
