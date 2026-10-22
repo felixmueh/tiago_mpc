@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the historical random100 inputs once with the current TIAGo ADMM example."""
+"""Run the historical random100 inputs once: one reach and one MPC worker per case."""
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import argparse
@@ -11,17 +11,19 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
+from experiments.reach import Reach, fk, reach
 from tiago_mpc.mpc import TIAGO
+from tiago_mpc.sim import SimPlant
 
-# The historical tasks track the flange. Each case runs reach_sim, which gets only
-# the frame (--ee-frame) and otherwise uses TIAGO, so edit both together.
-PARAMS = replace(TIAGO, ee_frame="arm_right_tool_joint")
+FLANGE = "arm_right_tool_joint"  # the historical tasks track the flange
+PARAMS = replace(TIAGO, ee_frame=FLANGE)
 
 
 def aggregate(out, rows, expected):
@@ -63,6 +65,12 @@ def main():
                 raise ValueError(f"Invalid task dimensions: {name}")
             if not np.allclose(a["reference"].reshape(32, 6)[:, :3], a["target_xyz"], atol=1e-6):
                 raise ValueError(f"Nonconstant or inconsistent position target: {name}")
+            if not np.allclose(a["target_xyz"], fk(a["source_goal_q"], FLANGE), atol=1e-5, rtol=1e-4):
+                raise ValueError(f"Target differs from the goal posture's flange position: {name}")
+            # The historical seed matches the state-hold, zero-torque warm start.
+            if not np.allclose(a["first_seed"].ravel(), np.tile(np.r_[a["initial_state"], np.zeros(7)], 32)[:-7],
+                               atol=1e-6):
+                raise ValueError(f"Frozen task seed differs from the state-hold warm start: {name}")
     config = dict(input_source_commit=manifest["source_commit"], task_ids=ids,
                   end_effector_frame=PARAMS.ee_frame,
                   application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
@@ -90,25 +98,22 @@ def main():
     rows = []
     for index, task in enumerate(ids):
         case = out / f"pair_{task:05d}"
-        cmd = [sys.executable, str(ROOT / "examples/reach_sim.py"), "--input",
-               str(out / "inputs" / f"random_{task:05d}.npz"), "--output", str(case)]
-        cmd.extend(["--ee-frame", config["end_effector_frame"]])
+        with np.load(out / "inputs" / f"random_{task:05d}.npz") as a:
+            x0, target = a["initial_state"], tuple(map(float, a["target_xyz"]))
         start = time.perf_counter()
-        with (out / f"pair_{task:05d}.log").open("w") as log:
-            try:
-                rc = subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, timeout=180).returncode
-            except subprocess.TimeoutExpired:
-                rc = 124
+        try:
+            reach(SimPlant(x0[:7], x0[7:], substep=.003), task=Reach(target, ee_frame=FLANGE),
+                  params=PARAMS, out=case)
+        except Exception:
+            traceback.print_exc()
         path = case / "summary.json"
-        row = json.loads(path.read_text()) if path.exists() else dict(status="execution_error", error="Process returned without summary")
-        if row.get("status") in ("started", "building_model", "checking_model", "running"):
-            row.update(status="execution_error", error=f"Process interrupted/aborted, exit {rc}")
-        row.update(task_id=task, process_returncode=rc, wall_s=time.perf_counter()-start, output=str(case))
+        row = json.loads(path.read_text()) if path.exists() else dict(status="error", error="no summary")
+        row.update(task_id=task, wall_s=time.perf_counter()-start, output=str(case))
         rows.append(row)
         counts = aggregate(out, rows, len(ids))
         print(f"{index+1}/{len(ids)} id={task}: {row['status']}, limits={row.get('limits_pass')}; "
               f"arrivals={counts['arrivals']} valid={counts['valid_arrivals']} errors={counts['execution_errors']}", flush=True)
-        if row.get("execution_stage") != "episode":
+        if not row.get("ticks"):
             print("Shared setup failure: remaining tasks held. See case log.", flush=True)
             return 2
     print(json.dumps(dict(output=str(out), counts=counts), indent=2), flush=True)

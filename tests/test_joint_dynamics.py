@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from tiago_mpc.joint_dynamics import model_receipt, register_robot
-from tiago_mpc.mpc import FIGURE8, TIAGO
+from experiments.figure8 import FIGURE8
+from tiago_mpc.mpc import TIAGO
 
 
 def test_tracking_registers_smooth_losses_and_reaching_stays_loss_free(monkeypatch):

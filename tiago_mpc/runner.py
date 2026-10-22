@@ -17,6 +17,7 @@ import time
 import numpy as np
 
 from .laws import sample_knot
+from .loops import guard
 from .mpc import MpcWorker
 from .plan import State
 from .ros2 import RIGHT_ARM_JOINTS, TiagoRightArmClient
@@ -32,7 +33,6 @@ class RunnerConfig:
     startup_timeout_sec: float = 180.0
     service_timeout_sec: float = 0.5
     duration_sec: float = 8.0
-    position_tolerance_m: float = 0.05
     speed_l1_tolerance_rad_s: float = 1.0
     start_tolerance_rad: float = 0.05
     body_drift_tolerance_rad: float = 0.02
@@ -123,13 +123,8 @@ class RuntimeGuard:
         return t0 + min(self.config.command_timeout_sec, self.knots * self.dt_s)
 
     def command(self, plan, now):
-        """Torque due at ``now`` while the plan's lease lasts."""
-        if now >= self.lease_end(plan.t0):
-            raise RuntimeError("MPC command lease expired")
-        torque = sample_knot(plan, now, None)
-        if torque.shape != (7,) or not np.isfinite(torque).all() or np.any(np.abs(torque) > self.effort):
-            raise RuntimeError("invalid MPC torque or raw effort limit exceeded")
-        return torque.copy()
+        """Torque due at ``now`` while the plan's lease lasts (loops.guard)."""
+        return guard(sample_knot(plan, now, None), plan, now, self.effort).copy()
 
 
 def _json(value):
@@ -188,7 +183,7 @@ class RosMpcRunner:
             ["git", "status", "--porcelain"], cwd=root, text=True).strip())
         source = output / "source"
         source.mkdir()
-        for name in ("runner.py", "protocol.py", "plan.py", "laws.py", "ros2.py", "model_runtime.py", "mpc.py", "joint_dynamics.py", "safety.py"):
+        for name in ("runner.py", "loops.py", "plan.py", "laws.py", "ros2.py", "model_runtime.py", "mpc.py", "joint_dynamics.py", "safety.py"):
             shutil.copyfile(root / "tiago_mpc" / name, source / name)
         arm = monitor = mpc = None
         mode_attempted = False
@@ -239,6 +234,7 @@ class RosMpcRunner:
             next_solve = task_start
             next_io = task_start
             pending = current = None  # the requested state (ArmState) and the plan in use
+            pending_elapsed = None  # the task time of the requested state
             request_id = 0
             last_request_seq = -1
             stopping = False
@@ -284,11 +280,7 @@ class RosMpcRunner:
                     raise RuntimeError("pending MPC solve exceeded the command deadline")
                 plan = mpc.result()  # raises on an error reply or a dead worker
                 if plan is not None:
-                    source_speed = float(np.sum(np.abs(pending.qd)))
-                    arrived = (self.task.kind == "reach"
-                               and plan.stats.get("position_error_m", math.inf)
-                               <= self.config.position_tolerance_m
-                               and source_speed <= self.config.speed_l1_tolerance_rad_s
+                    arrived = (self.task.done(pending, pending_elapsed)
                                and np.sum(np.abs(state.qd)) <= self.config.speed_l1_tolerance_rad_s)
                     if arrived:
                         summary["status"] = "arrived"
@@ -331,7 +323,7 @@ class RosMpcRunner:
                 if elapsed < 0:
                     raise RuntimeError("ROS task clock reset")
                 if now - task_start >= self.config.duration_sec:
-                    summary["status"] = "completed" if self.task.kind == "figure8" else "timeout"
+                    summary["status"] = "completed" if self.task.done(state, elapsed) else "timeout"
                     stopping = True
                 # One solve per knot, at the command tick nearest each knot boundary,
                 # and at most one per tick (command period longer than the knots: every tick).
@@ -344,8 +336,8 @@ class RosMpcRunner:
                     # The plan starts at the state's receipt time.
                     mpc.request(State(state.received_monotonic_sec, state.q, state.qd,
                                       state.joint_positions, state.joint_velocities),
-                                self.task.horizon(elapsed, mpc.N, mpc.dt))
-                    pending, last_request_seq = state, state.seq
+                                self.task.reference(elapsed, mpc.N, mpc.dt))
+                    pending, pending_elapsed, last_request_seq = state, elapsed, state.seq
                     record("request", request_id=request_id, source_seq=state.seq,
                            source_stamp_sec=state.stamp_sec, q=state.q, qd=state.qd,
                            task_elapsed_sec=elapsed, deadline=guard.lease_end(state.received_monotonic_sec))

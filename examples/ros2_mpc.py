@@ -11,12 +11,15 @@ from pathlib import Path
 import signal
 import sys
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "external/gato/python"))
 
-from tiago_mpc.mpc import FIGURE8, TIAGO
-from tiago_mpc.protocol import TaskReference
+from experiments.figure8 import FIGURE8, Figure8
+from experiments.reach import Reach
+from tiago_mpc.mpc import TIAGO
 from tiago_mpc.ros2 import TiagoRightArmClient
 from tiago_mpc.runner import RosMpcRunner, RunnerConfig
 
@@ -39,7 +42,11 @@ def main(argv=None):
         parser.error("--execute requires an explicit --target in the torso-root frame")
     try:
         config = replace(DEFAULT_RUNNER, duration_sec=args.duration)
-        task = TaskReference(tuple(args.target or (0., 0., 0.)), kind=args.task)
+        task = Figure8() if args.task == "figure8" else Reach()
+        if args.target is not None:
+            if not np.isfinite(args.target).all():
+                raise ValueError("--target must be finite")
+            task = replace(task, **{"start_m" if args.task == "figure8" else "target_m": tuple(args.target)})
         params = replace(FIGURE8 if args.task == "figure8" else TIAGO,
                          budget_s=None if args.budget_ms is None else args.budget_ms / 1000.)
     except (ValueError, OSError, TypeError) as exc:

@@ -7,7 +7,7 @@ share one interface: request(state, reference, updates=None), result(block=False
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 import math
 import multiprocessing as mp
 import os
@@ -18,8 +18,8 @@ import sys
 from gato import SolverParams
 import numpy as np
 
-from .joint_dynamics import Friction, register_robot, urdf_friction
-from .model_runtime import EE_FRAME, check_model, ee_position, runtime_urdf
+from .joint_dynamics import Friction, register_robot
+from .model_runtime import EE_FRAME, check_model, runtime_urdf
 from .plan import Plan
 from .plant_cache import cache_root, plant_name
 
@@ -74,9 +74,6 @@ class MpcParams:
 
 
 TIAGO = MpcParams()
-# The figure-eight protocol; moves to experiments/figure8.py in step 3.
-FIGURE8 = replace(TIAGO, dt_s=.01, solver=TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
-                  admm=replace(TIAGO.admm, rho_q=.1, rho_qd=.03), friction=urdf_friction(.03))
 
 
 def set_bounds(solver, model, signs, params):
@@ -192,7 +189,6 @@ class MpcInProcess:
         setup = build_controller(params)
         self.params, self.N, self.dt = params, params.N, params.dt_s
         self.controller, self.signs, self.details = setup.controller, setup.signs, setup.details
-        self._fk = lambda q: ee_position(setup.model, setup.data, q, setup.frame_id)
         self._previous_t = self._plan = None
 
     def request(self, state, reference, updates=None):
@@ -235,10 +231,7 @@ class MpcInProcess:
             admm=int(np.sum(raw.admm_iters)) if raw.admm_iters is not None else 0,
             admm_linsys=int(np.sum(raw.admm_linsys_iters)) if raw.admm_linsys_iters is not None else 0,
             admm_linsys_mode=step.admm_linsys,
-            row_viol=None if step.row_viol is None else np.array(step.row_viol),
-            # The ROS runner's arrival check; moves to the task with the loop.
-            position_error_m=float(np.linalg.norm(
-                self._fk(q) - np.asarray(reference).reshape(self.N, 6)[0, :3])))
+            row_viol=None if step.row_viol is None else np.array(step.row_viol))
         return Plan(state.t, self.dt, knots[:, :14] * state_signs, knots[:-1, 14:] * self.signs, stats)
 
 

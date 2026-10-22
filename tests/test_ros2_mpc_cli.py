@@ -45,7 +45,8 @@ def test_task_selects_its_mpc_parameters_before_ros(cli, monkeypatch, name):
     monkeypatch.setattr(cli, "RosMpcRunner", Runner)
     assert cli.main(["--task", name, "--target", ".3", "-.2", ".1"]) == 0
     task, params = started[0]
-    assert task.kind == name and task.target_xyz_m == (.3, -.2, .1)
+    assert type(task).__name__ == {"reach": "Reach", "figure8": "Figure8"}[name]
+    assert (task.start_m if name == "figure8" else task.target_m) == (.3, -.2, .1)
     assert params == (cli.FIGURE8 if name == "figure8" else cli.TIAGO)
 
 

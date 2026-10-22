@@ -1,4 +1,4 @@
-"""The plant's state and the MPC's plan, shared by the simulation loops and the ROS runner.
+"""The plant's state, the MPC's plan and the loop's tick.
 
 A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
 (native coordinates), its knot interval dt and its start time t0: the time of
@@ -59,19 +59,12 @@ class Plan:
             raise ValueError("time precedes the plan's state or is not finite")
         return math.floor(offset_s / self.dt + _KNOT_TOLERANCE)
 
-    def controls_over(self, begin_s: float, span_s: float):
-        """(torque, duration) pieces over offsets [begin_s, begin_s + span_s), split at knots.
 
-        Raises PlanEnded if the span reaches past the plan's last knot.
-        """
-        if span_s <= 0:
-            return []
-        end = begin_s + span_s
-        k, position, out = self.index(begin_s), begin_s, []
-        while k < len(self.torques):
-            boundary = (k + 1) * self.dt
-            if boundary >= end - _KNOT_TOLERANCE * self.dt:
-                return out + [(self.torques[k], end - position)]
-            out.append((self.torques[k], boundary - position))
-            position, k = boundary, k + 1
-        raise PlanEnded("span reaches past the plan's last knot")
+@dataclass(frozen=True)
+class Tick:
+    """What callbacks see once per command tick: command is None before the first plan
+    and on the last tick; new marks the tick at which the plan took effect."""
+    state: State
+    command: np.ndarray | None
+    plan: Plan | None
+    new: bool

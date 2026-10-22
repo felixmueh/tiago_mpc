@@ -38,7 +38,8 @@ def main():
         task = row["task_id"]
         file = out / "inputs" / f"random_{task:05d}.npz"
         with np.load(file) as inputs, np.load(out / f"pair_{task:05d}/trajectory.npz") as raw:
-            t, x, u = raw["time_s"], raw["state"], raw["applied_torque_nm"]
+            # The command sent at each tick but the last; NaN: none sent yet (zero torque held).
+            t, x, u = raw["time_s"], raw["state"], np.nan_to_num(raw["command"][:-1])
             if len(t) == 0 or x.shape != (len(t), 14) or len(u) != len(t)-1:
                 raise ValueError(f"Incomplete/invalid trajectory arrays: {task}")
             if not np.allclose(x[0], inputs["initial_state"], atol=1e-12):
@@ -65,23 +66,22 @@ def main():
                     first[label] = dict(time_s=float(ts[i]), joint=int(j+1), excess=float(a[i, j]))
             audits.append(dict(task_id=task, status=row["status"], reached=bool(row.get("reached")),
                                full_limit_pass=actual_pass, max_excess=maxima,
-                               first_violations=first, plant_samples=len(t),
+                               first_violations=first, command_ticks=len(t),
                                final_error_mm=1000*float(raw["distance_m"][-1])))
-            native_us.extend(raw["solve_time_us"].tolist())
-            wall_s.extend(raw["controller_wall_s"].tolist())
-        work = json.loads((out / f"pair_{task:05d}/solve_work.json").read_text())
-        for w in work:
+            native_us.extend(raw["plan_solve_time_us"].tolist())
+            wall_s.extend(raw["plan_wall_s"].tolist())
             for key in ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows"):
-                total_work[key] += w[key]
-            inner_modes[w["admm_linsys_mode"]] += 1
+                total_work[key] += int(raw[f"plan_{key}"].sum())
+            inner_modes.update(raw["plan_admm_linsys_mode"].tolist())
     arrivals = [r for r in rows if r.get("reached")]
     valid = [r for r in arrivals if r.get("limits_pass")]
     first = rows[0]
-    setting_line = (f"N{first['N']}, B1, {1000*first['dt_s']:g} ms feedback/knots, "
-                    f"{1000*first['sim_dt_s']:g} ms Pinocchio RK4, "
-                    f"SQP{first['params']['solver']['max_sqp_iters']}/PCG{first['params']['solver']['max_pcg_iters']}, "
-                    f"{(first['N']-1)*first['dt_s']:.3g} s preview, "
-                    f"terminal weight {first['params']['solver']['N_cost']:g}, {first['timeout_s']:g} simulated seconds.")
+    params = first["params"]
+    setting_line = (f"N{params['N']}, B1, {1000*params['dt_s']:g} ms feedback/knots, "
+                    f"{1000*first['plant']['substep_s']:g} ms Pinocchio RK4, "
+                    f"SQP{params['solver']['max_sqp_iters']}/PCG{params['solver']['max_pcg_iters']}, "
+                    f"{(params['N']-1)*params['dt_s']:.3g} s preview, "
+                    f"terminal weight {params['solver']['N_cost']:g}, {first['task']['timeout_s']:g} simulated seconds.")
     admm_settings = first["params"]["admm"]
     bound_settings = {k: first["params"][k] for k in ("joint_margin_rad", "velocity_fraction", "effort_fraction")}
     result = dict(counts=saved["counts"], raw_audit_cases=len(audits),
@@ -112,7 +112,7 @@ def main():
     axes[1].axhline(50, color="gray", ls="--", label="50 mm arrival threshold")
     axes[1].set(xlabel="Frozen task order", ylabel="Final position error (mm)", yscale="log")
     axes[1].legend()
-    fig.suptitle(f"Frozen random100 — ADMM, N{first['N']}, SQP{first['params']['solver']['max_sqp_iters']}, {1000*first['dt_s']:g} ms fixed clock")
+    fig.suptitle(f"Frozen random100 — ADMM, N{params['N']}, SQP{params['solver']['max_sqp_iters']}, {1000*params['dt_s']:g} ms fixed clock")
     fig.tight_layout(); fig.savefig(out / "overview.png", dpi=160); fig.savefig(out / "overview.pdf")
     counts = result["counts"]
     from matplotlib.backends.backend_pdf import PdfPages
@@ -174,7 +174,7 @@ This is a new cohort, not an isolated test of ADMM or an exact historical
 reproduction. Arrival stops each successful episode, so this does not establish
 post-arrival settling. Native/controller timings are diagnostic, not a quiet
 before/after performance comparison. The saved raw histories include every
-plant sample, torque, solve timing, SQP/PCG/ADMM work and predicted violation.
+command tick, torque, solve timing, SQP/PCG/ADMM work and predicted violation.
 No KKT residual gate or solver repair was used.
 
 Regenerate from this repository:

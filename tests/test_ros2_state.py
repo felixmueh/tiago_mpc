@@ -192,14 +192,21 @@ def test_bad_durations_and_nonfinite_commands_are_rejected(transport, bad):
     assert not transport.publications[0][1] and not transport.publications[1][1]
 
 
-def test_optional_ros_import_does_not_require_ros():
-    # The runner holds MpcParams (gato's SolverParams), so it imports gato's Python
-    # package; the CUDA build and solves stay in the MPC worker process.
+def test_loop_process_imports_no_ros_compiled_gato_or_pinocchio_for_the_mpc():
+    # The loop process holds MpcParams (gato's SolverParams), so it imports gato's
+    # Python package; the CUDA build and solves stay in the MPC worker process.
+    # Only the simulated plant loads Pinocchio.
     import subprocess
     from pathlib import Path
     result = subprocess.run([sys.executable, '-c',
-        'import sys; import tiago_mpc.ros2, tiago_mpc.runner; '
-        'assert "rclpy" not in sys.modules'],
+        'import sys\n'
+        'import tiago_mpc.ros2, tiago_mpc.runner, tiago_mpc.loops, tiago_mpc.mpc, tiago_mpc.record\n'
+        'import tiago_mpc.plan, tiago_mpc.laws\n'
+        'assert "rclpy" not in sys.modules and "pinocchio" not in sys.modules\n'
+        'import tiago_mpc.sim\n'
+        'compiled = [m for m, v in list(sys.modules.items())\n'
+        '            if str(getattr(v, "__file__", "")).endswith(".so") and "gato" in str(v.__file__).lower()]\n'
+        'assert not compiled, compiled'],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 

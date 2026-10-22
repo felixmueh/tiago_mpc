@@ -1,22 +1,105 @@
-"""Lightweight experiment export helpers; NumPy and standard library only.
+"""Record: a callback that buffers each command tick in memory; save() writes the run.
 
-save_replay writes the visualizer's portable NPZ v1 directly from native q
-samples. It does not import or run GATO, Pinocchio, or the visualizer.
+- summary.json: commit and source status, status, parameters, plant model, task,
+  and what the experiment adds to record.summary;
+- trajectory.npz: per command tick the time, state and command (NaN: none sent);
+  per plan (plan_*) its start time, knots and solve stats; plus record.arrays;
+- replay.npz: the visualizer's replay (save_replay, NumPy and standard library only).
 """
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime, timezone
 import hashlib
+import importlib.metadata
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 
 import numpy as np
 
+ROOT = Path(__file__).resolve().parents[1]
 FORMAT = "tiago-replay"
 VERSION = 1
 JOINT_NAMES = tuple(f"arm_right_{i}_joint" for i in range(1, 8))
-DEFAULT_MODEL = Path(__file__).resolve().parents[1] / "models/tiago_pro/tiago_pro.urdf"
+DEFAULT_MODEL = ROOT / "models/tiago_pro/tiago_pro.urdf"
+
+
+def _git(*args, cwd=ROOT):
+    return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+
+
+class Record:
+    """Record(out, task, params, plant); out=None is _expr_data/<task>/<UTC time>."""
+
+    def __init__(self, out, task, params, plant):
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        self.out = Path(out) if out else ROOT / "_expr_data" / type(task).__name__.lower() / stamp
+        self.out.mkdir(parents=True, exist_ok=False)
+        self.task, self.params, self.plant = task, params, plant
+        self.ticks, self.arrays = [], {}
+        self.summary = dict(
+            status="running", repository_commit=_git("rev-parse", "HEAD"),
+            repository_status=_git("status", "--short"),
+            gato_commit=_git("rev-parse", "HEAD", cwd=ROOT / "external/gato"),
+            versions={k: importlib.metadata.version(k) for k in ("gato-mpc", "grid-rbd", "pin", "numpy")},
+            params=asdict(params), plant=dict(type=type(plant).__name__, **plant.settings),
+            task=dict(type=type(task).__name__, **asdict(task)))
+
+    def __call__(self, tick):
+        self.ticks.append(tick)
+
+    def trajectory(self):
+        """The buffered ticks as arrays; times from the first tick."""
+        ticks = self.ticks
+        t0 = ticks[0].state.t if ticks else 0.
+        plans = [k.plan for k in ticks if k.new]
+        out = dict(time_s=np.array([k.state.t - t0 for k in ticks]),
+                   state=np.array([np.r_[k.state.q, k.state.qd] for k in ticks]).reshape(-1, 14),
+                   command=np.array([np.full(7, np.nan) if k.command is None else k.command
+                                     for k in ticks]).reshape(-1, 7),
+                   plan_t0_s=np.array([p.t0 - t0 for p in plans]),
+                   plan_states=np.array([p.states for p in plans]),
+                   plan_torques=np.array([p.torques for p in plans]))
+        for key in (plans[0].stats if plans else ()):
+            values = [p.stats[key] for p in plans]
+            if all(v is not None for v in values):
+                out[f"plan_{key}"] = np.asarray(values)
+        return out
+
+    def save(self):
+        trajectory = self.trajectory()
+        np.savez_compressed(self.out / "trajectory.npz", **trajectory, **self.arrays)
+        self.summary.update(ticks=len(self.ticks), plans=len(trajectory["plan_t0_s"]))
+        (self.out / "summary.json").write_text(json.dumps(self.summary, indent=2, default=_json) + "\n")
+        if len(self.ticks) >= 2:
+            self._replay(trajectory)
+
+    def _replay(self, trajectory):
+        time_s, state, command = trajectory["time_s"], trajectory["state"], trajectory["command"]
+        sent = np.isfinite(command).all(axis=1)
+        dt, n = self.params.dt_s, self.params.N
+        plans = [dict(origin_time_s=float(t0), time_s=np.arange(n) * dt, q=states[:, :7],
+                      qd_rad_s=states[:, 7:], torque_nm=torques, torque_time_s=np.arange(n - 1) * dt)
+                 for t0, states, torques in zip(trajectory["plan_t0_s"], trajectory["plan_states"],
+                                                trajectory["plan_torques"])]
+        save_replay(self.out / "replay.npz", time_s=time_s, q=state[:, :7], qd_rad_s=state[:, 7:],
+                    joint_names=JOINT_NAMES, time_basis=self.plant.settings["clock"],
+                    torque_nm=command[sent] if sent.any() else None,
+                    torque_time_s=time_s[sent] if sent.any() else None,
+                    reference_xyz_m=np.array([self.task.reference(t, 2, dt)[0, :3] for t in time_s]),
+                    reference_time_s=time_s, reference_frame="torso_lift_link", plans=plans,
+                    end_effector_frame=self.params.ee_frame, label=self.out.name)
+
+
+def _json(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(type(value).__name__)
 
 
 def model_sha256(model_urdf):

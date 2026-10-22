@@ -11,7 +11,8 @@ import numpy as np
 import pytest
 
 from tiago_mpc import mpc
-from tiago_mpc.mpc import FIGURE8, TIAGO, MpcInProcess, MpcParams, MpcWorker
+from experiments.figure8 import FIGURE8
+from tiago_mpc.mpc import TIAGO, MpcInProcess, MpcParams, MpcWorker
 from tiago_mpc.plan import Plan, State
 
 URDF_COULOMB = [1.66, 1.15, 1.16, 0.912, 1.25, 0.473, 0.56]
@@ -136,7 +137,6 @@ def controller(monkeypatch):
     details = dict(N=N, dt_s=DT, effort_limits=[EFFORT] * 7)
     monkeypatch.setattr(mpc, "build_controller", lambda params: NS(
         controller=controller, model=None, data=None, frame_id=None, signs=SIGNS, details=details))
-    monkeypatch.setattr(mpc, "ee_position", lambda model, data, q, frame_id: q[:3])
     return controller
 
 
@@ -156,7 +156,6 @@ def test_native_coordinates_cross_only_the_gpu_boundary(controller):
     np.testing.assert_array_equal(plan.states, [(k + 1) * x for k in range(N)])
     np.testing.assert_array_equal(plan.torques, [(np.arange(7.) + k) * SIGNS for k in range(N - 1)])
     assert plan.stats["sqp"] == 2 and plan.stats["pcg"] == 3 and plan.stats["zero_pcg_rows"] == 1
-    assert plan.stats["position_error_m"] == pytest.approx(np.linalg.norm(item.q[:3] - REFERENCE[0, :3]))
     assert m.result() is None  # one plan per request
 
 

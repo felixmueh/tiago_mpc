@@ -10,7 +10,6 @@ import pytest
 from tiago_mpc import runner as r
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.plan import Plan
-from tiago_mpc.protocol import TaskReference
 from tiago_mpc.ros2 import ArmState, RIGHT_ARM_JOINTS
 
 
@@ -129,8 +128,7 @@ def make_rig(monkeypatch, config=r.RunnerConfig()):
         def request(self, state, reference, updates=None):
             assert self.reply is None, "one request at a time"
             requests.append(state)
-            arrived = faults.already_arrived or (len(requests) > 1 and not faults.never_arrive)
-            self.reply = None if faults.hang else plan_from(state.t, position_error_m=0. if arrived else .1)
+            self.reply = None if faults.hang else plan_from(state.t)
         def result(self, block=False):
             if self.dead:
                 raise RuntimeError("MPC worker exited unexpectedly: 9")
@@ -143,10 +141,20 @@ def make_rig(monkeypatch, config=r.RunnerConfig()):
             if faults.close:
                 raise RuntimeError("close failed")
 
+    @dataclass(frozen=True)
+    class Task:
+        """A reach that arrives with the second plan (the first if already arrived)."""
+        def reference(self, t, n, dt):
+            return np.zeros((n, 6), dtype=np.float32)
+
+        def done(self, s, t):
+            arrived = faults.already_arrived or (len(requests) > 1 and not faults.never_arrive)
+            return arrived and np.abs(s.qd).sum() <= 1.
+
     # Geometry and real process checks have their own tests. This fixture
     # deliberately replaces only the boundary conversion to avoid Pinocchio.
     monkeypatch.setattr(r, "safety_state", lambda snapshot: snapshot)
-    runner = r.RosMpcRunner(config, TaskReference((.6, .1, .2)), TIAGO,
+    runner = r.RosMpcRunner(config, Task(), TIAGO,
         SafetySettings(), arm_factory=lambda: arm, monitor_factory=lambda **kw: monitor,
         mpc_factory=Mpc, clock=clock, sleep=clock.sleep)
     return NS(runner=runner, clock=clock, arm=arm, monitor=monitor, ctx=ctx,
@@ -243,7 +251,7 @@ def test_handback_failure_is_reported(rig, tmp_path):
 def test_safety_cannot_be_disabled_or_monitor_a_different_arm():
     for safety in (SafetySettings(False), SafetySettings(True, ("arm_left_1_joint",))):
         with pytest.raises(ValueError):
-            r.RosMpcRunner(r.RunnerConfig(), TaskReference((0., 0., 0.)), TIAGO, safety)
+            r.RosMpcRunner(r.RunnerConfig(), None, TIAGO, safety)
 
 
 def test_guards_check_source_velocity_expiry_torque_and_body_motion(rig):
@@ -268,25 +276,6 @@ def test_guards_check_source_velocity_expiry_torque_and_body_motion(rig):
 def test_uncontrolled_nonfinite_metadata_can_be_logged_without_relaxing_control_checks():
     assert r._log_values({"wheel": float("nan")}) == {"wheel": None}
     json.dumps(r._log_values({"wheel": np.float32("nan")}), allow_nan=False)
-
-
-def test_tracking_reference_includes_edge_clearance():
-    task = TaskReference((.3, -.2, .1), kind="figure8")
-    assert (task.x_span_m, task.y_amplitude_m, task.edge_clearance_m, task.period_s) == (.28, .09, .02, 24.)
-    times = 1.3 + np.arange(7)*.002
-    phase = 2*np.pi*times/task.period_s
-    expected = np.tile(task.target_xyz_m, (len(times), 1))
-    expected[:, 0] += task.edge_clearance_m + .5*task.x_span_m*(1-np.cos(phase))
-    expected[:, 1] += task.y_amplitude_m*np.sin(2*phase)
-    np.testing.assert_allclose(task.horizon(1.3, 7, .002)[:, :3], expected, atol=2e-8)
-
-
-def test_reference_phase_is_time_based_and_orientation_unconstrained():
-    ref = TaskReference((.5, .1, .2), kind="figure8")
-    # Default shape: 2 cm edge clearance, 28 cm x span.
-    assert ref.horizon(0., 2, .01)[0, 0] == pytest.approx(.52)
-    assert ref.horizon(6., 2, .01)[0, 0] == pytest.approx(.66)
-    assert np.all(ref.horizon(6., 2, .01)[:, 3:] == 0)
 
 
 @pytest.mark.parametrize("command_s,dt_s", [(.002, .01), (.01, .002)])
@@ -325,5 +314,5 @@ def test_lease_ends_no_later_than_the_plan(rig, monkeypatch):
     plan = plan_from(snapshot.received_monotonic_sec)
     assert guard.lease_end(plan.t0) - plan.t0 == pytest.approx(.062)
     np.testing.assert_array_equal(guard.command(plan, plan.t0 + .0611), knot_plan()[30])
-    with pytest.raises(RuntimeError, match="expired"):
+    with pytest.raises(RuntimeError, match="past the plan's last knot|expired"):
         guard.command(plan, plan.t0 + .062)
