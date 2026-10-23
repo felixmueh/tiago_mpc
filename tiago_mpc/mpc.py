@@ -25,7 +25,7 @@ import numpy as np
 
 from .dynamics import Friction, passive_torque
 from .plan import Plan, State
-from .tiago import ARM_URDF, GRASP_FRAME, Q_REACH, Q_START, ROOT, digest, fk, limits, runtime_urdf
+from .tiago import ARM_URDF, GRASP_FRAME, Q_REACH, Q_START, ROOT, digest, fk, runtime_urdf
 
 
 @dataclass(frozen=True)
@@ -269,15 +269,14 @@ def _known(updates):
 
 
 def _checked(mpc, plan, t):
-    """Any knot may be commanded before the plan's lease ends, so every knot is checked."""
+    """The plan answers the request, is well formed and finite; effort is run's check."""
     if plan.t0 != t:
         raise RuntimeError("MPC result does not match the request")
     if plan.dt != mpc.dt:
         raise RuntimeError("MPC plan has an unexpected knot interval")
     if (plan.states.shape != (mpc.N, 14) or plan.torques.shape != (mpc.N - 1, 7)
-            or not np.isfinite(plan.states).all() or not np.isfinite(plan.torques).all()
-            or np.any(np.abs(plan.torques) > limits().effort)):
-        raise RuntimeError("invalid MPC plan or raw effort limit exceeded")
+            or not np.isfinite(plan.states).all() or not np.isfinite(plan.torques).all()):
+        raise RuntimeError("invalid MPC plan")
     return plan
 
 

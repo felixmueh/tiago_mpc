@@ -302,7 +302,14 @@ def test_a_request_raises_while_the_previous_plan_is_unread(controller):
     assert [event[0] for event in controller.events] == ["reset", "step", "step"]
 
 
-@pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite", "effort"])
+def test_a_plan_above_the_raw_effort_limit_is_returned(controller):
+    controller.torque = np.full(7, 100.)  # the execution side checks effort (loops.checked)
+    m = Mpc(PARAMS, BINARY)
+    m.request(state(), REFERENCE)
+    assert np.all(np.abs(m.result().torques) > 26.)
+
+
+@pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite"])
 def test_every_knot_is_checked(controller, bad):
     m = Mpc(PARAMS, BINARY)
     fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)))
@@ -311,8 +318,6 @@ def test_every_knot_is_checked(controller, bad):
         fields.update(states=np.zeros((N + 1, 14)), torques=np.ones((N, 7)))
     elif bad in ("t0", "dt"):
         fields[bad] += .001
-    elif bad == "effort":
-        fields["torques"][-1, 3] = 26.1  # only the last knot exceeds joint 4's raw effort limit
     plan = Plan(**fields)
     if bad == "nonfinite":  # only an unpickled plan skips Plan's own check
         object.__setattr__(plan, "torques", np.full((N - 1, 7), np.nan))

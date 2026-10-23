@@ -45,10 +45,12 @@ class Plant:
 
 
 class Mpc:
-    """Plans whose knot k has torque k + 1. delay: result() calls before a reply;
-    replies: how many requests get one (later ones hang)."""
-    def __init__(self, N=11, dt=.01, delay=0, replies=math.inf, wall=0.):
-        self.params, self.N, self.dt = None, N, dt
+    """Plans whose knot k has torque k + 1 on joint 1 and 1 on the others (within the
+    raw effort limits for N <= 43). delay: result() calls before a reply;
+    replies: how many requests get one (later ones hang); over: the request whose
+    plan has 0 on joint 2 and its last knot above joint 7's raw effort limit (26 Nm)."""
+    def __init__(self, N=11, dt=.01, delay=0, replies=math.inf, wall=0., over=None):
+        self.params, self.N, self.dt, self.over = None, N, dt, over
         self.delay, self.replies, self.wall = delay, replies, wall
         self.warmups, self.requests, self.waiting, self.dead = [], [], None, False
 
@@ -71,7 +73,10 @@ class Mpc:
             self.waiting[0] -= 1
             return None
         t, self.waiting = self.waiting[1], None
-        torques = np.arange(1., self.N)[:, None] * np.ones(7)
+        torques = np.ones((self.N - 1, 7))
+        torques[:, 0] = np.arange(1., self.N)
+        if len(self.requests) == self.over:
+            torques[:, 1], torques[-1, 6] = 0., 26.1
         return Plan(t, self.dt, np.zeros((self.N, 14)), torques, dict(wall_s=self.wall))
 
     def close(self):
@@ -270,6 +275,18 @@ def test_task_updates_reach_the_request_and_the_schedule_sets_the_control_rate()
 def test_schedule_skips_missed_slots():
     due = Schedule(.01)
     assert [due(t) for t in (5., 5.004, 5.01, 5.035, 5.039, 5.04)] == [True, False, True, True, False, True]
+
+
+@pytest.mark.parametrize("loop, latency", [(run_simulation, Fixed()), (run_simulation, Fixed(.02)),
+                                           (run_robot, None)])
+def test_a_plan_above_the_raw_effort_limit_raises_before_any_of_its_knots_is_commanded(loop, latency):
+    """Only plan 2's last knot is over the limit; the run stops on its arrival."""
+    kw = {} if latency is None else dict(latency=latency)
+    mpc, plant = Mpc(delay=1, over=2), Plant(kind="wall" if loop is run_robot else "simulation")
+    with pytest.raises(RuntimeError, match="raw effort limit"):
+        go(mpc, loop=loop, plant=plant, **kw)
+    assert len(mpc.requests) == 2 and mpc.waiting is None and plant.calls[-1] == "stop"
+    assert all(command[1] == 1. for _, command in plant.applied)  # plan 2 is never commanded
 
 
 def test_guard_rejects_nonfinite_and_excess_commands():

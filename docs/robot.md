@@ -51,8 +51,8 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 | `RosPlant(...)` | refuses a disabled safety worker or one monitoring other joints than the right arm |
 | `RosPlant.start()` | first state within 180 s; safety worker started with it; PAL's `arm_right_controller` active (existing effort control is not adopted; mixed or unknown arm owners are rejected); with `execute`, the effort controller loaded and configured; then a newer state passes `state()`'s checks, lies within 0.05 rad of the comfortable pose at joint-speed L1 ≤ 1 rad/s, and the safety worker has checked it |
 | `RosPlant.state()` | receipt age ≤ 100 ms; finite stamp; seven finite q, qd within the URDF position and speed limits; sequence never reversed; a new sample has a later ROS stamp (a clock reset faults); full named body state; every other body joint within 0.02 rad (torso 5 mm) of its start value; the state goes to the safety worker, whose faults latch |
-| loop (`run`) | `plant.start()` and `mpc.warmup` before the first tick; `task.done` before any command (a met goal never activates effort control); no command before the first plan; `plant.stop()` first on exit |
-| `MpcProcess.result()` | every knot finite and within the raw effort limits; expected knot interval; the plan answers the pending request; an error reply or a dead process raises, polled every tick |
+| loop (`run`) | `plant.start()` and `mpc.warmup` before the first tick; `task.done` before any command (a met goal never activates effort control); no command before the first plan; every knot of a plan within the raw effort limits when it arrives, before any of its knots is commanded (`checked`); `plant.stop()` first on exit |
+| `MpcProcess.result()` | every knot finite; expected shapes and knot interval; the plan answers the pending request; an error reply or a dead process raises, polled every tick |
 | `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; execution time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time |
 
 The checks raise; nothing retries. Limits are the reduced arm URDF's; the

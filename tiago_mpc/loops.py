@@ -73,11 +73,19 @@ class Pending:
 
     def ready(self, now):
         if self.latency is None:
-            return self.mpc.result()
+            return checked(self.mpc.result())
         if self.plan is None:
-            self.plan = self.mpc.result(block=True)
+            self.plan = checked(self.mpc.result(block=True))
             self.at = self.t + self.latency.charge(self.plan)
         return self.plan if now >= self.at - _TOLERANCE else None
+
+
+def checked(plan: Plan | None) -> Plan | None:
+    """The plan, if every knot is within the raw effort limits: any knot may be
+    commanded before its lease ends, so each plan is checked when it arrives."""
+    if plan is not None and np.any(np.abs(plan.torques) > limits().effort):
+        raise RuntimeError("MPC plan exceeds the raw effort limit")
+    return plan
 
 
 def guard(command: np.ndarray, plan: Plan, t: float) -> np.ndarray:
@@ -103,6 +111,7 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
     and the duration, the state's time for at. Returns whether the task is done.
     Before the first tick, mpc.warmup runs from the started plant's state, so its
     time counts against no plan's lease.
+    Each plan is checked when it arrives (checked), each command before it is sent (guard).
     Ticks are command_period apart; a late tick skips the missed ones.
     The last tick, which sees the task done or the time up, sends no command but
     reaches the callbacks. Garbage collection pauses while it runs: a full
@@ -124,7 +133,7 @@ def run(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law 
             done = task.done(s, t - start)
             end = done or t - start >= duration - _TOLERANCE
             # Without a pending solve, result() still notices a dead MPC process within one tick.
-            new = pending.ready(t) if pending else mpc.result()
+            new = pending.ready(t) if pending else checked(mpc.result())
             if new is not None:
                 plan, pending = new, None
             if pending is None and not end and due(t):
