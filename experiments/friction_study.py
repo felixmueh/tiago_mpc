@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 """Compare the four latency execution controllers with constraint Coulomb friction.
 
-    python experiments/friction_study.py --dry-run
-    python experiments/friction_study.py --output _expr_data/controller-friction/<fresh-name>
+    python -m experiments.friction_study --dry-run
+    python -m experiments.friction_study --output _expr_data/controller-friction/<fresh-name>
 
 Each cell runs once on the simulation clock, serially. The plant uses the URDF's
 Coulomb and viscous coefficients scaled together by .5, 1 or 1.5, with 1 ms
@@ -24,20 +23,18 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.common import limit_excess
 from experiments.latency_study import CASES, COMMAND_PERIOD, TASKS, study, table
-from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import FULL_URDF, ROOT, urdf_friction
+import tiago_mpc as tm
 
 
 def task_specs(scale):
     """Change only the hidden plant coefficients, leaving each predictor fixed."""
-    nominal = urdf_friction()
+    nominal = tm.urdf_friction()
     friction = replace(nominal,
                        coulomb_nm=tuple(scale * x for x in nominal.coulomb_nm),
                        viscous_nm_s_per_rad=tuple(scale * x for x in nominal.viscous_nm_s_per_rad))
-    return {name: (*TASKS[name][:3], partial(SimPlant, friction=friction))
+    return {name: (*TASKS[name][:3], partial(tm.SimPlant, friction=friction))
             for name in ("reach-friction", "figure8")}
 
 
@@ -46,10 +43,10 @@ def describe(scales, latencies, tasks, cases):
                 plant_scales=scales, latencies_ms=latencies, tasks=tasks, cases=cases,
                 command_period_s=COMMAND_PERIOD, update_period_s=.01,
                 time_basis="simulation", predictor="implicit", prediction_substep_s=None,
-                repository_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-                source_status=subprocess.check_output(["git", "status", "--short"], cwd=ROOT, text=True),
-                gato_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT / "external/gato", text=True).strip(),
-                urdf_sha256=hashlib.sha256(FULL_URDF.read_bytes()).hexdigest(),
+                repository_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT, text=True).strip(),
+                source_status=subprocess.check_output(["git", "status", "--short"], cwd=tm.ROOT, text=True),
+                gato_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT / "external/gato", text=True).strip(),
+                urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
                 laws={name: asdict(law) if hasattr(law, "__dataclass_fields__") else law.__name__
                       for name, (_, law) in CASES.items() if name in cases},
                 models={str(scale): {name: dict(params=asdict(replace(params, max_sqp_time_s=None)),
@@ -80,7 +77,7 @@ def main(argv=None):
     if args.output is None:
         parser.error("--output is required without --dry-run")
     out = args.output.resolve()
-    if not out.is_relative_to(ROOT / "_expr_data"):
+    if not out.is_relative_to(tm.ROOT / "_expr_data"):
         parser.error("--output must be inside this checkout's _expr_data")
     out.mkdir(parents=True, exist_ok=False)
     (out / "configuration.json").write_text(json.dumps(config, indent=2) + "\n")
@@ -90,8 +87,8 @@ def main(argv=None):
     locks = []
     try:
         # Same locks as random100 and the visualizer's Live scheduler.
-        for path in (ROOT.parent / "GATO-upstream-contributions/.gpu.lock", Path("/tmp/a2rlab-timing.lock"),
-                     ROOT.parent / "GATO/.git/experiment-runner.lock"):
+        for path in (tm.ROOT.parent / "GATO-upstream-contributions/.gpu.lock", Path("/tmp/a2rlab-timing.lock"),
+                     tm.ROOT.parent / "GATO/.git/experiment-runner.lock"):
             if path.parent.exists():
                 lock = path.open("a")
                 locks.append(lock)

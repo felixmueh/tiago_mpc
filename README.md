@@ -165,7 +165,7 @@ mpc.close()
 - **Examples, two remedies for solve latency:** `experiments/plan_feedback.py`, a law
   (a PD around the plan), and `experiments/latency_compensation.py`, its own loop
   (solve from the predicted state); `experiments/latency_study.py` compares them.
-- **Friction comparison:** `python experiments/friction_study.py --dry-run` describes
+- **Friction comparison:** `python -m experiments.friction_study --dry-run` describes
   48 simulation cells: those four execution controllers, the existing reach and
   figure eight, 0/20 ms fixed delays, and plant coefficients at 50/100/150 % of
   the URDF values. Predictors and gains stay fixed; reaching predicts no friction,
