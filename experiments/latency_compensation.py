@@ -27,6 +27,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pinocchio as pin
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.common import arguments
@@ -36,42 +37,75 @@ from tiago_mpc.loops import Fixed, Schedule, checked, guard
 from tiago_mpc.mpc import TIAGO, Mpc
 from tiago_mpc.plan import State, Tick
 from tiago_mpc.record import Record
+from tiago_mpc.dynamics import passive_torque
 from tiago_mpc.sim import SimPlant
+from tiago_mpc.tiago import ARM_URDF
 
 _TOLERANCE = 1e-9  # as loops.py: absorbs the rounding of summed periods
 
 
-def predict(mpc, plan, law, state, at, command_period, substeps=1):
+def predict(plan, law, state, at, command_period, step, substeps=1):
     """The state at tick time at, from state, under the commands the loop sends at the
     ticks in between: law(plan, tick, predicted state), each held for one command period,
     so a law that depends on the state is predicted too. Without a plan the arm is held.
-
-    The predictor's own model steps it: BSQP.sim_forward (GATO python/bindings.cu,
-    gato/bsqp/kernels/sim.cuh) runs one step of the solver's device integrator, the
-    constant-acceleration (trapezoidal) step its transcription uses (check_model's step),
-    in float32, with the predictor's friction and knot 0's external wrench. It reads only
-    the model and writes only its own output buffer: the solver's warm start, duals and
-    rho are untouched. It works in GPU coordinates, so the sign map mpc.signs applies.
-
-    The step is explicit: with the URDF's friction in the predictor, one 2 ms step makes
-    joint 7 (0.0008 kg m^2 against 2.95 N m s/rad, plus the tanh slope) diverge, so each
-    tick can be split into substeps equal steps under the same command."""
-    t, x, ss = state.t, np.r_[state.q, state.qd], np.tile(mpc.signs, 2)
+    step(x, u, h) is the predictor's model (gpu_step or implicit_step); each tick may be
+    split into substeps equal steps under the same command."""
+    t, x = state.t, np.r_[state.q, state.qd]
     while plan is not None and t < at - _TOLERANCE:
-        u = law(plan, t, State(t, x[:7], x[7:])) * mpc.signs
+        u = law(plan, t, State(t, x[:7], x[7:]))
         for _ in range(substeps):
-            x = ss * np.asarray(mpc.controller.solver.sim_forward(
-                (x * ss)[None], u[None], command_period / substeps), dtype=float)[0]
+            x = step(x, u, command_period / substeps)
         t += command_period
     return State(at, x[:7], x[7:])
 
 
+def gpu_step(mpc):
+    """GATO's own model: BSQP.sim_forward (GATO python/bindings.cu, gato/bsqp/kernels/sim.cuh)
+    runs one step of the solver's device integrator, the constant-acceleration
+    (trapezoidal) step its transcription uses (check_model's step), in float32, with the
+    predictor's friction and knot 0's external wrench. It reads only the model and writes
+    only its own output buffer: the solver's warm start, duals and rho are untouched. It
+    works in GPU coordinates, so the sign map mpc.signs applies.
+
+    The step is explicit: with the URDF's friction in the predictor, one 2 ms step makes
+    joint 7 diverge (0.0008 kg m^2 against 2.95 N m s/rad plus the tanh slope of about 19:
+    a time constant of about 36 us), unless split into substeps below twice that."""
+    ss, signs = np.tile(mpc.signs, 2), mpc.signs
+    return lambda x, u, h: ss * np.asarray(mpc.controller.solver.sim_forward(
+        (x * ss)[None], (u * signs)[None], h), dtype=float)[0]
+
+
+def implicit_step(friction):
+    """The same arm model (Pinocchio on the arm URDF, which check_model ties to GATO's),
+    one semi-implicit Euler step that is implicit in the passive torque p(qd) only,
+    linearised:
+        qd+ = qd + (M + h D)^-1 h (u - bias(q, qd) - p(qd)),   q+ = q + h qd+
+    with D = diag(dp/dqd) = diag(b + (c/w) sech^2(qd/w)) (dynamics.passive_torque). The
+    passive torque is the stiff term (joint 7's time constant is about 36 us), so this
+    keeps a 2 ms step stable; inertia and bias stay explicit. Linearised at qd, it misses the
+    tanh's steep slope at zero: near rest joint 7's speed chatters by about h c / (m + h b)
+    (0.15 rad/s at 2 ms), bounded, with a negligible position error. friction: the
+    predictor's (MpcParams.friction), None loss-free. Native coordinates."""
+    model = pin.buildModelFromUrdf(str(ARM_URDF))
+    data = model.createData()
+
+    def step(x, u, h):
+        q, qd = x[:7], x[7:]
+        slope = (0. if friction is None else np.asarray(friction.viscous_nm_s_per_rad)
+                 + np.asarray(friction.coulomb_nm) / friction.width_rad_s / np.cosh(qd / friction.width_rad_s)**2)
+        force = u - pin.rnea(model, data, q, qd, np.zeros(7)) - passive_torque(qd, friction)
+        qd_next = qd + np.linalg.solve(pin.crba(model, data, q) + h * np.diag(slope * np.ones(7)), h * force)
+        return np.r_[q + h * qd_next, qd_next]
+    return step
+
+
 def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_period, update_period,
-                    duration, latency_s, compensate=True, prediction_substep_s=None):
+                    duration, latency_s, compensate=True, prediction_substep_s=None, predictor="gpu"):
     """run_simulation(..., latency=Fixed(latency_s)), but each request is made from the
     state predicted (predict) at the tick its plan takes effect, and dated then.
     compensate=False requests from the measured state, dated now: run_simulation's timing.
-    prediction_substep_s: the longest prediction step (None: one step per command tick).
+    prediction_substep_s: the longest prediction step (None: one step per command tick);
+    predictor: "gpu" (gpu_step) or "implicit" (implicit_step).
     Simulation clock only; compensating needs the in-process Mpc (its solver and signs).
 
     As in run: the warm-up before the first tick, one outstanding solve, the next request
@@ -87,6 +121,9 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
         raise ValueError("run_compensated models the latency on a simulation clock; the robot keeps run_robot")
     ahead = math.ceil(latency_s / command_period - _TOLERANCE)  # a plan takes effect at the first tick at or after t + L
     substeps = 1 if prediction_substep_s is None else math.ceil(command_period / prediction_substep_s - _TOLERANCE)
+    step = None
+    if compensate:
+        step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction)
     due, plan, pending, start, taken = Schedule(update_period), None, None, None, []
     plant.start()
     try:
@@ -104,7 +141,7 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
                 at = t
                 for _ in range(ahead):  # summed as the loop sums its deadlines: the same tick times
                     at += command_period
-                x = predict(mpc, plan, law, s, at, command_period, substeps) if compensate else s
+                x = predict(plan, law, s, at, command_period, step, substeps) if compensate else s
                 mpc.request(x, *task.at(x.t - start, mpc.N, mpc.dt))
                 pending = (at, x, checked(mpc.result(block=True)))  # blocks: the solve takes no simulated time
                 if ahead == 0:  # zero latency: this tick
@@ -130,7 +167,7 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
                 if isinstance(record, Record):
                     note(record, taken, start or 0., dict(
                         loop="run_compensated", latency_s=latency_s, effective_latency_s=ahead * command_period,
-                        compensate=compensate, prediction_substeps=substeps, law=getattr(law, "__name__", repr(law))))
+                        compensate=compensate, predictor=predictor, prediction_substeps=substeps, law=getattr(law, "__name__", repr(law))))
 
 
 def note(record, taken, start, settings):

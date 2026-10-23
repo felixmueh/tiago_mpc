@@ -45,7 +45,7 @@ CASES = {"stock": (False, sample_knot), "compensated": (True, sample_knot),  # n
          "feedback": (False, PlanFeedback()), "compensated+feedback": (True, PlanFeedback())}
 
 
-def study(out, tasks, latencies_ms, cases, prediction_substep_s=None):
+def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="gpu"):
     """Each task x latency x case with a fresh in-process Mpc; the uncompensated cases run on
     run_simulation itself. Returns the table rows."""
     rows = []
@@ -56,7 +56,8 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None):
         for ms in latencies_ms:
             for case in cases:
                 compensate, law = CASES[case]
-                run = (partial(run_compensated, latency_s=ms / 1e3, prediction_substep_s=prediction_substep_s)
+                run = (partial(run_compensated, latency_s=ms / 1e3, prediction_substep_s=prediction_substep_s,
+                               predictor=predictor)
                        if compensate
                        else partial(run_simulation, latency=Fixed(ms / 1e3)))
                 case_out = out / name / f"{name}_{case}_{ms:g}ms"
@@ -111,9 +112,10 @@ def main(argv=None):
     parser.add_argument("--latencies-ms", nargs="+", type=float, default=[0, 5, 10, 20, 30, 45])
     parser.add_argument("--cases", nargs="+", choices=CASES, default=list(CASES))
     parser.add_argument("--prediction-substep-s", type=float, help="compensated cases (default: one step per tick)")
+    parser.add_argument("--predictor", choices=("gpu", "implicit"), default="gpu", help="compensated cases")
     parser.add_argument("--output", type=Path, required=True, help="a fresh directory")
     args = parser.parse_args(argv)
-    rows = study(args.output, args.tasks, args.latencies_ms, args.cases, args.prediction_substep_s)
+    rows = study(args.output, args.tasks, args.latencies_ms, args.cases, args.prediction_substep_s, args.predictor)
     (args.output / "rows.json").write_text(json.dumps(rows, indent=1) + "\n")
     (args.output / "table.md").write_text(table(rows) + "\n")
     print(table(rows))
