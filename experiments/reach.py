@@ -1,21 +1,17 @@
-#!/usr/bin/env python3
-"""One position reach from the comfortable pose, in simulation or on the robot (checks only by default)."""
+"""One position reach from the comfortable pose, in simulation or on the robot (checks only by default).
+
+Run from the checkout's root: python -m experiments.reach [--help]
+(on the robot: python -m experiments.reach --plant robot)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.common import arguments, launch, run_experiment
-from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import run_simulation
-from tiago_mpc.mpc import TIAGO
-from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import GRASP_FRAME, Q_REACH, fk
+import tiago_mpc as tm
 
 
 @dataclass(frozen=True)
@@ -24,8 +20,8 @@ class Reach:
 
     The default target is the frame's position at a nearby posture (not a posture goal).
     """
-    target_m: tuple[float, float, float] = tuple(map(float, fk(Q_REACH)))
-    ee_frame: str = GRASP_FRAME
+    target_m: tuple[float, float, float] = tuple(map(float, tm.fk(tm.Q_REACH)))
+    ee_frame: str = tm.GRASP_FRAME
     position_tol_m: float = .05
     speed_l1_tol_rad_s: float = 1.
     timeout_s: float = 8.
@@ -36,14 +32,14 @@ class Reach:
         return out, None
 
     def distance(self, q):
-        return float(np.linalg.norm(fk(q, self.ee_frame) - self.target_m))
+        return float(np.linalg.norm(tm.fk(q, self.ee_frame) - self.target_m))
 
     def done(self, state, t):
         return bool(self.distance(state.q) <= self.position_tol_m
                     and np.abs(state.qd).sum() <= self.speed_l1_tol_rad_s)
 
 
-def reach(plant, mpc, run=run_simulation, task=Reach(), law=sample_knot, out=None,
+def reach(plant, mpc, run=tm.run_simulation, task=Reach(), law=tm.sample_knot, out=None,
           command_period=None, update_period=None, duration=None):
     """Reach task with mpc on plant (common.run_experiment); duration (seconds) caps
     the task's timeout."""
@@ -69,7 +65,7 @@ def reach(plant, mpc, run=run_simulation, task=Reach(), law=sample_knot, out=Non
 def main(argv=None):
     args = arguments(__doc__, argv)
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    record = launch(args, partial(reach, task=task), lambda: SimPlant(substep=.003), TIAGO)
+    record = launch(args, partial(reach, task=task), lambda: tm.SimPlant(substep=.003), tm.TIAGO)
     return 0 if record is None or record.summary["reached"] and record.summary["limits_pass"] else 1
 
 

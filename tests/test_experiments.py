@@ -72,7 +72,7 @@ class Mpc:
 def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05)
-        record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.TIAGO, N=4)), task=task, out=tmp_path / name,
+        record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task=task, out=tmp_path / name,
                           run=partial(run_simulation, latency=Fixed(.01)), command_period=.01)
     else:
         task = f8.Figure8(period_s=.05)
@@ -110,7 +110,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
             requests.append(state.t)
             super().request(state, reference, updates)
 
-    mpc = Counting(replace(rc.TIAGO, N=8))  # 10 ms knots, 70 ms plans
+    mpc = Counting(replace(rc.tm.TIAGO, N=8))  # 10 ms knots, 70 ms plans
     rc.reach(SimPlant(substep=.002), mpc, task=rc.Reach(timeout_s=.06), out=tmp_path / "r",
              command_period=.002, update_period=.006)
     with np.load(tmp_path / "r" / "trajectory.npz") as saved:
@@ -121,7 +121,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
 
 def test_duration_caps_the_tasks_own(tmp_path):
     assert common.arguments("", ["--duration", ".02"]).duration == .02
-    record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.TIAGO, N=4)), task=rc.Reach(timeout_s=.06),
+    record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task=rc.Reach(timeout_s=.06),
                       out=tmp_path / "r", duration=.02)
     assert record.summary["status"] == "timeout" and record.summary["duration_cap_s"] == .02
     assert len(record.ticks) == 11  # 0, 2, ..., 20 ms: the default command period
@@ -129,7 +129,7 @@ def test_duration_caps_the_tasks_own(tmp_path):
 
 def test_a_run_without_solves_reports_zero_work(tmp_path):
     """The goal met at the start, or a zero duration: one tick, no solve."""
-    params = replace(rc.TIAGO, N=4)
+    params = replace(rc.tm.TIAGO, N=4)
     done = rc.reach(SimPlant(substep=.003), Mpc(params), task=rc.Reach(tuple(fk(Q_START))), out=tmp_path / "d")
     zero = rc.reach(SimPlant(substep=.003), Mpc(params), out=tmp_path / "z", duration=0.)
     for record, status in ((done, "arrived"), (zero, "timeout")):
@@ -144,5 +144,5 @@ def test_an_interrupted_run_is_saved_as_interrupted(tmp_path):
         raise KeyboardInterrupt  # Ctrl-C, or SIGTERM through common._interrupt
 
     with pytest.raises(KeyboardInterrupt):
-        rc.reach(SimPlant(substep=.003), Mpc(replace(rc.TIAGO, N=4)), run=interrupted, out=tmp_path / "r")
+        rc.reach(SimPlant(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), run=interrupted, out=tmp_path / "r")
     assert json.loads((tmp_path / "r" / "summary.json").read_text())["status"] == "interrupted"

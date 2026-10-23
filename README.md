@@ -19,7 +19,8 @@ is when the state was measured, in the same domain, and a plan starts at its
 state's time; on the robot a state can be older than the tick and repeat.
 
 ```
-tiago_mpc/    util.py (the cache: cache_root, cached, cache_meshes, digest),
+tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what experiments use),
+              util.py (the cache: cache_root, cached, cache_meshes, digest),
               tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary,
               Mpc, MpcProcess),
@@ -74,11 +75,11 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
 ## Running the experiments
 
 ```bash
-python experiments/reach.py                    # one reach from the comfortable pose
-python experiments/figure8.py                  # one 24 s figure eight
-python experiments/reach.py --latency measured --output _expr_data/reach/measured
-python experiments/reach.py --command-period .01   # command ticks at the knot interval
-python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random100/README.md
+python -m experiments.reach                    # one reach from the comfortable pose
+python -m experiments.figure8                  # one 24 s figure eight
+python -m experiments.reach --latency measured --output _expr_data/reach/measured
+python -m experiments.reach --command-period .01   # command ticks at the knot interval
+python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random100/README.md
 ```
 
 - **Simulation runs on `SimPlant`'s simulation clock**; `SimPlant(clock=Clock.wall())`
@@ -130,16 +131,13 @@ Swap a piece by passing another one:
 from dataclasses import replace
 from functools import partial
 
+import tiago_mpc as tm
 from experiments.reach import Reach, reach
-from tiago_mpc.laws import hold_first
-from tiago_mpc.loops import Fixed, run_simulation
-from tiago_mpc.mpc import TIAGO, Mpc
-from tiago_mpc.sim import SimPlant
 
-params = replace(TIAGO, solver=TIAGO.solver.replace(mu=1.), max_sqp_time_s=None)  # simulation clock
-mpc = Mpc.compile(params)  # in this process; MpcProcess: its own
-record = reach(SimPlant(substep=.003), mpc, run=partial(run_simulation, latency=Fixed(.005)),
-               task=Reach(position_tol_m=.02), law=hold_first)
+params = replace(tm.TIAGO, solver=tm.TIAGO.solver.replace(mu=1.), max_sqp_time_s=None)  # simulation clock
+mpc = tm.Mpc.compile(params)  # in this process; tm.MpcProcess: its own
+record = reach(tm.SimPlant(substep=.003), mpc, run=partial(tm.run_simulation, latency=tm.Fixed(.005)),
+               task=Reach(position_tol_m=.02), law=tm.hold_first)
 mpc.close()
 ```
 
@@ -181,9 +179,9 @@ Source ROS 2 with PAL's controller-manager interfaces (4.32.2) in the launching
 shell; otherwise creating `RosPlant` fails with a clear error.
 
 ```bash
-python experiments/reach.py --plant robot                                   # checks only
-python experiments/reach.py --plant robot --execute --target X_M Y_M Z_M
-python experiments/figure8.py --plant robot --execute --target X_M Y_M Z_M --duration 4
+python -m experiments.reach --plant robot                                   # checks only
+python -m experiments.reach --plant robot --execute --target X_M Y_M Z_M
+python -m experiments.figure8 --plant robot --execute --target X_M Y_M Z_M --duration 4
 ```
 
 - **Check-only is the default:** the startup checks, then exit; no MPC, no

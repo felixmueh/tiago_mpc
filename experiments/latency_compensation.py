@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Latency compensation in simulation: solve from the state predicted for the moment the
 plan takes effect, and date the plan from then (Findeisen and Allgöwer; Mastalli et al.).
 
@@ -16,6 +15,8 @@ dated in the future. It has run's calling convention; bind its own arguments:
 
 The other remedy needs only a control law (plan_feedback.py); latency_study.py compares
 both, alone and together, with stock sample_knot. The main runs one compensated reach.
+
+Run from the checkout's root: python -m experiments.latency_compensation --latency .02
 """
 from __future__ import annotations
 
@@ -23,23 +24,14 @@ from dataclasses import replace
 from functools import partial
 import json
 import math
-from pathlib import Path
 import sys
 
 import numpy as np
 import pinocchio as pin
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.common import arguments
 from experiments.reach import reach
-from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import Fixed, Schedule, checked, guard
-from tiago_mpc.mpc import TIAGO, Mpc
-from tiago_mpc.plan import State, Tick
-from tiago_mpc.record import Record
-from tiago_mpc.dynamics import passive_torque
-from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import arm_urdf
+import tiago_mpc as tm
 
 _TOLERANCE = 1e-9  # as loops.py: absorbs the rounding of summed periods
 
@@ -52,11 +44,11 @@ def predict(plan, law, state, at, command_period, step, substeps=1):
     split into substeps equal steps under the same command."""
     t, x = state.t, np.r_[state.q, state.qd]
     while plan is not None and t < at - _TOLERANCE:
-        u = law(plan, t, State(t, x[:7], x[7:]))
+        u = law(plan, t, tm.State(t, x[:7], x[7:]))
         for _ in range(substeps):
             x = step(x, u, command_period / substeps)
         t += command_period
-    return State(at, x[:7], x[7:])
+    return tm.State(at, x[:7], x[7:])
 
 
 def gpu_step(mpc):
@@ -88,20 +80,20 @@ def implicit_step(friction):
     tanh's steep slope at zero: near rest joint 7's speed chatters by about h c / (m + h b)
     (0.15 rad/s at 2 ms), bounded, with a negligible position error. friction: the
     predictor's (MpcParams.friction), None loss-free. Native coordinates."""
-    model = pin.buildModelFromUrdf(str(arm_urdf()))
+    model = pin.buildModelFromUrdf(str(tm.arm_urdf()))
     data = model.createData()
 
     def step(x, u, h):
         q, qd = x[:7], x[7:]
         slope = (0. if friction is None else np.asarray(friction.viscous_nm_s_per_rad)
                  + np.asarray(friction.coulomb_nm) / friction.width_rad_s / np.cosh(qd / friction.width_rad_s)**2)
-        force = u - pin.rnea(model, data, q, qd, np.zeros(7)) - passive_torque(qd, friction)
+        force = u - pin.rnea(model, data, q, qd, np.zeros(7)) - tm.passive_torque(qd, friction)
         qd_next = qd + np.linalg.solve(pin.crba(model, data, q) + h * np.diag(slope * np.ones(7)), h * force)
         return np.r_[q + h * qd_next, qd_next]
     return step
 
 
-def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_period, update_period,
+def run_compensated(plant, mpc, task, law=tm.sample_knot, callbacks=(), *, command_period, update_period,
                     duration, latency_s, compensate=True, prediction_substep_s=None, predictor="implicit"):
     """run_simulation(..., latency=Fixed(latency_s)), but each request is made from the
     state predicted (predict) at the tick its plan takes effect, and dated then.
@@ -126,7 +118,7 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
     step = None
     if compensate:
         step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction)
-    due, plan, pending, start, taken = Schedule(update_period), None, None, None, []
+    due, plan, pending, start, taken = tm.Schedule(update_period), None, None, None, []
     plant.start()
     try:
         mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])  # the arm is still held
@@ -145,17 +137,17 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
                     at += command_period
                 x = predict(plan, law, s, at, command_period, step, substeps) if compensate else s
                 mpc.request(x, *task.at(x.t - start, mpc.N, mpc.dt))
-                pending = (at, x, checked(mpc.result(block=True)))  # blocks: the solve takes no simulated time
+                pending = (at, x, tm.checked(mpc.result(block=True)))  # blocks: the solve takes no simulated time
                 if ahead == 0:  # zero latency: this tick
                     new, plan, pending = pending, pending[2], None
             if new is not None:
                 taken.append((new[1], s))
             command = None
             if plan is not None and not end:
-                command = guard(law(plan, t, s), plan, t)
+                command = tm.guard(law(plan, t, s), plan, t)
                 plant.apply(command)
             for callback in callbacks:
-                callback(Tick(t, s, command, plan, new is not None))
+                callback(tm.Tick(t, s, command, plan, new is not None))
             if end:
                 return done
             deadline = t if deadline is None else deadline
@@ -166,7 +158,7 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
             plant.stop()  # zero torque first
         finally:
             for record in callbacks:
-                if isinstance(record, Record):
+                if isinstance(record, tm.Record):
                     note(record, taken, start or 0., dict(
                         loop="run_compensated", latency_s=latency_s, effective_latency_s=ahead * command_period,
                         compensate=compensate, predictor=predictor, prediction_substeps=substeps, law=getattr(law, "__name__", repr(law))))
@@ -186,10 +178,10 @@ def note(record, taken, start, settings):
 def main(argv=None):
     """One compensated reach on SimPlant, --latency seconds (fixed)."""
     args = arguments(__doc__, argv)
-    if args.plant != "sim" or not isinstance(args.latency, Fixed):
+    if args.plant != "sim" or not isinstance(args.latency, tm.Fixed):
         raise SystemExit("latency_compensation.py: simulation with a fixed --latency only")
-    mpc = Mpc.compile(replace(TIAGO, max_sqp_time_s=None))  # in this process: predict uses its solver
-    record = reach(SimPlant(substep=.003), mpc, run=partial(run_compensated, latency_s=args.latency.s),
+    mpc = tm.Mpc.compile(replace(tm.TIAGO, max_sqp_time_s=None))  # in this process: predict uses its solver
+    record = reach(tm.SimPlant(substep=.003), mpc, run=partial(run_compensated, latency_s=args.latency.s),
                    out=args.output, command_period=args.command_period, update_period=args.update_period,
                    duration=args.duration)
     print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},

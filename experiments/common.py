@@ -1,5 +1,8 @@
 """What the experiments share: run_experiment records one run, classifies, saves and
-exports it; arguments and launch are the command line of their mains."""
+exports it; arguments and launch are the command line of their mains.
+
+A library, not a command: run experiments.reach, experiments.figure8 and the others with
+python -m experiments.<name> from the checkout's root."""
 from __future__ import annotations
 
 import argparse
@@ -13,16 +16,12 @@ import traceback
 import numpy as np
 
 from experiments.replay import export_replay
-from tiago_mpc.loops import Fixed, Measured, run_robot, run_simulation
-from tiago_mpc.mpc import MpcProcess
-from tiago_mpc.record import Record
-from tiago_mpc.robot import RosPlant
-from tiago_mpc.tiago import limits
+import tiago_mpc as tm
 
 
 def limit_excess(trajectory):
     """Largest excess of the recorded states and sent commands over the raw limits."""
-    raw = limits()
+    raw = tm.limits()
     q, qd = trajectory["state"][:, :7], trajectory["state"][:, 7:]
     command = trajectory["command"][np.isfinite(trajectory["command"]).all(axis=1)]
     return dict(position_rad=float(max(0., np.max(raw.lower - q, initial=0.),
@@ -52,7 +51,7 @@ def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None,
     ends gets the raw-limit excess, the largest torque and the solve work, then
     evaluate(record) adds the experiment's metrics. The caller closes plant and mpc.
     """
-    record = Record(out, task=task, params=mpc.params, plant=plant)
+    record = tm.Record(out, task=task, params=mpc.params, plant=plant)
     try:
         done = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or .002,
                    update_period=update_period or mpc.dt, duration=duration)
@@ -77,7 +76,7 @@ def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None,
 
 def latency(text):
     """'measured', or fixed seconds."""
-    return Measured() if text == "measured" else Fixed(float(text))
+    return tm.Measured() if text == "measured" else tm.Fixed(float(text))
 
 
 def arguments(description, argv):
@@ -89,7 +88,7 @@ def arguments(description, argv):
     parser.add_argument("--sea-absolute", action="store_true", help="robot: SEA absolute-position feedback")
     parser.add_argument("--target", nargs=3, type=float, metavar=("X_M", "Y_M", "Z_M"),
                         help="reach target or figure-eight start, metres in torso_lift_link (required with --execute)")
-    parser.add_argument("--latency", type=latency, default=Fixed(), help="sim: seconds per solve, or 'measured'")
+    parser.add_argument("--latency", type=latency, default=tm.Fixed(), help="sim: seconds per solve, or 'measured'")
     parser.add_argument("--command-period", type=float, help="seconds (default: 0.002, 500 Hz)")
     parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
     parser.add_argument("--duration", type=float, help="seconds: cap the task's own duration")
@@ -112,7 +111,7 @@ def launch(args, experiment, sim_plant, params):
     both and prints the summary. The robot only runs the startup checks (plant.start() and
     plant.stop()) unless --execute is confirmed; returns the Record or None."""
     if args.plant == "sim":
-        plant, run = sim_plant(), partial(run_simulation, latency=args.latency)
+        plant, run = sim_plant(), partial(tm.run_simulation, latency=args.latency)
         params = replace(params, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
     else:
         if args.execute:
@@ -122,7 +121,7 @@ def launch(args, experiment, sim_plant, params):
                 print("Cancelled before creating the ROS client.")
                 raise SystemExit(2)
         signal.signal(signal.SIGTERM, _interrupt)  # stop and hand back as on Ctrl-C
-        plant, run = RosPlant(execute=args.execute, sea_absolute=args.sea_absolute), run_robot
+        plant, run = tm.RosPlant(execute=args.execute, sea_absolute=args.sea_absolute), tm.run_robot
         if not args.execute:
             try:
                 plant.start()
@@ -132,7 +131,7 @@ def launch(args, experiment, sim_plant, params):
             print(json.dumps(dict(status="checked", plant=plant.settings), indent=2, default=str))
             return None
     try:
-        mpc = MpcProcess.compile(params)  # compiles GATO's module once per variant (minutes)
+        mpc = tm.MpcProcess.compile(params)  # compiles GATO's module once per variant (minutes)
         try:
             record = experiment(plant, mpc, run=run, out=args.output, command_period=args.command_period,
                                 update_period=args.update_period, duration=args.duration)

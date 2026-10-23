@@ -54,6 +54,13 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   dataclasses), overridden with `replace`. JSON configurations, legacy profiles,
   override semantics and provenance hashing were removed. Each run records the
   commit, source status and complete effective parameters.
+- **2026-10-23: experiments import `tiago_mpc as tm`.** Felix: experiments use
+  `import tiago_mpc as tm` and `tm.<name>` instead of many `from tiago_mpc.<module>`
+  lines. The root `tiago_mpc/__init__.py` re-exports the experiment-facing names with
+  an explicit `__all__`; modules inside the package import each other directly, never
+  through the root. `experiments/replay.py` keeps importing
+  `tiago_mpc.tiago` directly: it needs only NumPy-level facts. Same day: experiments run as `python -m experiments.<name>`
+  from the checkout's root and no longer insert `sys.path`; `tiago_mpc` is never installed.
 
 ## Model and coefficients
 

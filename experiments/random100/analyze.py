@@ -1,19 +1,18 @@
-#!/usr/bin/env python3
-"""Saved-data audit and compact plots for a completed random100 cohort; no CUDA."""
+"""Saved-data audit and compact plots for a completed random100 cohort; no CUDA.
+
+Run from the checkout's root: python -m experiments.random100.analyze <output-directory>"""
 import argparse
 from collections import Counter
 import csv
 import json
 from pathlib import Path
-import sys
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tiago_mpc.tiago import limits
+import tiago_mpc as tm
 
 
 def main():
@@ -28,7 +27,7 @@ def main():
         raise ValueError("analyze.py expects a complete 100-case run, not a --pairs subset")
     if [r["task_id"] for r in rows] != config["task_ids"]:
         raise ValueError("Incomplete cohort or changed task order")
-    raw = limits()
+    raw = tm.limits()
     audits = []
     total_work = Counter()
     inner_modes = Counter()
@@ -160,7 +159,7 @@ No KKT residual gate or solver repair was used.
 Regenerate from this repository:
 
 ```bash
-.venv/bin/python experiments/random100/analyze.py {out}
+.venv/bin/python -m experiments.random100.analyze {out}
 ```
 """)
     print(json.dumps({k:v for k,v in result.items() if k != "audits"}, indent=2))

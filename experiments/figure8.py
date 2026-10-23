@@ -1,23 +1,18 @@
-#!/usr/bin/env python3
 """Horizontal figure-eight tracking (robot: checks only by default).
 
-In simulation with constraint Coulomb friction in the plant and tanh in the predictor."""
+In simulation with constraint Coulomb friction in the plant and tanh in the predictor.
+
+Run from the checkout's root: python -m experiments.figure8 [--help]."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import partial
-from pathlib import Path
 import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.common import arguments, launch, run_experiment
-from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import run_simulation
-from tiago_mpc.mpc import TIAGO
-from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import Q_START, fk, urdf_friction
+import tiago_mpc as tm
 
 
 @dataclass(frozen=True)
@@ -27,7 +22,7 @@ class Figure8:
     It starts edge_clearance_m ahead (+x) of start_m, by default the comfortable
     pose's position of the default end-effector frame.
     """
-    start_m: tuple[float, float, float] = tuple(map(float, fk(Q_START)))
+    start_m: tuple[float, float, float] = tuple(map(float, tm.fk(tm.Q_START)))
     x_span_m: float = .28
     y_amplitude_m: float = .09
     edge_clearance_m: float = .02
@@ -50,9 +45,9 @@ class Figure8:
         return t >= self.period_s - 1e-9  # absorbs the rounding of summed command periods
 
 
-FIGURE8 = replace(TIAGO, dt_s=.01, solver=TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
-                  admm=replace(TIAGO.admm, rho_u=1e-5),  # GATO's value, for the control cost 1e-6
-                  friction=urdf_friction(.03))
+FIGURE8 = replace(tm.TIAGO, dt_s=.01, solver=tm.TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
+                  admm=replace(tm.TIAGO.admm, rho_u=1e-5),  # GATO's value, for the control cost 1e-6
+                  friction=tm.urdf_friction(.03))
 
 
 def metrics(error):
@@ -60,14 +55,14 @@ def metrics(error):
                 p95_m=float(np.percentile(error, 95)), max_m=float(np.max(error)))
 
 
-def figure8(plant, mpc, run=run_simulation, task=Figure8(), law=sample_knot, out=None,
+def figure8(plant, mpc, run=tm.run_simulation, task=Figure8(), law=tm.sample_knot, out=None,
             command_period=None, update_period=None, duration=None):
     """Track task with mpc on plant (common.run_experiment); duration (seconds) caps
     the task's period."""
     def evaluate(record):
         trajectory = record.trajectory
         t = trajectory["state_time_s"]  # when each position was measured
-        xyz = np.array([fk(q, record.params.ee_frame) for q in trajectory["state"][:, :7]])
+        xyz = np.array([tm.fk(q, record.params.ee_frame) for q in trajectory["state"][:, :7]])
         error = np.linalg.norm(xyz - task.path(t), axis=1)
         record.arrays.update(ee_xyz_m=xyz, reference_xyz_m=task.path(t))
         record.summary.update(
@@ -83,7 +78,7 @@ def figure8(plant, mpc, run=run_simulation, task=Figure8(), law=sample_knot, out
 def main(argv=None):
     args = arguments(__doc__, argv)
     task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
-    record = launch(args, partial(figure8, task=task), lambda: SimPlant(friction=urdf_friction()),
+    record = launch(args, partial(figure8, task=task), lambda: tm.SimPlant(friction=tm.urdf_friction()),
                     FIGURE8)
     return 0 if record is None or record.summary["limits_pass"] else 1
 
