@@ -15,6 +15,16 @@ cache (`tiago_mpc/tiago.py:cache_root`), and never committed: the reduced right
 arm (`arm_urdf`), its GPU copy (`runtime_urdf`) and the safety collision model.
 `python -m tiago_mpc.tiago` prints the arm's and the GPU copy's paths.
 
+The derived URDFs reference copies of their meshes in the cache, named by their
+contents (`models/meshes/<sha256>.stl`), by relative paths
+(`../meshes/<sha256>.stl` from `models/<hash>/<name>.urdf`; `tiago.cache_meshes`).
+GATO spherizes the GPU copy's collision meshes into its module, but its code
+generation key hashes only the URDF's bytes: with meshes named by their contents,
+a changed mesh changes those bytes, and with relative paths the bytes and the
+plant names do not depend on the checkout's path. The GPU copy keeps the
+collision elements and drops the visual ones, which GATO never reads. Copying a
+mesh that is still a Git LFS pointer fails (`git lfs pull`).
+
 ## End-effector point
 
 Tasks track `arm_right_grasp_joint` (`tiago.GRASP_FRAME`), a massless frame

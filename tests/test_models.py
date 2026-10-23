@@ -1,4 +1,5 @@
 """CPU checks of the full model, its meshes and the reduced arm derived from it."""
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,10 +13,16 @@ from tiago_mpc.tiago import FULL_URDF, MESHES, Q_START, RIGHT_ARM_JOINTS, ROOT_F
 
 class ModelTests(unittest.TestCase):
     def test_all_mesh_references_resolve_to_included_assets(self):
-        for path in (FULL_URDF, arm_urdf()):
-            missing = sorted({Path(e.get('filename')).name for e in ET.parse(path).iter('mesh')
-                              if not (MESHES / Path(e.get('filename')).name).is_file()})
-            self.assertEqual(missing, [], f'{path.name}: missing original meshes {missing}')
+        missing = sorted({Path(e.get('filename')).name for e in ET.parse(FULL_URDF).iter('mesh')
+                          if not (MESHES / Path(e.get('filename')).name).is_file()})
+        self.assertEqual(missing, [], f'missing original meshes {missing}')
+        # The arm's meshes are cached copies of included ones, named by their contents.
+        included = {hashlib.sha256(path.read_bytes()).hexdigest() for path in MESHES.glob('*.stl')}
+        arm = arm_urdf()
+        for mesh in ET.parse(arm).iter('mesh'):
+            copy = arm.parent / mesh.get('filename')
+            self.assertEqual(copy.stem, hashlib.sha256(copy.read_bytes()).hexdigest())
+            self.assertIn(copy.stem, included)
 
     def test_included_mesh_geometry_is_finite(self):
         import hppfcl

@@ -67,6 +67,12 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (`models/tiago_pro/README.md`). The armature is not in the URDF (no loader
   reads it) and never folded into link inertia. kp/kd are not stored: they
   belong to a different controller.
+- **2026-10-23: the derived URDFs' meshes are cached copies named by their
+  contents** (`<cache_root>/models/meshes/<sha256>.stl`), referenced by relative
+  paths; the GPU copy keeps `<collision>` and drops `<visual>`. Reason: absolute
+  mesh paths made the GPU copy's bytes, the plant names and every compiled GATO
+  module specific to the checkout's path, and GATO's code generation key hashes
+  the URDF's bytes but not the meshes it spherizes.
 - **2026-10-23: one committed robot description; every other robot file is
   derived at run time and never committed.** `models/tiago_pro/tiago_pro.urdf`
   is PAL's simulator URDF with the arm values written in once. The reduced arm

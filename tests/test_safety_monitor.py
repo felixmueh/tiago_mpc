@@ -104,10 +104,10 @@ class CollisionPortTests(unittest.TestCase):
                 urdf = s._resolved_collision_urdf()
                 self.assertTrue(urdf.is_relative_to(cache_root()))
                 for mesh in ET.parse(urdf).findall('.//mesh'):
-                    path = Path(mesh.get('filename'))
-                    self.assertTrue(path.is_absolute())
+                    self.assertFalse(Path(mesh.get('filename')).is_absolute())
+                    path = (urdf.parent / mesh.get('filename')).resolve()
                     self.assertTrue(path.is_file())
-                    self.assertTrue(path.is_relative_to(s.REPO_ROOT / 'models'))
+                    self.assertTrue(path.is_relative_to(cache_root() / 'models' / 'meshes'))
             finally:
                 os.chdir(cwd)
 

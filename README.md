@@ -60,8 +60,9 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
   `Mpc.compile(params)` and `MpcProcess.compile(params)` do both, as the mains do.
 - **One robot file is committed,** `models/tiago_pro/tiago_pro.urdf`. The
   reduced arm, its GPU copy and the safety collision model are derived from it
-  at run time (milliseconds) into the same cache, `models/<hash>/`
-  ([models/README.md](models/README.md)); never commit a derived file.
+  at run time (milliseconds) into the same cache, `models/<hash>/`, their meshes
+  as copies named by their contents, `models/meshes/<sha256>.stl`, referenced by
+  relative paths ([models/README.md](models/README.md)); never commit a derived file.
 - **Container and host share this checkout.** The container
   (`/workspace/tiago_mpc`) uses `.venv` and `.cache/gato`; the host uses
   `venv-host` with `GATO_CACHE_DIR=$PWD/.cache/host-gato` (nvcc 12.9, g++-14).

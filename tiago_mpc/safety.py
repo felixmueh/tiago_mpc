@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from .tiago import FULL_URDF, MESHES, RIGHT_ARM_JOINTS, ROOT as REPO_ROOT, cached
+from .tiago import FULL_URDF, MESHES, RIGHT_ARM_JOINTS, ROOT as REPO_ROOT, cache_meshes, cached
 
 
 COLLISION_DIRECTORY = REPO_ROOT / "models" / "safety" / "collision_alpha_wrap_a3_o25_cap001"
@@ -517,7 +517,8 @@ def collision_urdf_tree() -> ET.Element:
 def _resolved_collision_urdf(
     source: Path | None = None, *, package_dirs: Sequence[str | Path] | None = None,
 ) -> Path:
-    """source (None: collision_urdf_tree) with resolved mesh paths, in the cache.
+    """source (None: collision_urdf_tree) in the cache, its meshes as cached copies
+    (cache_meshes).
 
     The overlay mixes relative simplified meshes and the full URDF's PAL package
     references; those resolve to the included meshes by basename. No installed PAL
@@ -529,16 +530,18 @@ def _resolved_collision_urdf(
         source = source.resolve(strict=True)
         tree, roots, canonical = ET.parse(source).getroot(), [source.parent], source == FULL_URDF.resolve()
     roots += [Path(p).resolve() for p in (package_dirs or ())]
-    for mesh in tree.iter("mesh"):
-        filename = mesh.get("filename", "")
+
+    def resolve(filename: str) -> Path:
         relative = filename.removeprefix("package://").removeprefix("file://")
         candidates = [root / relative for root in roots]
         if canonical and filename.startswith(("package://", "file://")):
             candidates = [MESHES / Path(relative).name]
-        resolved = next((path.resolve() for path in candidates if path.is_file()), None)
+        resolved = next((path for path in candidates if path.is_file()), None)
         if resolved is None:
             raise FileNotFoundError(f"collision URDF mesh not found: {filename} ({source or COLLISION_OVERLAY_PATH})")
-        mesh.set("filename", str(resolved))
+        return resolved
+
+    cache_meshes(tree, resolve)
     name = "safety_collision.urdf" if source is None else source.name
     return cached(name, ET.tostring(tree, encoding="utf-8", xml_declaration=True))
 
@@ -556,7 +559,6 @@ def build_tiago_collision_model(
     """Build the reduced full-body collision model used by runtime safety
     (urdf_path None: collision_urdf_tree)."""
     urdf = _resolved_collision_urdf(None if urdf_path is None else Path(urdf_path), package_dirs=package_dirs)
-    package_dirs = tuple(Path(path) for path in (package_dirs or (urdf.parent,)))
     full_model = pin.buildModelFromUrdf(str(urdf))
     controlled_names = tuple(controlled_joint_names)
     missing_controlled = sorted(
@@ -572,7 +574,7 @@ def build_tiago_collision_model(
         str(urdf),
         pin.GeometryType.COLLISION,
         None,
-        [str(path) for path in package_dirs],
+        [str(urdf.parent)],  # the meshes' relative paths (cache_meshes) start here
     )
 
     reference_q = pin.neutral(full_model)

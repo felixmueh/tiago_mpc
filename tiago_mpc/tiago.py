@@ -19,6 +19,7 @@ from functools import cache
 import hashlib
 import os
 from pathlib import Path
+from typing import Callable
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -51,15 +52,35 @@ def cache_root() -> Path:
 
 def cached(name: str, payload: bytes) -> Path:
     """payload as <cache_root()>/models/<hash of payload>/name. Content-addressed, so
-    concurrent processes deriving different files never share a path; written
-    atomically, and only when missing or different."""
-    path = cache_root() / "models" / digest(payload) / name
+    concurrent processes deriving different files never share a path."""
+    return _write(cache_root() / "models" / digest(payload) / name, payload)
+
+
+def _write(path: Path, payload: bytes) -> Path:
+    """payload at path, atomically, and only when missing or different."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if not (path.exists() and path.read_bytes() == payload):
         tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         tmp.write_bytes(payload)
         os.replace(tmp, path)
     return path
+
+
+# The derived URDFs reference cached copies of their meshes, named by their contents
+# (models/meshes/<sha256>.stl), by paths relative to the URDF (models/<digest>/<name>.urdf).
+# GATO spherizes the GPU copy's collision meshes into its module, but its codegen key
+# hashes only the URDF's bytes: a content name makes a changed mesh change those bytes,
+# and a relative path keeps them, and the plant names, independent of the checkout's path.
+def cache_meshes(tree: ET.Element, source: Callable[[str], Path]) -> None:
+    """Point every <mesh> in tree at a cached copy of source(its filename)."""
+    for mesh in tree.iter("mesh"):
+        path = source(mesh.attrib["filename"])
+        data = path.read_bytes()
+        if data.startswith(b"version https://git-lfs"):
+            raise ValueError(f"Git LFS pointer instead of a mesh (git lfs pull): {path}")
+        name = hashlib.sha256(data).hexdigest() + path.suffix.lower()
+        _write(cache_root() / "models/meshes" / name, data)
+        mesh.set("filename", f"../meshes/{name}")
 
 
 def digest(*parts: bytes) -> str:
@@ -101,6 +122,7 @@ def arm_urdf() -> Path:
     ET.SubElement(grasp, "parent", link="arm_right_tool_link")
     ET.SubElement(grasp, "child", link="arm_right_grasp_link")
     ET.SubElement(grasp, "origin", rpy="0 0 0", xyz="0 0 0.139288457525")
+    cache_meshes(arm, lambda filename: MESHES / Path(filename).name)  # package:// by basename
     ET.indent(arm)
     return cached("tiago_right_arm.urdf", ET.tostring(arm, encoding="utf-8", xml_declaration=True))
 
@@ -199,10 +221,13 @@ def fk(q: np.ndarray, frame: str = GRASP_FRAME) -> np.ndarray:
 def runtime_urdf(friction=None):
     """The GPU URDF and the GPU coordinate signs.
 
-    A copy of the reduced arm with resolved mesh paths and friction's coefficients, if
-    given, whose negative joint axes are turned positive, with their limits; in the
-    cache, by its content (cached)."""
+    A copy of the reduced arm with friction's coefficients, if given, whose negative joint
+    axes are turned positive, with their limits; in the cache, by its content (cached).
+    GATO reads only its collision meshes, so the visuals are left out."""
     tree = ET.parse(arm_urdf())
+    for link in tree.iter("link"):
+        for visual in link.findall("visual"):
+            link.remove(visual)
     joints = [joint for joint in tree.iter("joint") if joint.get("type") != "fixed"]
     if friction is not None:  # the coefficients survive the axis flips below
         for joint, c, b in zip(joints, friction.coulomb_nm, friction.viscous_nm_s_per_rad):
@@ -211,11 +236,6 @@ def runtime_urdf(friction=None):
                 dynamics = ET.SubElement(joint, "dynamics")
             dynamics.set("friction", repr(float(c)))
             dynamics.set("damping", repr(float(b)))
-    for mesh in tree.iter("mesh"):
-        path = MESHES / Path(mesh.attrib["filename"]).name
-        if not path.is_file():
-            raise FileNotFoundError(path)
-        mesh.set("filename", str(path))
     signs = []
     for joint in joints:
         axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
