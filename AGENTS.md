@@ -100,15 +100,19 @@ without ROS.
 
 ## Working here
 
-- **Host and container share the checkout.** The container uses `.venv` and
-  `.cache/gato`; on the host use `venv-host` with `GATO_CACHE_DIR` set to the
-  main checkout's `.cache/host-gato`
-  (`/home/felix/_Uni/MasterThesis/impl/tiago_mpc/.cache/host-gato`), from the
-  main checkout and every worktree alike (Felix, 2026-10-23): derived files and
-  GATO's modules are named by their contents, not the checkout's path, so
-  worktrees reuse main's compiled modules. A worktree at another GATO commit
-  also sets `PYTHONPATH=<worktree>/external/gato/python`, because `venv-host`
-  imports main's GATO. Do not touch the other side's.
+- **One shared GATO cache** (Felix, 2026-10-23): the main checkout's
+  `.cache/gato` (`/home/felix/_Uni/MasterThesis/impl/tiago_mpc/.cache/gato`)
+  serves the main checkout and every worktree, on the host (`venv-host`) and in
+  the container (`.venv`) alike; `cache_root()` finds it through git, so leave
+  `GATO_CACHE_DIR` unset (it remains an override). Derived files and GATO's
+  modules are named by their contents, the module key including the toolchain
+  and Python ABI, so host and container builds coexist and worktrees reuse
+  main's compiled modules. A worktree at another GATO commit also sets
+  `PYTHONPATH=<worktree>/external/gato/python`, because `venv-host` imports
+  main's GATO. Where git cannot resolve the main checkout (a host-created
+  worktree inside the container), the default falls back to the worktree's own
+  `.cache/gato`. Host and container keep their own environments (`venv-host`,
+  `.venv`); do not touch the other side's.
 - **GPU:** one job at a time; check `nvidia-smi` first.
 - **Agents:** use them for bounded tasks; the root agent coordinates
   interpretation, shared edits and GPU use.

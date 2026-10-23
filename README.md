@@ -55,7 +55,8 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
   the TIAGo dynamics and compiles one CUDA module per variant (minutes, CPU
   only), `bsqpN<N>_tiago_right_<hash>` with the hash over the GPU URDF,
   end-effector frame and predictor friction, cached in `GATO_CACHE_DIR` (default
-  `.cache/gato`); once cached it returns at once, `use_cache=False` rebuilds.
+  the main checkout's `.cache/gato`); once cached it returns at once,
+  `use_cache=False` rebuilds.
   `find_binary(params)` returns the cached module or None. `Mpc(params, binary)`
   and `MpcProcess(params, binary)` load exactly that file and never compile;
   `Mpc.compile(params)` and `MpcProcess.compile(params)` do both, as the mains do.
@@ -65,10 +66,10 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
   as copies named by their contents, `models/meshes/<sha256>.stl`, referenced by
   relative paths ([models/README.md](models/README.md)); never commit a derived file.
 - **Container and host share this checkout.** The container
-  (`/workspace/tiago_mpc`) uses `.venv` and `.cache/gato`; the host uses
-  `venv-host` (nvcc 12.9, g++-14) with `GATO_CACHE_DIR` set to the main
-  checkout's `.cache/host-gato`, also from worktrees, which then reuse its
-  compiled modules.
+  (`/workspace/tiago_mpc`) uses `.venv`, the host `venv-host` (nvcc 12.9,
+  g++-14). Both, and every worktree, share the main checkout's `.cache/gato`
+  (`GATO_CACHE_DIR` overrides it): modules are keyed by content, toolchain and
+  Python ABI, so builds of both sides coexist and worktrees reuse main's.
 
 ## Running the experiments
 

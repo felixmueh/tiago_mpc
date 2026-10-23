@@ -1,5 +1,6 @@
 """The derived URDFs: content-addressed in the cache; the GPU model's URDF keeps the
 native model and maps joint 6's sign (CPU only)."""
+import subprocess
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -44,3 +45,14 @@ def test_derived_files_are_written_once_by_content(monkeypatch, tmp_path):
     assert (arm.stat().st_mtime_ns, gpu.stat().st_mtime_ns) == before
     friction = Friction((1.,) * 7, (2.,) * 7)
     assert tiago.runtime_urdf(friction)[0] != gpu  # other coefficients, another path
+
+
+def test_worktrees_share_the_main_checkouts_cache(tmp_path):
+    main, worktree = tmp_path / "main", tmp_path / "worktree"
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    subprocess.run([*git, "-C", str(main), "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(worktree)], check=True)
+    assert util.main_checkout(worktree) == util.main_checkout(main) == main.resolve()
+    (tmp_path / "plain").mkdir()  # without git: the directory itself
+    assert util.main_checkout(tmp_path / "plain") == tmp_path / "plain"

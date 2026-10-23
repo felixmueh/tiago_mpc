@@ -10,14 +10,28 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 from typing import Callable
 import xml.etree.ElementTree as ET
 
 
+def main_checkout(repo: Path) -> Path:
+    """The main working tree of repo's git repository (repo itself without git), so
+    every worktree shares the main checkout's cache."""
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return repo
+    return Path(common).parent if Path(common).name == ".git" else repo
+
+
 def cache_root() -> Path:
-    """GATO_CACHE_DIR if set (host runs), else <repo>/.cache/gato; exported for GATO."""
-    default = Path(__file__).resolve().parents[1] / ".cache/gato"
+    """GATO_CACHE_DIR if set, else the main checkout's .cache/gato, shared by every
+    worktree, host and container (Felix, 2026-10-23); exported for GATO."""
+    default = main_checkout(Path(__file__).resolve().parents[1]) / ".cache/gato"
     root = Path(os.environ.get("GATO_CACHE_DIR") or default).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     os.environ["GATO_CACHE_DIR"] = str(root)
