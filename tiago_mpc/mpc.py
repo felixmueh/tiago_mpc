@@ -31,13 +31,13 @@ from .tiago import ARM_URDF, GRASP_FRAME, Q_REACH, Q_START, ROOT, digest, fk, li
 @dataclass(frozen=True)
 class AdmmLimits:
     """MPCController limits_kw for the ADMM limit rows; the defaults are GATO's
-    (MPCController.LIMIT_DEFAULTS): at most iters inner iterations per SQP iteration."""
+    (MPCController.LIMIT_DEFAULTS) except rho_u: at most iters inner iterations per SQP iteration."""
     rho: float = .01
     iters: int = 10
     eps_rel: float = 1e-2
     rho_q: float = .1
     rho_qd: float = .03
-    rho_u: float = 1e-5
+    rho_u: float = 5e-4  # GATO's 1e-5 fits its control cost 2e-6; 5e-4 keeps that ratio of 5 to TIAGO's 1e-4
 
 
 @dataclass(frozen=True)

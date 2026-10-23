@@ -51,6 +51,7 @@ class Figure8:
 
 
 FIGURE8 = replace(TIAGO, dt_s=.01, solver=TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
+                  admm=replace(TIAGO.admm, rho_u=1e-5),  # GATO's value, for the control cost 1e-6
                   friction=urdf_friction(.03))
 
 

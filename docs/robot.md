@@ -95,7 +95,7 @@ diverge. `run` warns at the first such plan, once per run.
 - A start outside the joint box makes every solve work at the ADMM iteration
   cap until a plan's knot 0 runs. With the former ADMM settings (cap 100,
   eps_rel 1e-3) and PAL's comfortable pose, the solves took 42–49 ms, and on the
-  wall clock the lease ended the run. `Q_START` and GATO's ADMM settings keep
+  wall clock the lease ended the run. `Q_START` and the current ADMM settings (GATO's, except rho_u) keep
   the solves short.
 - Evidence: `research/tiago-mpc-latency-analysis.md` in the thesis workspace
   (simulation, 2026-10-22).

@@ -87,8 +87,9 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
   (the solver's own iteration limit, no time limit) seeds the first solve, and
   its time counts against no plan's lease.
 - **Limits:** the joint, speed and torque limits are ADMM rows with GATO's
-  default settings (`AdmmLimits`: at most 10 inner iterations per SQP
-  iteration, eps_rel 1e-2, rho 0.1, 0.03 and 1e-5 for the three boxes). The
+  default settings except the control box (`AdmmLimits`: at most 10 inner
+  iterations per SQP iteration, eps_rel 1e-2, rho 0.1, 0.03 and 5e-4 for the
+  three boxes; GATO's rho_u is 1e-5, which the figure eight keeps). The
   joint box is the URDF's shrunk by `joint_margin_rad` (0.1 rad); `Q_START`
   (`tiago.py`), where the runs start, lies inside it.
 - **Late plans:** a plan that first takes effect a knot interval or more after

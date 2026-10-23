@@ -34,8 +34,10 @@ def test_asdict_round_trips_also_through_json_and_pickle(params):
     assert pickle.loads(pickle.dumps(params)) == params
 
 
-def test_the_admm_limits_are_gatos_defaults():
-    assert asdict(TIAGO.admm) == gato.MPCController.LIMIT_DEFAULTS["admm"]
+def test_the_admm_limits_are_gatos_defaults_except_rho_u():
+    ours, gatos = asdict(TIAGO.admm), gato.MPCController.LIMIT_DEFAULTS["admm"]
+    assert {k: v for k, v in ours.items() if k != "rho_u"} == {k: v for k, v in gatos.items() if k != "rho_u"}
+    assert ours["rho_u"] == 5e-4
 
 
 @pytest.fixture
