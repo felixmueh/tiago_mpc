@@ -1,12 +1,49 @@
 # Decisions
 
 Felix's lasting decisions for this repository, by topic, with dates and reasons
-where known. The code follows them; git keeps superseded wording. The
+where known. Pending implementation is marked explicitly; git keeps superseded wording. The
 2026-10-22 refactor implemented the approved design in the thesis workspace
 (`agent-reading/tiago-mpc-design/`: requirements, design, implementation plan).
 
 ## Purpose and shape
 
+- **2026-10-22: architecture review follow-up (implemented the same day).**
+  Keep the component decomposition; share experiment assembly/lifecycle and
+  launch plumbing while retaining task-specific definitions and metrics.
+  The hard-coded MPC worker and duplicated experiment plumbing are one
+  responsibility-boundary problem. Accepted names: `Mpc` and `MpcProcess`,
+  replacing `MpcInProcess` and `MpcWorker`. Each plant owns a reusable
+  clock (one less parameter to pass around): `plant.now()` returns
+  `plant.clock.now()`, from `Clock.wall()`, `Clock.simulation(start=0.0)` or
+  `Clock.external()`; `now()` reads execution time, `wall_time()` reads
+  monotonic wall time, `advance(dt)` is local-simulation-only, and
+  `update(t)` is external-only. `SimPlant` runs on the simulation clock or in
+  real time on the wall clock. Pacing stays in `plant.advance(t)`; the loop
+  runs on execution time and stays clock-agnostic. Keep measurement time
+  (`State.t`, `Plan.t0`) separate from execution time in the same time domain.
+  A type checker (mypy, run by `tests/test_types.py`) covers the core
+  (`tiago_mpc/` without `safety.py`); experiment files stay untyped. The
+  interfaces are the protocols `PlantInterface`, `MpcInterface` and
+  `TaskInterface` in `plan.py`. A task's required `at(t, n, dt)` returns the
+  reference and the named solver updates for a request at t (`None` when it
+  changes nothing); it replaced `reference` and the optional `updates`.
+  Additional experiment-setting metadata belongs to another project; safety
+  internals and the unfinished ROS2 SEA path remain outside this review.
+- **2026-10-23: the effort check belongs to the execution side.** `Mpc` and
+  `MpcProcess` return what they planned (`result()` checks only that the plan is
+  well formed and finite); `run` checks every knot of a plan when it arrives and
+  each command before it is sent. Reason: a simulator such as the visualizer must
+  be able to execute, clip or inspect an over-limit plan. Clipping stays a
+  simulation setting: the robot path never clips a torque.
+- **2026-10-22: compiling GATO's module is explicit.** An `Mpc` takes its
+  binary and never compiles: `Mpc(params, binary)` and `MpcProcess(params,
+  binary)` load exactly that file; `find_binary(params)` looks it up without
+  compiling; `compile_binary(params, use_cache=True)` compiles it (minutes,
+  CPU only) unless cached, and `use_cache=False` rebuilds. `Mpc.compile(params,
+  use_cache=True)` does both, so a call site that may compile says so.
+  Reason: `Mpc(params)` silently compiled for minutes, and the visualizer needs
+  settings changes that never compile. Also approved: `Mpc.step` keeps GATO's
+  raw step result, and replays carry their `MpcParams` in `provenance.params`.
 - **2026-10-22: four jobs.** TIAGo specifics for GATO (defaults, URDF
   preparation); experiments on the robot and in Gazebo (a simple ROS 2 adapter,
   separate processes, an independent safety check); data for the visualizer
@@ -90,14 +127,33 @@ where known. The code follows them; git keeps superseded wording. The
 - **GATO's warm start shifts one knot per solve**, whatever `dt_elapsed` says,
   so an update period other than dt starts from a misaligned guess. Kept: an
   elapsed-time resampling study (eight figure eights) found no practical benefit.
-- **2026-10-22: one loop body, two clocks.** `run_robot` uses the wall clock and
-  each plan on arrival; `run_simulation` charges each solve a latency (`Fixed`
-  or `Measured`), makes no new request while a plan is pending, and applies a
+- **2026-10-22: one loop body on the plant's execution time.** `run_robot`
+  (a plant on the wall clock) uses each plan on arrival; `run_simulation` (a
+  plant on a simulation clock; each refuses the other kind) charges each solve
+  a latency (`Fixed` or `Measured`), makes no new request while a plan is pending, and applies a
   plan from the first tick at or after its charged time. Results at nonzero
   latency changed with this. Past a plan's end, both loops fault.
-- **2026-10-22: one `Mpc` per run.** It resets on its first request, runs the
-  `MpcParams.warmup` solves, and never resets again; a fresh controller is a new
-  `Mpc`. Solver changes go only through named `updates`.
+- **2026-10-22: one `Mpc` per run.** `run` calls `mpc.warmup(state, reference)`
+  once before the first tick (arm still held); it resets the controller and, with
+  `MpcParams.warmup` (default on), runs GATO's warm-up solve (its limits cannot be
+  set through GATO's public API). Without a warm-up, the first request resets.
+  It never resets again; a fresh controller is a new `Mpc`. Solver changes go
+  only through named `updates`. GATO's SQP damping rho stays reset before every
+  solve (2026-10-23: carrying it changed no outcome in random100, the far reach or the figure eight).
+- **2026-10-23: fast solves and 500 Hz commands, so a plan takes effect within
+  one knot.** Latency analysis (`research/tiago-mpc-latency-analysis.md`): the
+  start pose lay outside joint 4's ADMM planning bound, every solve with latency
+  hit the ADMM cap, and `sample_knot` diverges once a plan takes effect a knot
+  late. Fixes: `Q_START` joint 4 at −2.33 (inside the box, guarded by a test);
+  GATO's ADMM defaults except `rho_u` 5e-4 for reaching (ratio 5 to its control
+  cost; GATO's 1e-5 made 46 of random100's first plans exceed the raw effort
+  limit), the figure eight keeps 1e-5; default command period 2 ms, control
+  updates at dt. `max_sqp_time_s` 0.01 s caps a solve on the wall clock;
+  simulations set None (a wall-time budget is wrong on a simulated clock).
+  `run` warns once when a plan is first commanded from its second knot; the
+  remedies, feedback around the plan or latency compensation, are named there.
+  GATO's u₀-at-arrival rule was dropped. random100 with these settings: 82
+  arrivals, 18 timeouts, 0 errors (`_expr_data/random100-step16-20261023/`).
 - **2026-10-22: no context managers.** `run` calls `plant.start()` before the
   first tick and `plant.stop()` first on exit; closing does not depend on order.
 - **2026-10-22: records per command tick**, buffered and written at the end.
@@ -106,7 +162,7 @@ where known. The code follows them; git keeps superseded wording. The
 - **2026-10-22: the simulator stays as it was:** Pinocchio RK4 with optional
   hard-sign friction, the substep an argument (reach 3 ms, figure eight 0.1 ms),
   friction a `SimPlant` parameter. A real simulator comes later.
-- **2026-10-22: random100 runs one MPC worker per case**, so a crash ends only
+- **2026-10-22: random100 runs one `MpcProcess` per case**, so a crash ends only
   that case.
 - **2026-10-22: `save_replay` lives in `experiments/replay.py`**; experiments
   call it after `record.save()`.
@@ -116,7 +172,7 @@ where known. The code follows them; git keeps superseded wording. The
 ## Robot
 
 - **2026-10-21: three processes:** the loop with the ROS I/O, a spawned MPC
-  worker and a spawned safety worker. GATO's bindings keep the GIL during a
+  process (`MpcProcess`) and a spawned safety worker. GATO's bindings keep the GIL during a
   solve, so only a separate process keeps the loop running. ROS imports stay
   optional and lazy.
 - **2026-10-21: review fixes:** exact effort-controller joint order; the safety
@@ -126,8 +182,10 @@ where known. The code follows them; git keeps superseded wording. The
   only warn and stay at neutral.
 - **2026-10-22: ROS is sourced in the launching shell**, otherwise a clear
   error; `ROS_DISTRO` is recorded.
-- **2026-10-22: `State.t` on the robot is the monotonic receipt time.** Gazebo
-  may need the ROS stamp; open (`docs/robot.md`).
+- **2026-10-22: `State.t` is the measurement time;** on the robot the monotonic
+  receipt time, in the domain of `RosPlant`'s wall clock. Gazebo would use
+  `Clock.external()` fed from `/clock`, with ROS stamps as `State.t`; open
+  (`docs/robot.md`).
 - **2026-10-22: safety is the robot plant's job.** `RosPlant` owns the safety
   worker (it needs the ROS sequence numbers, and activation waits for it), so a
   robot run cannot happen without it. There is no loop-level safety hook.
@@ -159,4 +217,4 @@ where known. The code follows them; git keeps superseded wording. The
 ## Open with Felix
 
 - How garbage collection runs between ticks or runs.
-- Whether Gazebo needs the ROS stamp as `State.t` (real-time factor other than 1).
+- Gazebo's clock: `Clock.external()` from `/clock` with ROS stamps as `State.t` (not implemented).
