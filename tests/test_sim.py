@@ -1,20 +1,22 @@
-"""SimPlant: today's RK4 integration, held commands, and the simulation and wall clocks."""
+"""SimPlant: held commands and the simulation and wall clocks."""
 from gato.common import rk4
 import numpy as np
 import pytest
 
 from tiago_mpc import sim
 from tiago_mpc.clock import Clock
-from tiago_mpc.dynamics import plant_rk4
+from tiago_mpc.dynamics import plant_euler
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import urdf_friction
 
 U = np.linspace(-1., 1., 7)
 
 
-@pytest.mark.parametrize("friction,substep", [(None, .003), (urdf_friction(), 1e-4)])
-def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, substep):
-    plant = SimPlant(substep=substep, friction=friction)
+@pytest.mark.parametrize("friction,substep,solver", [(None, .003, "constraint"),
+                                                   (urdf_friction(), .001, "sign"),
+                                                   (urdf_friction(), .001, "constraint")])
+def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, substep, solver):
+    plant = SimPlant(substep=substep, friction=friction, friction_solver=solver)
     q, qd, t = plant.q.copy(), plant.qd.copy(), 0.
     plant.start()
     plant.apply(U)
@@ -22,10 +24,11 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, subste
     while t < .01 - 1e-12:  # e.g. 3, 3, 3 and 1 ms
         h = min(substep, .01 - t)
         q, qd = (rk4(plant.model, plant.data, q, qd, U, h) if friction is None
-                 else plant_rk4(plant.model, plant.data, q, qd, U, h, friction))
+                 else plant_euler(plant.model, plant.data, q, qd, U, h, friction, solver))
         t += h
     s = plant.state()
     assert s.t == plant.now() == .01 and plant.settings["clock"] == "simulation"
+    assert plant.settings["friction_solver"] == (None if friction is None else solver)
     np.testing.assert_array_equal(s.q, q)
     np.testing.assert_array_equal(s.qd, qd)
     plant.apply(-U)  # the state is at the simulation clock's time: nothing to integrate
@@ -33,6 +36,13 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, subste
     np.testing.assert_array_equal(plant.q, q)
     plant.stop()
     np.testing.assert_array_equal(plant.command, np.zeros(7))
+
+
+@pytest.mark.parametrize("settings", [dict(substep=0), dict(substep=-.001), dict(substep=np.nan),
+                                     dict(friction_solver="other"), dict(friction=urdf_friction(.03))])
+def test_invalid_integration_settings_fail_before_a_run(settings):
+    with pytest.raises(ValueError):
+        SimPlant(**settings)
 
 
 def test_on_the_wall_clock_advance_integrates_then_waits_for_it(monkeypatch):

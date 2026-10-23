@@ -76,12 +76,16 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
                           run=partial(run_simulation, latency=Fixed(.01)), command_period=.01)
     else:
         task = f8.Figure8(period_s=.05)
-        record = f8.figure8(SimPlant(substep=1e-4, friction=urdf_friction()), Mpc(replace(f8.FIGURE8, N=4)),
+        record = f8.figure8(SimPlant(friction=urdf_friction()), Mpc(replace(f8.FIGURE8, N=4)),
                             task=task, out=tmp_path / name, command_period=.01)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     assert summary["status"] == ("timeout" if name == "reach" else "completed")
     assert summary["params"]["N"] == 4 and summary["task"]["type"] == type(task).__name__
     assert summary["plant"]["type"] == "SimPlant" and summary["limits_pass"]
+    if name == "figure8":
+        assert summary["plant"]["substep_s"] == .001
+        assert summary["plant"]["friction_solver"] == "constraint"
+        assert summary["params"]["friction"]["width_rad_s"] == .03  # predictor stays smooth
     assert summary["ticks"] == 6 and summary["plans"] == 5
     with np.load(tmp_path / name / "trajectory.npz") as saved:
         np.testing.assert_allclose(saved["time_s"], np.arange(6) * .01, atol=1e-12)

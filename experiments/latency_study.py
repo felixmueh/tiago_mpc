@@ -32,14 +32,14 @@ COMMAND_PERIOD = .002  # the experiments' default; the control-update period is 
 # "far" is T01 goal 3 of the latency analysis: the flange at Q_START plus this joint offset
 # (31.7 cm there; Q_START's joint 4 has since moved from -2.35 to -2.33 rad).
 # "reach-friction" runs the loss-free predictor against a plant with the URDF's friction;
-# the figure eight predicts tanh friction against a plant with hard-sign friction.
+# the figure eight predicts tanh friction against a plant with constraint Coulomb friction.
 T01_GOAL3 = np.array([.36, 1.2, 0., .45, 0., .15, 0.])
 TASKS = {  # name: (experiment, task or None for its default, params, plant)
     "reach": (reach, Reach(), TIAGO, lambda: SimPlant(substep=.003)),
     "far": (reach, Reach(tuple(map(float, fk(Q_START + T01_GOAL3, FLANGE_FRAME))), ee_frame=FLANGE_FRAME),
             replace(TIAGO, ee_frame=FLANGE_FRAME), lambda: SimPlant(substep=.003)),
-    "reach-friction": (reach, Reach(), TIAGO, lambda: SimPlant(substep=1e-4, friction=urdf_friction())),
-    "figure8": (figure8, None, FIGURE8, lambda: SimPlant(substep=1e-4, friction=urdf_friction())),
+    "reach-friction": (reach, Reach(), TIAGO, lambda: SimPlant(friction=urdf_friction())),
+    "figure8": (figure8, None, FIGURE8, lambda: SimPlant(friction=urdf_friction())),
 }
 CASES = {"stock": (False, sample_knot), "compensated": (True, sample_knot),  # name: (compensate, law)
          "feedback": (False, PlanFeedback()), "compensated+feedback": (True, PlanFeedback())}

@@ -114,9 +114,15 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (`../tiago_mpc_visualizer/docs/friction.md`) attributes this to viscous damping
   against joint 7's link-only inertia, stiff for explicit 3 ms RK4 substeps.
   Friction-enabled reaching is not qualified.
-- **Tracking uses friction on both sides:** hard-sign Coulomb plus viscous in
+- **Tracking uses friction on both sides:** constraint Coulomb plus viscous in
   the plant, tanh Coulomb (width 0.03 rad/s) plus viscous in the predictor, both
-  from the URDF.
+  from the URDF. The plant change does not qualify tracking.
+- **2026-10-23: compare both simulator friction proposals** (Felix). A fresh
+  worktree from main, one commit for review before any merge. Both use Pinocchio
+  semi-implicit Euler with implicit damping and a default 1 ms maximum step;
+  Coulomb is either sign(v_old), or a coupled constraint solve allowing sticking
+  at zero (the proposed default). No MPC tuning or predictor changes. Reaching
+  stays loss-free by default; armature stays disabled.
 - **2026-10-22: the smoothing width becomes compile-time only**, to diverge less
   from upstream GATO. Not done: the pinned fork still has the runtime-width
   commits; the friction work follows the refactor.
@@ -176,9 +182,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - **2026-10-22: records per command tick**, buffered and written at the end.
 - **2026-10-22: garbage collection is paused during `run`** (full collections
   took 7–10 ms at 500 Hz). It must run in between; how is to be discussed.
-- **2026-10-22: the simulator stays as it was:** Pinocchio RK4 with optional
-  hard-sign friction, the substep an argument (reach 3 ms, figure eight 0.1 ms),
-  friction a `SimPlant` parameter. A real simulator comes later.
+- **2026-10-23: the simulator's friction step is semi-implicit Euler**, with
+  sign and constraint Coulomb choices (see Friction and GATO). Loss-free plants
+  keep Pinocchio RK4 (reach 3 ms); substep and friction remain `SimPlant` arguments.
 - **2026-10-22: random100 runs one `MpcProcess` per case**, so a crash ends only
   that case.
 - **2026-10-22: `save_replay` lives in `experiments/replay.py`**; experiments
@@ -228,7 +234,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - Laws beyond sampling the plan; a `configure` hook.
 - The ROS container, and with it the Gazebo check.
 - Migrating the visualizer off `tiago_mpc_vis_baseline`.
-- The real simulator (armature, constraint solving).
+- Armature in the simulator.
 - The compile-time friction width.
 
 ## Open with Felix

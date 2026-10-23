@@ -111,8 +111,8 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
 - **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm at a joint-speed L1 norm of at most 1 rad/s, timeout 8 s.
-- **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, hard sign
-  in the plant (0.1 ms substeps) and tanh (width 0.03 rad/s) in the predictor.
+- **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, constraint
+  Coulomb in the plant (1 ms substeps) and tanh (width 0.03 rad/s) in the predictor.
 - **Exit status** 1 on a timeout or a raw-limit excess.
 
 ## Writing an experiment
@@ -150,6 +150,16 @@ mpc.close()
   `PlantInterface`, `MpcInterface` and `TaskInterface` declare.
 - `SimPlant(friction=...)` sets the **plant's** losses, `MpcParams.friction`
   the **predictor's**; the run records both.
+- **Friction simulation:** `SimPlant(friction=urdf_friction())` uses semi-implicit
+  Euler, implicit viscous damping and a coupled Coulomb constraint solve. Joints
+  hold at zero velocity while the needed friction lies within ±c, and slip at c.
+  `friction_solver="sign"` instead evaluates Coulomb as `c*sign(v_old)`; damping
+  stays implicit, but Coulomb can chatter and creep near zero. Both use the full
+  Pinocchio mass matrix and bias at the old state and advance q with the new
+  velocity. The default maximum substep is 1 ms (1 kHz), shortened to land on a
+  command tick; this does not set the command or control rate. Loss-free plants
+  keep RK4. Smoothing is predictor-only; armature remains disabled. These plant
+  choices do not qualify friction-enabled MPC or tracking.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
   the raw GATO `controller` and `step`, the latest solve's result), `run` and

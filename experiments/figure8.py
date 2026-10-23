@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Horizontal figure-eight tracking (robot: checks only by default).
 
-In simulation with friction in the plant (hard sign) and the predictor (tanh)."""
+In simulation with constraint Coulomb friction in the plant and tanh in the predictor."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -83,7 +83,7 @@ def figure8(plant, mpc, run=run_simulation, task=Figure8(), law=sample_knot, out
 def main(argv=None):
     args = arguments(__doc__, argv)
     task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
-    record = launch(args, partial(figure8, task=task), lambda: SimPlant(substep=1e-4, friction=urdf_friction()),
+    record = launch(args, partial(figure8, task=task), lambda: SimPlant(friction=urdf_friction()),
                     FIGURE8)
     return 0 if record is None or record.summary["limits_pass"] else 1
 
