@@ -86,11 +86,20 @@ python experiments/random100/run.py --dry-run  # 100 reaches: experiments/random
   the arm still held: with `MpcParams.warmup` (default), GATO's warm-up solve
   (the solver's own iteration limit, no time limit) seeds the first solve, and
   its time counts against no plan's lease.
+- **Limits:** the joint, speed and torque limits are ADMM rows with GATO's
+  default settings (`AdmmLimits`: at most 10 inner iterations per SQP
+  iteration, eps_rel 1e-2, rho 0.1, 0.03 and 1e-5 for the three boxes). The
+  joint box is the URDF's shrunk by `joint_margin_rad` (0.1 rad); `Q_START`
+  (`tiago.py`), where the runs start, lies inside it.
+- **Late plans:** a plan that first takes effect a knot interval or more after
+  its state never runs its knot 0, and `sample_knot` may diverge; `run` warns
+  once per run ([docs/robot.md](docs/robot.md#latency)).
 - **Rates:** `--command-period` sets the command rate (default 2 ms, 500 Hz,
   in simulation and on the robot), `--update-period` the control rate (default
   the knot interval `dt_s`, 10 ms); either may differ from the knot interval.
   `--duration S` ends a run after at most S seconds.
-- **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps; arrival within
+- **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps, from `Q_START`
+  (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm at a joint-speed L1 norm of at most 1 rad/s, timeout 8 s.
 - **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, hard sign
   in the plant (0.1 ms substeps) and tanh (width 0.03 rad/s) in the predictor.

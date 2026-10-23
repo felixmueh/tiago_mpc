@@ -29,9 +29,12 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 - **`--duration S`** ends a run after at most S seconds (otherwise the reach
   times out after 8 s and the figure eight runs its 24 s period); use it for
   first runs.
-- **Before execution:** base and grippers stationary, the arm at rest at the
-  comfortable pose `[-0.39, -1.73, -0.38, -2.35, 0, -1.21, 0.04]` rad. There is
-  no automatic reset; check the path and the scene yourself.
+- **Before execution:** base and grippers stationary, the arm at rest within
+  0.05 rad of `Q_START` (`tiago.py`), `[-0.39, -1.73, -0.38, -2.33, 0, -1.21,
+  0.04]` rad. That is PAL's comfortable pose with joint 4 at −2.33 instead of
+  −2.35 rad, inside the MPC's joint box. PAL's own pose passes the check but
+  starts joint 4 0.0065 rad outside that box. There is no automatic reset;
+  check the path and the scene yourself.
 
 ## Processes
 
@@ -77,6 +80,26 @@ tolerances are fields of `Checks` in `robot.py`.
   reconciliation.
 - **`close()`** stops the safety worker and the ROS client.
 
+## Latency
+
+A plan starts at its state's time t₀, and `sample_knot` commands the knot due
+at the execution time t. A plan that first takes effect at t − t₀ ≥ dt (one
+knot interval) never runs its knot 0. Consecutive plans differ mainly in that
+knot, so with every plan that late the loop loses the feedback and can
+diverge. `run` warns at the first such plan, once per run.
+
+- On the wall clock a plan takes effect at the first command tick after it
+  arrives. With command ticks of one knot (10 ms), any solve delays it by a
+  full knot; 2 ms ticks (the default) keep a solve of a few milliseconds within
+  knot 0.
+- A start outside the joint box makes every solve work at the ADMM iteration
+  cap until a plan's knot 0 runs. With the former ADMM settings (cap 100,
+  eps_rel 1e-3) and PAL's comfortable pose, the solves took 42–49 ms, and on the
+  wall clock the lease ended the run. `Q_START` and GATO's ADMM settings keep
+  the solves short.
+- Evidence: `research/tiago-mpc-latency-analysis.md` in the thesis workspace
+  (simulation, 2026-10-22).
+
 ## Clock
 
 `RosPlant` runs on `Clock.wall()`. `State.t` is the state's monotonic receipt
@@ -113,14 +136,12 @@ as `State.t` (a comment in `RosPlant.__init__`); not implemented.
   (TODO in `ros2.py`). SIGKILL or a host crash skips the handback; what the
   robot's onboard controllers then do is unknown.
 - On the wall clock the plan in use expires 100 ms after its state; if the
-  next plan arrives later, the run faults. With the 10 ms solve-time limit and
-  the warm-up (42 ms: five SQP iterations, each at the ADMM iteration cap), the
-  default reach with `SimPlant(clock=Clock.wall())` no longer hit this fault in
-  two runs, but moved away from the target (6 cm to 20–24 cm, joint-speed L1
-  10–13 rad/s) and faulted after 0.32 and 0.39 s on a plan above the raw effort
-  limit. All but three solves stopped on the time limit after one or two SQP
-  iterations at the ADMM cap, taking 8–25 ms. Without the time limit, `--latency measured` still faulted on
-  the lease after 0.22 s (every solve five SQP iterations at the ADMM cap,
-  39–48 ms) (2026-10-22).
+  next plan arrives later, the run faults. With `SimPlant(clock=Clock.wall())`,
+  `run_robot` and `MpcProcess`, two runs each (2026-10-23, desktop GPU), the
+  default reach and the latency analysis' 31.7 cm far reach arrived within the
+  limits with 2 ms command ticks (0.11 s and 1.64–1.69 s; median solve 3 ms, at
+  most 5 ms). With 10 ms command ticks every plan took effect a knot late: the
+  default reach arrived (0.30–0.31 s), the far reach diverged and faulted on a
+  plan above the raw effort limit after 2.7 s.
 - Startup needs a real full-body posture that passes the safety worker; the
   comfortable arm with every other joint at zero fails it ([safety.md](safety.md)).
