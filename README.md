@@ -19,7 +19,8 @@ is when the state was measured, in the same domain, and a plan starts at its
 state's time; on the robot a state can be older than the tick and repeat.
 
 ```
-tiago_mpc/    tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
+tiago_mpc/    util.py (the cache: cache_root, cached, cache_meshes, digest),
+              tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary,
               Mpc, MpcProcess),
               plan.py (State, Plan, Tick; the protocols PlantInterface, MpcInterface,

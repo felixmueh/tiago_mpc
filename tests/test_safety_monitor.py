@@ -20,7 +20,8 @@ import numpy as np
 import pinocchio as pin
 
 from tiago_mpc import safety as s
-from tiago_mpc.tiago import FULL_URDF, Q_START, RIGHT_ARM_JOINTS, cache_root
+from tiago_mpc.tiago import FULL_URDF, Q_START, RIGHT_ARM_JOINTS
+from tiago_mpc.util import cache_root
 
 
 # The reviewed collision source, blacklist and alpha-wrap receipt, byte for byte as in

@@ -3,7 +3,7 @@ and the files derived from the full URDF.
 
 models/tiago_pro/tiago_pro.urdf is the only robot description in the repository and
 the source of the coefficients and limits. Every other robot file is derived from it
-at run time and written to the cache (cache_root): the reduced arm (arm_urdf), its
+at run time and written to the cache (util.cache_root): the reduced arm (arm_urdf), its
 GPU copy (runtime_urdf) and the safety collision model (safety.py). Nothing derived
 is committed, so nothing derived can go stale.
 
@@ -16,15 +16,13 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cache
-import hashlib
-import os
 from pathlib import Path
-from typing import Callable
 import xml.etree.ElementTree as ET
 
 import numpy as np
 
 from .dynamics import Friction
+from .util import cache_meshes, cached
 
 ROOT = Path(__file__).resolve().parents[1]  # the repository
 FULL_URDF = ROOT / "models/tiago_pro/tiago_pro.urdf"  # the whole robot
@@ -39,56 +37,6 @@ FLANGE_FRAME = "arm_right_tool_joint"
 Q_START = np.array([-0.39, -1.73, -0.38, -2.33, 0.0, -1.21, 0.04])
 # A nearby posture: the default reach target's, and the model check's second pose.
 Q_REACH = Q_START + np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
-
-
-def cache_root() -> Path:
-    """GATO_CACHE_DIR if set (host runs), else <repo>/.cache/gato; exported for GATO.
-    GATO's modules and every derived robot file live here."""
-    root = Path(os.environ.get("GATO_CACHE_DIR") or ROOT / ".cache/gato").expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    os.environ["GATO_CACHE_DIR"] = str(root)
-    return root
-
-
-def cached(name: str, payload: bytes) -> Path:
-    """payload as <cache_root()>/models/<hash of payload>/name. Content-addressed, so
-    concurrent processes deriving different files never share a path."""
-    return _write(cache_root() / "models" / digest(payload) / name, payload)
-
-
-def _write(path: Path, payload: bytes) -> Path:
-    """payload at path, atomically, and only when missing or different."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not (path.exists() and path.read_bytes() == payload):
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        tmp.write_bytes(payload)
-        os.replace(tmp, path)
-    return path
-
-
-# The derived URDFs reference cached copies of their meshes, named by their contents
-# (models/meshes/<sha256>.stl), by paths relative to the URDF (models/<digest>/<name>.urdf).
-# GATO spherizes the GPU copy's collision meshes into its module, but its codegen key
-# hashes only the URDF's bytes: a content name makes a changed mesh change those bytes,
-# and a relative path keeps them, and the plant names, independent of the checkout's path.
-def cache_meshes(tree: ET.Element, source: Callable[[str], Path]) -> None:
-    """Point every <mesh> in tree at a cached copy of source(its filename)."""
-    for mesh in tree.iter("mesh"):
-        path = source(mesh.attrib["filename"])
-        data = path.read_bytes()
-        if data.startswith(b"version https://git-lfs"):
-            raise ValueError(f"Git LFS pointer instead of a mesh (git lfs pull): {path}")
-        name = hashlib.sha256(data).hexdigest() + path.suffix.lower()
-        _write(cache_root() / "models/meshes" / name, data)
-        mesh.set("filename", f"../meshes/{name}")
-
-
-def digest(*parts: bytes) -> str:
-    """Eight hex characters over the parts (length-prefixed, so order and splits matter)."""
-    h = hashlib.sha256()
-    for part in parts:
-        h.update(len(part).to_bytes(8, "little") + part)
-    return h.hexdigest()[:8]
 
 
 # The reduced right arm. GATO plans for a fixed-base serial chain, and the MPC moves

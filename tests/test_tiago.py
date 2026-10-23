@@ -6,7 +6,7 @@ import numpy as np
 import pinocchio as pin
 import pytest
 
-from tiago_mpc import tiago
+from tiago_mpc import tiago, util
 from tiago_mpc.dynamics import Friction
 
 
@@ -31,14 +31,14 @@ def test_mesh_copies_reject_git_lfs_pointers(monkeypatch, tmp_path):
     monkeypatch.setenv("GATO_CACHE_DIR", str(tmp_path / "cache"))
     (tmp_path / "pointer.stl").write_bytes(b"version https://git-lfs.github.com/spec/v1\n")
     with pytest.raises(ValueError, match="Git LFS pointer"):
-        tiago.cache_meshes(ET.fromstring('<robot><mesh filename="pointer.stl"/></robot>'),
-                           lambda filename: tmp_path / filename)
+        util.cache_meshes(ET.fromstring('<robot><mesh filename="pointer.stl"/></robot>'),
+                          lambda filename: tmp_path / filename)
 
 
 def test_derived_files_are_written_once_by_content(monkeypatch, tmp_path):
     monkeypatch.setenv("GATO_CACHE_DIR", str(tmp_path))
     arm, gpu = tiago.arm_urdf(), tiago.runtime_urdf()[0]
-    assert arm.parent.name == tiago.digest(arm.read_bytes())
+    assert arm.parent.name == util.digest(arm.read_bytes())
     before = arm.stat().st_mtime_ns, gpu.stat().st_mtime_ns
     assert (tiago.arm_urdf(), tiago.runtime_urdf()[0]) == (arm, gpu)
     assert (arm.stat().st_mtime_ns, gpu.stat().st_mtime_ns) == before

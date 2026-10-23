@@ -25,7 +25,8 @@ import numpy as np
 
 from .dynamics import Friction, passive_torque
 from .plan import Plan, State
-from .tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, cache_root, digest, fk, runtime_urdf
+from .tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
+from .util import cache_root, digest
 
 
 @dataclass(frozen=True)

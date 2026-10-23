@@ -75,7 +75,7 @@ Errors inside the worker are `worker_error`; timeouts are `worker_stale`.
   (provenance: [models/README.md](../models/README.md)).
 - **Blacklist:** `models/safety/comfortable_pose_collision_blacklist.json`,
   unchanged; the worker never adds entries.
-- **Runtime model:** the overlay, its meshes as cached copies (`tiago.cache_meshes`), written to the cache
+- **Runtime model:** the overlay, its meshes as cached copies (`util.cache_meshes`), written to the cache
   (`<cache_root>/models/<hash>/safety_collision.urdf`); fixed base; wheel and finger joints locked
   at their start values (neutral when unobserved). It needs positions and
   velocities of the remaining 17 joints: torso lift, both arms, two head joints.

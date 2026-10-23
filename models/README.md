@@ -11,13 +11,13 @@
 - `licenses/`: upstream licenses of the two meshes from PAL repositories.
 
 Every other robot file is derived from `tiago_pro.urdf` at run time, into the
-cache (`tiago_mpc/tiago.py:cache_root`), and never committed: the reduced right
+cache (`tiago_mpc/util.py:cache_root`), and never committed: the reduced right
 arm (`arm_urdf`), its GPU copy (`runtime_urdf`) and the safety collision model.
 `python -m tiago_mpc.tiago` prints the arm's and the GPU copy's paths.
 
 The derived URDFs reference copies of their meshes in the cache, named by their
 contents (`models/meshes/<sha256>.stl`), by relative paths
-(`../meshes/<sha256>.stl` from `models/<hash>/<name>.urdf`; `tiago.cache_meshes`).
+(`../meshes/<sha256>.stl` from `models/<hash>/<name>.urdf`; `util.cache_meshes`).
 GATO spherizes the GPU copy's collision meshes into its module, but its code
 generation key hashes only the URDF's bytes: with meshes named by their contents,
 a changed mesh changes those bytes, and with relative paths the bytes and the
