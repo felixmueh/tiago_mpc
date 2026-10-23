@@ -109,7 +109,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   GRiD still evaluates the barrier terms of zero-weight soft limits; there is no
   public switch.
 - **2026-10-22: reaching is loss-free by default; friction is opt-in**
-  (`c76b68d`). The friction-enabled reaching default became unstable in its
+  (`f62c358`). The friction-enabled reaching default became unstable in its
   first 10 ms control interval; the visualizer's diagnosis
   (`../tiago_mpc_visualizer/docs/friction.md`) attributes this to viscous damping
   against joint 7's link-only inertia, stiff for explicit 3 ms RK4 substeps.
