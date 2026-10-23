@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
 """The two remedies for solve latency against stock sample_knot, on the simulation clock:
 latency compensation (latency_compensation.py), feedback around the plan (plan_feedback.py)
 and both together, over fixed latencies and four tasks. Each run once, serially (one GPU job).
 
-    python experiments/latency_study.py --output _expr_data/latency-examples/<name>
+Run from the checkout's root:
+    python -m experiments.latency_study --output _expr_data/latency-examples/<name>
 """
 from __future__ import annotations
 
@@ -17,16 +17,11 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.figure8 import FIGURE8, figure8
 from experiments.latency_compensation import run_compensated
 from experiments.plan_feedback import PlanFeedback
 from experiments.reach import Reach, reach
-from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import Fixed, run_simulation
-from tiago_mpc.mpc import TIAGO, Mpc, compile_binary
-from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import FLANGE_FRAME, Q_START, fk, urdf_friction
+import tiago_mpc as tm
 
 COMMAND_PERIOD = .002  # the experiments' default; the control-update period is the knot interval
 # "far" is T01 goal 3 of the latency analysis: the flange at Q_START plus this joint offset
@@ -35,13 +30,13 @@ COMMAND_PERIOD = .002  # the experiments' default; the control-update period is 
 # the figure eight predicts tanh friction against a plant with constraint Coulomb friction.
 T01_GOAL3 = np.array([.36, 1.2, 0., .45, 0., .15, 0.])
 TASKS = {  # name: (experiment, task or None for its default, params, plant)
-    "reach": (reach, Reach(), TIAGO, lambda: SimPlant(substep=.003)),
-    "far": (reach, Reach(tuple(map(float, fk(Q_START + T01_GOAL3, FLANGE_FRAME))), ee_frame=FLANGE_FRAME),
-            replace(TIAGO, ee_frame=FLANGE_FRAME), lambda: SimPlant(substep=.003)),
-    "reach-friction": (reach, Reach(), TIAGO, lambda: SimPlant(friction=urdf_friction())),
-    "figure8": (figure8, None, FIGURE8, lambda: SimPlant(friction=urdf_friction())),
+    "reach": (reach, Reach(), tm.TIAGO, lambda: tm.SimPlant(substep=.003)),
+    "far": (reach, Reach(tuple(map(float, tm.fk(tm.Q_START + T01_GOAL3, tm.FLANGE_FRAME))), ee_frame=tm.FLANGE_FRAME),
+            replace(tm.TIAGO, ee_frame=tm.FLANGE_FRAME), lambda: tm.SimPlant(substep=.003)),
+    "reach-friction": (reach, Reach(), tm.TIAGO, lambda: tm.SimPlant(friction=tm.urdf_friction())),
+    "figure8": (figure8, None, FIGURE8, lambda: tm.SimPlant(friction=tm.urdf_friction())),
 }
-CASES = {"stock": (False, sample_knot), "compensated": (True, sample_knot),  # name: (compensate, law)
+CASES = {"stock": (False, tm.sample_knot), "compensated": (True, tm.sample_knot),  # name: (compensate, law)
          "feedback": (False, PlanFeedback()), "compensated+feedback": (True, PlanFeedback())}
 
 
@@ -52,16 +47,16 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
     for name in tasks:
         experiment, task, params, plant = TASKS[name]
         params = replace(params, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
-        binary = compile_binary(params)
+        binary = tm.compile_binary(params)
         for ms in latencies_ms:
             for case in cases:
                 compensate, law = CASES[case]
                 run = (partial(run_compensated, latency_s=ms / 1e3, prediction_substep_s=prediction_substep_s,
                                predictor=predictor)
                        if compensate
-                       else partial(run_simulation, latency=Fixed(ms / 1e3)))
+                       else partial(tm.run_simulation, latency=tm.Fixed(ms / 1e3)))
                 case_out = out / name / f"{name}_{case}_{ms:g}ms"
-                mpc = Mpc(params, binary)
+                mpc = tm.Mpc(params, binary)
                 try:
                     experiment(plant(), mpc, run=run, law=law, out=case_out, command_period=COMMAND_PERIOD,
                                **({} if task is None else dict(task=task)))

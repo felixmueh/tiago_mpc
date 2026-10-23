@@ -21,6 +21,12 @@ something lasting. The robot path is in `docs/robot.md`, the safety worker in
   `tests/test_types.py`). Annotate public functions and methods; the interfaces
   are the structural protocols in `tiago_mpc/plan.py` (no inheritance, no
   run-time checks). Experiments stay untyped.
+- Experiments use `import tiago_mpc as tm` (Felix, 2026-10-23); package modules import
+  each other directly (`from .plan import State`), never through the root.
+- Run experiments as modules from the checkout's root, `python -m experiments.reach` (Felix,
+  2026-10-23): `-m` puts the current directory first, so each worktree imports its own
+  `tiago_mpc` and `experiments`. Never install `tiago_mpc` into a venv; `venv-host` is shared
+  across worktrees.
 - Docs describe the current code only; git keeps the history.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)

@@ -3,6 +3,8 @@
 save_replay writes the visualizer's portable NPZ v1 directly from native q
 samples. It does not import or run GATO, Pinocchio, or the visualizer (the
 TIAGo names come from tiago_mpc.tiago, which loads only NumPy).
+
+A library, not a command; export_replay is called by run_experiment (experiments.common).
 """
 from __future__ import annotations
 

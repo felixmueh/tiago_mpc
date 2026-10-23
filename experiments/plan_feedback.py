@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Feedback around the plan, as a control law: one remedy for solve latency.
 
 sample_knot sends only the plan's torques. Once a plan takes effect a knot interval or
@@ -17,32 +16,29 @@ experiments (latency compensation, the other remedy, does: latency_compensation.
           law=PlanFeedback())
 
 The main runs one reach in simulation as experiments/reach.py does, with this law.
+
+Run from the checkout's root: python -m experiments.plan_feedback [--help]
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 import sys
 
 import numpy as np
 import pinocchio as pin
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.common import arguments, launch
 from experiments.reach import Reach, reach
-from tiago_mpc.mpc import TIAGO
-from tiago_mpc.plan import PlanEnded
-from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import Q_START, arm_urdf
+import tiago_mpc as tm
 
 
-def inertia_gains(bandwidth_rad_s, damping_ratio=1., q=Q_START):
+def inertia_gains(bandwidth_rad_s, damping_ratio=1., q=tm.Q_START):
     """Per-joint (kp, kd) = (m w^2, 2 zeta m w), m the diagonal of the URDF arm's
     joint-space inertia at q: each joint alone, as a mass m, corrects its error as a
     second-order system with natural frequency w and damping ratio zeta. One scalar gain
     cannot fit all joints: m spans 0.39 (joint 2) to 0.0008 kg m^2 (joint 7) at Q_START."""
-    model = pin.buildModelFromUrdf(str(arm_urdf()))
+    model = pin.buildModelFromUrdf(str(tm.arm_urdf()))
     m = np.diag(pin.crba(model, model.createData(), np.asarray(q, dtype=float)))
     return tuple(m * bandwidth_rad_s**2), tuple(2 * damping_ratio * m * bandwidth_rad_s)
 
@@ -71,7 +67,7 @@ class PlanFeedback:
     def __call__(self, plan, t, state):
         k = plan.index(t - plan.t0)
         if k >= len(plan.torques):
-            raise PlanEnded("time is past the plan's last knot")
+            raise tm.PlanEnded("time is past the plan's last knot")
         s = min(max(t - plan.t0 - k * plan.dt, 0.), plan.dt)  # rounding at the knot boundary
         q, qd = plan.states[k, :7], plan.states[k, 7:]
         a = (plan.states[k + 1, 7:] - qd) / plan.dt
@@ -85,7 +81,7 @@ def main(argv=None):
     if args.plant != "sim":
         raise SystemExit("plan_feedback.py runs in simulation only: the law is untested on the robot")
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    record = launch(args, partial(reach, task=task, law=PlanFeedback()), lambda: SimPlant(substep=.003), TIAGO)
+    record = launch(args, partial(reach, task=task, law=PlanFeedback()), lambda: tm.SimPlant(substep=.003), tm.TIAGO)
     return 0 if record is None or record.summary["reached"] and record.summary["limits_pass"] else 1
 
 

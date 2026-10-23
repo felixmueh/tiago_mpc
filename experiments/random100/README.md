@@ -7,10 +7,10 @@ runner selects that frame. `manifest.json` lists the task IDs in their fixed
 order, and `inputs/` holds one NPZ per task.
 
 ```bash
-.venv/bin/python experiments/random100/run.py --dry-run     # parameters only
-.venv/bin/python experiments/random100/run.py               # all 100 cases
-.venv/bin/python experiments/random100/run.py --pairs 8990  # a subset
-.venv/bin/python experiments/random100/analyze.py <output-directory>
+.venv/bin/python -m experiments.random100.run --dry-run     # parameters only
+.venv/bin/python -m experiments.random100.run               # all 100 cases
+.venv/bin/python -m experiments.random100.run --pairs 8990  # a subset
+.venv/bin/python -m experiments.random100.analyze <output-directory>
 ```
 
 - **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`) with the

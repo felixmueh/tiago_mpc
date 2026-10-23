@@ -14,7 +14,7 @@ robot), and select the intended DDS domain and network. The package never
 loads ROS itself; constructing the client raises a `RuntimeError` if the ROS
 packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
-- **Check-only (default):** `experiments/reach.py --plant robot` creates
+- **Check-only (default):** `python -m experiments.reach --plant robot` creates
   `RosPlant(execute=False)`, runs `start()` and `stop()`, and prints the checked
   settings. It reads the controller inventory but loads no controller, switches
   nothing, publishes nothing and builds no MPC. Nothing is saved.

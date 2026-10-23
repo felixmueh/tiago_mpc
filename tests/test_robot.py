@@ -7,6 +7,7 @@ import pytest
 
 from experiments import common, figure8 as f8, reach as rc
 from test_loops import Mpc, Task
+import tiago_mpc as tm
 from tiago_mpc import clock as clock_module, robot
 from tiago_mpc.loops import run_robot
 from tiago_mpc.ros2 import ArmState
@@ -274,7 +275,7 @@ def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
 
 @pytest.mark.parametrize("module", [rc, f8])
 def test_robot_main_checks_only_by_default(rig, monkeypatch, module):
-    monkeypatch.setattr(common, "MpcProcess", NS(compile=lambda params: pytest.fail("check-only builds no MPC")))
+    monkeypatch.setattr(tm, "MpcProcess", NS(compile=lambda params: pytest.fail("check-only builds no MPC")))
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("check-only must not prompt"))
     monkeypatch.setattr(common.signal, "signal", lambda *args: None)
     assert module.main(["--plant", "robot"]) == 0
@@ -283,7 +284,7 @@ def test_robot_main_checks_only_by_default(rig, monkeypatch, module):
 
 def test_cancelled_execution_creates_no_ros_client(rig, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt: "no")
-    monkeypatch.setattr(common, "RosPlant", lambda **kwargs: pytest.fail("must cancel before the plant"))
+    monkeypatch.setattr(tm, "RosPlant", lambda **kwargs: pytest.fail("must cancel before the plant"))
     with pytest.raises(SystemExit) as exit:
         rc.main(["--plant", "robot", "--execute", "--target", ".5", ".1", ".2"])
     assert exit.value.code == 2
@@ -292,7 +293,7 @@ def test_cancelled_execution_creates_no_ros_client(rig, monkeypatch):
 @pytest.mark.parametrize("args", [["--plant", "robot", "--execute"], ["--execute", "--target", "1", "1", "1"],
                                   ["--plant", "robot", "--target", "nan", "0", "0"]])
 def test_invalid_robot_launch_fails_before_ros(rig, monkeypatch, args):
-    monkeypatch.setattr(common, "RosPlant", lambda **kwargs: pytest.fail("must fail before the plant"))
+    monkeypatch.setattr(tm, "RosPlant", lambda **kwargs: pytest.fail("must fail before the plant"))
     with pytest.raises(SystemExit) as exit:
         rc.main(args)
     assert exit.value.code == 2
@@ -309,12 +310,12 @@ def test_confirmed_execution_runs_the_experiment_on_the_robot_and_closes_both(ri
     name = "reach" if module is rc else "figure8"
     monkeypatch.setattr("builtins.input", lambda prompt: "EXECUTE")
     monkeypatch.setattr(common.signal, "signal", lambda *args: None)
-    monkeypatch.setattr(common, "MpcProcess",
+    monkeypatch.setattr(tm, "MpcProcess",
                         NS(compile=lambda params: NS(params=params, close=lambda: closed.append("mpc"))))
     monkeypatch.setattr(module, name, experiment)
     assert module.main(["--plant", "robot", "--execute", "--target", ".5", ".1", ".2"]) == 0
     (plant, mpc, run, task), = runs
     assert type(plant) is robot.RosPlant and plant.execute and run is run_robot
-    assert mpc.params is (rc.TIAGO if module is rc else f8.FIGURE8)
+    assert mpc.params is (rc.tm.TIAGO if module is rc else f8.FIGURE8)
     assert (task.target_m if module is rc else task.start_m) == (.5, .1, .2)
     assert closed == ["mpc"] and rig.arm.closed

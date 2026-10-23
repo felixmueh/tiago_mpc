@@ -1,5 +1,7 @@
-#!/usr/bin/env python3
-"""Run the historical random100 inputs once: one reach and one MpcProcess per case."""
+"""Run the historical random100 inputs once: one reach and one MpcProcess per case.
+
+Run from the checkout's root: python -m experiments.random100.run --dry-run (parameters only),
+then without --dry-run for all 100 cases or with --pairs 8990 for a subset."""
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import argparse
@@ -16,13 +18,10 @@ import traceback
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[1]))
 from experiments.reach import Reach, reach
-from tiago_mpc.mpc import TIAGO, MpcProcess, compile_binary
-from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import FLANGE_FRAME, ROOT, fk
+import tiago_mpc as tm
 
-PARAMS = replace(TIAGO, ee_frame=FLANGE_FRAME,  # the historical tasks track the flange
+PARAMS = replace(tm.TIAGO, ee_frame=tm.FLANGE_FRAME,  # the historical tasks track the flange
                  max_sqp_time_s=None)  # no wall-time limit on the simulation clock
 
 
@@ -65,7 +64,7 @@ def main():
                 raise ValueError(f"Invalid task dimensions: {name}")
             if not np.allclose(a["reference"].reshape(32, 6)[:, :3], a["target_xyz"], atol=1e-6):
                 raise ValueError(f"Nonconstant or inconsistent position target: {name}")
-            if not np.allclose(a["target_xyz"], fk(a["source_goal_q"], FLANGE_FRAME), atol=1e-5, rtol=1e-4):
+            if not np.allclose(a["target_xyz"], tm.fk(a["source_goal_q"], tm.FLANGE_FRAME), atol=1e-5, rtol=1e-4):
                 raise ValueError(f"Target differs from the goal posture's flange position: {name}")
             # The historical seed matches the state-hold, zero-torque warm start.
             if not np.allclose(a["first_seed"].ravel(), np.tile(np.r_[a["initial_state"], np.zeros(7)], 32)[:-7],
@@ -73,25 +72,25 @@ def main():
                 raise ValueError(f"Frozen task seed differs from the state-hold warm start: {name}")
     config = dict(input_source_commit=manifest["source_commit"], task_ids=ids,
                   end_effector_frame=PARAMS.ee_frame,
-                  application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-                  source_status=subprocess.check_output(["git", "status", "--short"], cwd=ROOT, text=True),
+                  application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT, text=True).strip(),
+                  source_status=subprocess.check_output(["git", "status", "--short"], cwd=tm.ROOT, text=True),
                   params=asdict(PARAMS),
                   cohort="reaching-position-only-fixed-clock-8s",
                   differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, parameters recorded in params and per case. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/position goals/order; no original goal posture is used as a trajectory seed.")
     if args.dry_run:
         print(json.dumps(config, indent=2)); return 0
-    out = (args.output or ROOT / "_expr_data" /
+    out = (args.output or tm.ROOT / "_expr_data" /
            ("random100-"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))).resolve()
     # Participate in both the newer benchmark locks and the original experiment lock.
     locks = []
-    for path in (ROOT.parent / "GATO-upstream-contributions/.gpu.lock",
-                 Path("/tmp/a2rlab-timing.lock"), ROOT.parent / "GATO/.git/experiment-runner.lock"):
+    for path in (tm.ROOT.parent / "GATO-upstream-contributions/.gpu.lock",
+                 Path("/tmp/a2rlab-timing.lock"), tm.ROOT.parent / "GATO/.git/experiment-runner.lock"):
         if path.parent.exists():
             lock = path.open("a")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             locks.append(lock)
-    binary = compile_binary(PARAMS)
-    MpcProcess(PARAMS, binary).close()  # a shared setup failure (model check) stops here, before any case
+    binary = tm.compile_binary(PARAMS)
+    tm.MpcProcess(PARAMS, binary).close()  # a shared setup failure (model check) stops here, before any case
     out.mkdir(parents=True, exist_ok=False)
     (out / "configuration.json").write_text(json.dumps(config, indent=2)+"\n")
     shutil.copyfile(__file__, out / "run.py")
@@ -103,10 +102,10 @@ def main():
         with np.load(out / "inputs" / f"random_{task:05d}.npz") as a:
             x0, target = a["initial_state"], tuple(map(float, a["target_xyz"]))
         start = time.perf_counter()
-        plant, mpc = SimPlant(x0[:7], x0[7:], substep=.003), None
+        plant, mpc = tm.SimPlant(x0[:7], x0[7:], substep=.003), None
         try:
-            mpc = MpcProcess(PARAMS, binary)
-            reach(plant, mpc, task=Reach(target, ee_frame=FLANGE_FRAME), out=case)
+            mpc = tm.MpcProcess(PARAMS, binary)
+            reach(plant, mpc, task=Reach(target, ee_frame=tm.FLANGE_FRAME), out=case)
         except Exception:
             traceback.print_exc()
         finally:
