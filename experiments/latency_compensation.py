@@ -75,6 +75,8 @@ def gpu_step(mpc):
         (x * ss)[None], (u * signs)[None], h), dtype=float)[0]
 
 
+# TODO: implicit_step ignores the external_force solver update (mpc.UPDATES), which
+# gpu_step includes (knot 0's wrench); a task that sets it needs gpu_step or the wrench here.
 def implicit_step(friction):
     """The same arm model (Pinocchio on the arm URDF, which check_model ties to GATO's),
     one semi-implicit Euler step that is implicit in the passive torque p(qd) only,
@@ -100,12 +102,12 @@ def implicit_step(friction):
 
 
 def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_period, update_period,
-                    duration, latency_s, compensate=True, prediction_substep_s=None, predictor="gpu"):
+                    duration, latency_s, compensate=True, prediction_substep_s=None, predictor="implicit"):
     """run_simulation(..., latency=Fixed(latency_s)), but each request is made from the
     state predicted (predict) at the tick its plan takes effect, and dated then.
     compensate=False requests from the measured state, dated now: run_simulation's timing.
     prediction_substep_s: the longest prediction step (None: one step per command tick);
-    predictor: "gpu" (gpu_step) or "implicit" (implicit_step).
+    predictor: "implicit" (implicit_step, the default) or "gpu" (gpu_step).
     Simulation clock only; compensating needs the in-process Mpc (its solver and signs).
 
     As in run: the warm-up before the first tick, one outstanding solve, the next request

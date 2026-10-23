@@ -45,7 +45,7 @@ CASES = {"stock": (False, sample_knot), "compensated": (True, sample_knot),  # n
          "feedback": (False, PlanFeedback()), "compensated+feedback": (True, PlanFeedback())}
 
 
-def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="gpu"):
+def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="implicit"):
     """Each task x latency x case with a fresh in-process Mpc; the uncompensated cases run on
     run_simulation itself. Returns the table rows."""
     rows = []
@@ -112,7 +112,7 @@ def main(argv=None):
     parser.add_argument("--latencies-ms", nargs="+", type=float, default=[0, 5, 10, 20, 30, 45])
     parser.add_argument("--cases", nargs="+", choices=CASES, default=list(CASES))
     parser.add_argument("--prediction-substep-s", type=float, help="compensated cases (default: one step per tick)")
-    parser.add_argument("--predictor", choices=("gpu", "implicit"), default="gpu", help="compensated cases")
+    parser.add_argument("--predictor", choices=("implicit", "gpu"), default="implicit", help="compensated cases")
     parser.add_argument("--output", type=Path, required=True, help="a fresh directory")
     args = parser.parse_args(argv)
     rows = study(args.output, args.tasks, args.latencies_ms, args.cases, args.prediction_substep_s, args.predictor)

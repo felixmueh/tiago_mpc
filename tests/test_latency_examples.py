@@ -82,7 +82,8 @@ def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp
     plant, mpc, ticks = Moving(), Predicting(), []
     record = Record(tmp_path / "r", task=Task(), params=TIAGO, plant=plant)
     run_compensated(plant, mpc, Task(), sample_knot, callbacks=[record, ticks.append], command_period=.01,
-                    update_period=.01, duration=.1, latency_s=.02, prediction_substep_s=substep)
+                    update_period=.01, duration=.1, latency_s=.02, prediction_substep_s=substep,
+                    predictor="gpu")  # the fake sim_forward is the plant's model
     assert record.summary["loop"]["prediction_substeps"] == (1 if substep is None else 3)
     # Requested at 0, 20, ..., 80 ms, each from the state predicted 20 ms on, dated then.
     assert [round(t, 6) for t, _ in mpc.requests] == [.02, .04, .06, .08, .1]
