@@ -6,7 +6,8 @@ the file). Its original bytes are `models/tiago_pro/tiago_pro_sim_source.urdf`
 in commit `d86e041`, copied from GATO's `sim_tiago_urdf.xml` at `3303eaf`
 (SHA-256 `c8d51a1e…07d3e6`). Only the arm joints' `<dynamics>` differ: the
 Coulomb friction c (Nm) and viscous damping b (Nm s/rad) below replace PAL's
-1.0. The effort limits (Nm) are PAL's and equal the supplied values.
+1.0. The effort limits (Nm) are the supplied values too; Felix had already
+written them into the source file, so they are not PAL's.
 
 | Joint | Left c | Left b | Right c | Right b | Effort |
 | --- | ---: | ---: | ---: | ---: | ---: |
