@@ -45,12 +45,12 @@ CASES = {"stock": (False, sample_knot), "compensated": (True, sample_knot),  # n
          "feedback": (False, PlanFeedback()), "compensated+feedback": (True, PlanFeedback())}
 
 
-def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="implicit"):
+def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="implicit", *, task_specs=None):
     """Each task x latency x case with a fresh in-process Mpc; the uncompensated cases run on
     run_simulation itself. Returns the table rows."""
     rows = []
     for name in tasks:
-        experiment, task, params, plant = TASKS[name]
+        experiment, task, params, plant = (TASKS if task_specs is None else task_specs)[name]
         params = replace(params, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
         binary = compile_binary(params)
         for ms in latencies_ms:
@@ -88,7 +88,8 @@ def row(out, task, case, ms, compensate):
             delay = math.ceil(ms / 1e3 / COMMAND_PERIOD - 1e-9) * COMMAND_PERIOD
             i, k = (np.searchsorted(time_s, t0 + d - 1e-9) for d in (0., delay))
             error = np.abs(state[k[k < len(time_s)]] - state[i[k < len(time_s)]])
-    return dict(task=task, latency_ms=ms, case=case, status=summary["status"], end_s=round(float(time_s[-1]), 3),
+    return dict(task=task, latency_ms=ms, case=case, status=summary["status"],
+                end_s=round(float(time_s[-1]), 3) if len(time_s) else None,
                 max_torque_nm=round(float(np.nanmax(np.abs(command), initial=0.)), 1),
                 limits_pass=summary.get("limits_pass"),
                 takeover_q_mrad=round(1e3 * float(error[:, :7].max(initial=0.)), 2),

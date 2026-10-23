@@ -1,11 +1,13 @@
 """The two latency examples on fakes (CPU only): PlanFeedback, and run_compensated's timing
 and prediction (experiments/plan_feedback.py, experiments/latency_compensation.py)."""
 from functools import partial
+import json
 
 import numpy as np
 import pytest
 
 from experiments.latency_compensation import implicit_step, run_compensated
+from experiments.latency_study import row
 from experiments.plan_feedback import PlanFeedback, inertia_gains
 from test_loops import Mpc, Plant, Task, commanded, go
 from tiago_mpc.laws import sample_knot
@@ -16,6 +18,17 @@ from tiago_mpc.record import Record
 from tiago_mpc.tiago import Q_START, arm_urdf, urdf_friction
 
 pytestmark = pytest.mark.filterwarnings("ignore:a plan took effect")  # run_simulation's late plans
+
+
+@pytest.mark.parametrize("compensated", [False, True])
+def test_study_retains_a_fault_before_the_first_recorded_tick(tmp_path, compensated):
+    (tmp_path / "summary.json").write_text(json.dumps(dict(status="error", error="RuntimeError: first plan rejected")))
+    np.savez(tmp_path / "trajectory.npz", time_s=np.empty(0), state=np.empty((0, 14)),
+             command=np.empty((0, 7)), plan_t0_s=np.empty(0),
+             effect_state=np.empty((0, 14)), requested_state=np.empty((0, 14)))
+    result = row(tmp_path, "reach-friction", "compensated" if compensated else "stock", 20., compensated)
+    assert result["status"] == "error" and result["end_s"] is None
+    assert result["fault"] == "RuntimeError: first plan rejected"
 
 
 def step(x, u, h):
