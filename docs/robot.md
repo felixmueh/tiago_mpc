@@ -55,7 +55,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 | `MpcProcess.result()` | every knot finite; expected shapes and knot interval; the plan answers the pending request; an error reply or a dead process raises, polled every tick |
 | `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; execution time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time |
 
-The checks raise; nothing retries. Limits are the reduced arm URDF's; the
+The checks raise; nothing retries. Limits are the full URDF's; the
 tolerances are fields of `Checks` in `robot.py`.
 
 ## Activation and handback

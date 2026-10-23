@@ -25,7 +25,7 @@ import numpy as np
 
 from .dynamics import Friction, passive_torque
 from .plan import Plan, State
-from .tiago import ARM_URDF, GRASP_FRAME, Q_REACH, Q_START, ROOT, digest, fk, runtime_urdf
+from .tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, cache_root, digest, fk, runtime_urdf
 
 
 @dataclass(frozen=True)
@@ -105,14 +105,6 @@ def set_bounds(solver, model, signs, params):
         solver.set_row_group_bounds(group, -fraction * raw, fraction * raw)
 
 
-def cache_root() -> Path:
-    """GATO_CACHE_DIR if set (host runs), else <repo>/.cache/gato; exported for GATO."""
-    root = Path(os.environ.get("GATO_CACHE_DIR") or ROOT / ".cache/gato").expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    os.environ["GATO_CACHE_DIR"] = str(root)
-    return root
-
-
 # GATO compiles one CUDA module per registered plant name and N (minutes). A fixed name
 # per variant would let two variants overwrite each other in a shared cache, so the
 # name hashes everything compiled into the module. The hash is a cache key, not provenance.
@@ -125,17 +117,18 @@ def plant_name(gpu_urdf_path: Path, ee_frame: str, friction: Friction | None = N
 
 def _plant(params: MpcParams):
     """The Pinocchio arm, GPU URDF, GPU coordinate signs and GATO plant name for params.
-    Exports GATO_CACHE_DIR and puts this environment's cmake first on PATH: GATO's
-    module key includes the cmake it finds."""
+    Exports GATO_CACHE_DIR (cache_root) and puts this environment's cmake first on PATH:
+    GATO's module key includes the cmake it finds."""
     import pinocchio as pin
 
-    model = pin.buildModelFromUrdf(str(ARM_URDF))
+    cache_root()
+    model = pin.buildModelFromUrdf(str(arm_urdf()))
     if not model.existFrame(params.ee_frame):
         raise ValueError(f"Missing end-effector frame {params.ee_frame}")
     bin_dir = str(Path(sys.executable).parent)
     if os.environ["PATH"].split(os.pathsep)[0] != bin_dir:
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
-    gpu_path, signs = runtime_urdf(cache_root(), params.friction)
+    gpu_path, signs = runtime_urdf(params.friction)
     return model, gpu_path, signs, plant_name(gpu_path, params.ee_frame, params.friction)
 
 

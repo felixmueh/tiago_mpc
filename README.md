@@ -19,7 +19,7 @@ is when the state was measured, in the same domain, and a plan starts at its
 state's time; on the robot a state can be older than the tick and repeat.
 
 ```
-tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction laws),
+tiago_mpc/    tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary,
               Mpc, MpcProcess),
               plan.py (State, Plan, Tick; the protocols PlantInterface, MpcInterface,
@@ -29,7 +29,7 @@ tiago_mpc/    tiago.py (TIAGo facts, URDF preparation), dynamics.py (friction la
               record.py (Record)
 experiments/  common.py (run_experiment, the mains' options), reach.py, figure8.py,
               random100/, replay.py
-scripts/      setup.sh, prepare_models.py, prepare_safety_model.py
+scripts/      setup.sh
 ```
 
 ## Setup
@@ -58,6 +58,10 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
   `find_binary(params)` returns the cached module or None. `Mpc(params, binary)`
   and `MpcProcess(params, binary)` load exactly that file and never compile;
   `Mpc.compile(params)` and `MpcProcess.compile(params)` do both, as the mains do.
+- **One robot file is committed,** `models/tiago_pro/tiago_pro.urdf`. The
+  reduced arm, its GPU copy and the safety collision model are derived from it
+  at run time (milliseconds) into the same cache, `models/<hash>/`
+  ([models/README.md](models/README.md)); never commit a derived file.
 - **Container and host share this checkout.** The container
   (`/workspace/tiago_mpc`) uses `.venv` and `.cache/gato`; the host uses
   `venv-host` with `GATO_CACHE_DIR=$PWD/.cache/host-gato` (nvcc 12.9, g++-14).

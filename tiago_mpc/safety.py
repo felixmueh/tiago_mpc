@@ -7,11 +7,10 @@ distance checks, blacklist handling, and URDF joint-limit checks.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import json
-import hashlib
 import multiprocessing as mp
-import os
 from pathlib import Path
 import queue
 import time
@@ -22,13 +21,13 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from .tiago import FULL_URDF, RIGHT_ARM_JOINTS, ROOT as REPO_ROOT
+from .tiago import FULL_URDF, MESHES, RIGHT_ARM_JOINTS, ROOT as REPO_ROOT, cached
 
 
-DEFAULT_COLLISION_URDF_PATH = (
-    REPO_ROOT / "models" / "safety" / "collision_alpha_wrap_a3_o25_cap001"
-    / "tiago_pro_collision_alpha_wrap_a3_o25_cap001.urdf"
-)
+COLLISION_DIRECTORY = REPO_ROOT / "models" / "safety" / "collision_alpha_wrap_a3_o25_cap001"
+# The reviewed alpha-wrap collision model. Its kinematics are outdated: only its
+# collision elements are used, overlaid on the full URDF (collision_urdf_tree).
+COLLISION_OVERLAY_PATH = COLLISION_DIRECTORY / "tiago_pro_collision_alpha_wrap_a3_o25_cap001_reviewed_source.urdf"
 DEFAULT_COLLISION_BLACKLIST_PATH = (
     REPO_ROOT / "models" / "safety" / "comfortable_pose_collision_blacklist.json"
 )
@@ -65,7 +64,7 @@ class NamedJointState:
 @dataclass(frozen=True)
 class CollisionSafetySettings:
     enabled: bool = True
-    urdf_path: Path = DEFAULT_COLLISION_URDF_PATH
+    urdf_path: Path | None = None  # None: the full URDF with the alpha-wrap collision overlay
     blacklist_path: Path | None = DEFAULT_COLLISION_BLACKLIST_PATH
     controlled_joint_names: tuple[str, ...] = RIGHT_ARM_JOINTS
     min_distance_m: float = 0.04
@@ -495,48 +494,58 @@ class TiagoCollisionModel:
         return self.model.createData(), pin.GeometryData(self.geometry_model)
 
 
-def _resolved_collision_urdf(
-    source: Path, *, package_dirs: Sequence[str | Path] | None = None,
-) -> Path:
-    """Resolve mesh paths in an ignored checkout-local cache, without editing assets.
+def collision_urdf_tree() -> ET.Element:
+    """The full URDF with the collision elements of every link in the reviewed alpha-wrap
+    model replaced by that model's (simplified meshes, relative to COLLISION_DIRECTORY).
+    Joints, inertias, visuals, mimics and the links it lacks stay the full URDF's."""
+    tree, overlay = ET.parse(FULL_URDF).getroot(), ET.parse(COLLISION_OVERLAY_PATH).getroot()
+    links = {link.get("name"): link for link in tree.findall("link")}
+    missing = sorted(link.get("name") for link in overlay.findall("link") if link.get("name") not in links)
+    if missing:
+        raise ValueError(f"Reviewed collision links absent from the full URDF: {missing}")
+    for source in overlay.findall("link"):
+        target = links[source.get("name")]
+        old = target.findall("collision")
+        insertion = list(target).index(old[0]) if old else len(target)
+        for collision in old:
+            target.remove(collision)
+        for index, collision in enumerate(source.findall("collision")):
+            target.insert(insertion + index, deepcopy(collision))
+    return tree
 
-    The canonical overlay mixes relative simplified meshes and PAL package/file
-    references to original geometry. Resolve those against included local assets;
-    no installed PAL package or historical absolute source path is required.
+
+def _resolved_collision_urdf(
+    source: Path | None = None, *, package_dirs: Sequence[str | Path] | None = None,
+) -> Path:
+    """source (None: collision_urdf_tree) with resolved mesh paths, in the cache.
+
+    The overlay mixes relative simplified meshes and the full URDF's PAL package
+    references; those resolve to the included meshes by basename. No installed PAL
+    package or historical absolute source path is required.
     """
-    source = source.resolve(strict=True)
-    tree = ET.parse(source)
-    roots = [source.parent, *(Path(p).resolve() for p in (package_dirs or ()))]
-    if source == DEFAULT_COLLISION_URDF_PATH.resolve():
-        roots.append(FULL_URDF.parent)
-    for mesh in tree.findall(".//mesh"):
+    if source is None:
+        tree, roots, canonical = collision_urdf_tree(), [COLLISION_DIRECTORY], True
+    else:
+        source = source.resolve(strict=True)
+        tree, roots, canonical = ET.parse(source).getroot(), [source.parent], source == FULL_URDF.resolve()
+    roots += [Path(p).resolve() for p in (package_dirs or ())]
+    for mesh in tree.iter("mesh"):
         filename = mesh.get("filename", "")
         relative = filename.removeprefix("package://").removeprefix("file://")
         candidates = [root / relative for root in roots]
-        if (source in (DEFAULT_COLLISION_URDF_PATH.resolve(), FULL_URDF.resolve())
-                and filename.startswith(("package://", "file://"))):
-            # Canonical PAL URIs are preserved in checked-in sources. The
-            # existing packaged assets use a flat, unique mesh basename layout.
-            candidates = [FULL_URDF.parent / "meshes" / Path(relative).name]
+        if canonical and filename.startswith(("package://", "file://")):
+            candidates = [MESHES / Path(relative).name]
         resolved = next((path.resolve() for path in candidates if path.is_file()), None)
         if resolved is None:
-            raise FileNotFoundError(f"collision URDF mesh not found: {filename} ({source})")
+            raise FileNotFoundError(f"collision URDF mesh not found: {filename} ({source or COLLISION_OVERLAY_PATH})")
         mesh.set("filename", str(resolved))
-    content = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-    digest = hashlib.sha256(content).hexdigest()
-    cache = REPO_ROOT / "_expr_data" / "runtime" / "safety-model"
-    cache.mkdir(parents=True, exist_ok=True)
-    destination = cache / f"{digest}.urdf"
-    if not destination.is_file() or destination.read_bytes() != content:
-        temporary = destination.with_suffix(f".{os.getpid()}.tmp")
-        temporary.write_bytes(content)
-        temporary.replace(destination)
-    return destination
+    name = "safety_collision.urdf" if source is None else source.name
+    return cached(name, ET.tostring(tree, encoding="utf-8", xml_declaration=True))
 
 
 def build_tiago_collision_model(
     *,
-    urdf_path: str | Path = FULL_URDF,
+    urdf_path: str | Path | None = None,
     package_dirs: Sequence[str | Path] | None = None,
     state_fixed_joint_names: Iterable[str] = TIAGO_RUNTIME_STATE_FIXED_JOINT_NAMES,
     reference_positions: Mapping[str, float] | None = None,
@@ -544,8 +553,9 @@ def build_tiago_collision_model(
     controlled_joint_names: Iterable[str] = RIGHT_ARM_JOINTS,
     monitor_only_collision_pairs: bool = True,
 ) -> TiagoCollisionModel:
-    """Build the reduced full-body collision model used by runtime safety."""
-    urdf = _resolved_collision_urdf(Path(urdf_path), package_dirs=package_dirs)
+    """Build the reduced full-body collision model used by runtime safety
+    (urdf_path None: collision_urdf_tree)."""
+    urdf = _resolved_collision_urdf(None if urdf_path is None else Path(urdf_path), package_dirs=package_dirs)
     package_dirs = tuple(Path(path) for path in (package_dirs or (urdf.parent,)))
     full_model = pin.buildModelFromUrdf(str(urdf))
     controlled_names = tuple(controlled_joint_names)

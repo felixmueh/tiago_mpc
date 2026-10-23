@@ -25,8 +25,8 @@ something lasting. The robot path is in `docs/robot.md`, the safety worker in
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)
 
-The supplied friction, damping and armature values are questionable (see the
-caution in the URDFs and `docs/real-robot-friction-plan.md` in the thesis
+The supplied friction, damping and armature values are questionable (see
+`models/tiago_pro/README.md` and `docs/real-robot-friction-plan.md` in the thesis
 workspace). Develop with them anyway, but never bake a coefficient into an
 algorithm, and test each controller against a plant whose coefficients differ
 from the predictor's (for example the 2026-10-16 physical fits, or ±50 %). The
@@ -45,9 +45,11 @@ interval equals the control-update or command period.
 - The canonical full model is `models/tiago_pro/tiago_pro.urdf`.
   `/workspace/GATO/TiagoProURDF/tiago_pro.urdf` is OUTDATED: never use it for
   arms, inertias, limits or experiments.
-- `scripts/prepare_models.py` owns the joint-parameter table, the grasp frame and
-  `models/manifest.json`; regenerate rather than hand-edit. Armature stays
-  metadata, never folded into link inertia; kp/kd are not stored.
+- Every other robot file is derived from it at run time into the cache and never
+  committed (Felix, 2026-10-23): the reduced arm and grasp frame (`tiago.arm_urdf`),
+  the GPU copy (`runtime_urdf`), the safety collision model. Change the full URDF
+  or the derivation, never a derived file. The armature is not in the URDF (no
+  loader reads it), never folded into link inertia; kp/kd are not stored.
 - Native TIAGo coordinates everywhere (ROS, plants, records). Joint 6's sign map
   lives only at the GPU boundary; do not remove it on GRiD-only evidence.
 - Do not modify generic GRiD code or generated headers; select frames through

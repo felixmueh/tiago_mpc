@@ -21,7 +21,7 @@ from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.plan import Plan, State
-from tiago_mpc.tiago import ARM_URDF, FLANGE_FRAME, Q_START, fk, limits, urdf_friction
+from tiago_mpc.tiago import FLANGE_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
 LOSSES = Friction([1.] * 7, [.5] * 7, .03)
@@ -152,7 +152,7 @@ def test_changed_plant_identity_changes_name(tmp_path):
 
 
 def test_smooth_model_check_uses_requested_flange_frame():
-    model = pin.buildModelFromUrdf(str(ARM_URDF))
+    model = pin.buildModelFromUrdf(str(arm_urdf()))
     # Stop after FK: this regression tests frame selection, not CUDA dynamics.
     reached_dynamics = RuntimeError("FK check passed")
     solver = Mock()

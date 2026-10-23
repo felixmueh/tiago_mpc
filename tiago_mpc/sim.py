@@ -16,7 +16,7 @@ import pinocchio as pin
 from .clock import Clock
 from .dynamics import Friction, plant_rk4
 from .plan import State
-from .tiago import ARM_URDF, Q_START
+from .tiago import Q_START, arm_urdf
 
 
 class SimPlant:
@@ -30,7 +30,7 @@ class SimPlant:
 
     def __init__(self, q: np.ndarray = Q_START, qd: np.ndarray | None = None, *, substep: float,
                  friction: Friction | None = None, clock: Clock | None = None):
-        self.model = pin.buildModelFromUrdf(str(ARM_URDF))
+        self.model = pin.buildModelFromUrdf(str(arm_urdf()))
         self.data = self.model.createData()
         self.friction, self.substep = friction, substep
         self.clock = Clock.simulation() if clock is None else clock

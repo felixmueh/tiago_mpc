@@ -5,14 +5,11 @@ The synthetic posture is intentionally NOT a physical qualification. Its default
 """
 from dataclasses import replace
 import hashlib
-import json
 from pathlib import Path
 import queue
 from types import SimpleNamespace
 import os
 import signal
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -23,11 +20,17 @@ import numpy as np
 import pinocchio as pin
 
 from tiago_mpc import safety as s
-from tiago_mpc.tiago import FULL_URDF, Q_START, RIGHT_ARM_JOINTS
+from tiago_mpc.tiago import FULL_URDF, Q_START, RIGHT_ARM_JOINTS, cache_root
 
 
-REVIEWED_SOURCE = s.DEFAULT_COLLISION_URDF_PATH.with_name(
-    s.DEFAULT_COLLISION_URDF_PATH.stem + '_reviewed_source.urdf')
+# The reviewed collision source, blacklist and alpha-wrap receipt, byte for byte as in
+# GATO fcc9621 tiago_configs/ (models/README.md).
+RETAINED_SHA256 = {
+    s.COLLISION_OVERLAY_PATH: '98d18490cdf1ec9e9f3f749f43d96d0203d598344f47425e0287d1029b3894fd',
+    s.DEFAULT_COLLISION_BLACKLIST_PATH: 'af70b26bd0ab6936a1d928b8e580d805097d914129f349dd351cb8d77b663e75',
+    s.COLLISION_DIRECTORY / 'alpha_wrap_results.json':
+        'a9ba92bbd9e78fdd513f3de41b7394e9f400ffb6261a318a812f3e35840225cf',
+}
 
 
 def xml_tree(path):
@@ -72,9 +75,7 @@ def dummy_worker_main(**kwargs):
 class CollisionPortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = s.build_tiago_collision_model(
-            urdf_path=s.DEFAULT_COLLISION_URDF_PATH,
-            blacklist_path=s.DEFAULT_COLLISION_BLACKLIST_PATH)
+        cls.model = s.build_tiago_collision_model(blacklist_path=s.DEFAULT_COLLISION_BLACKLIST_PATH)
 
     def named(self):
         state = make_state(self.model)
@@ -97,11 +98,11 @@ class CollisionPortTests(unittest.TestCase):
 
     def test_assets_resolve_outside_repository_working_directory(self):
         cwd = Path.cwd()
-        with tempfile.TemporaryDirectory(dir=s.REPO_ROOT / '_expr_data') as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             try:
                 os.chdir(temporary)
-                urdf = s._resolved_collision_urdf(s.DEFAULT_COLLISION_URDF_PATH)
-                self.assertTrue(urdf.is_relative_to(s.REPO_ROOT / '_expr_data'))
+                urdf = s._resolved_collision_urdf()
+                self.assertTrue(urdf.is_relative_to(cache_root()))
                 for mesh in ET.parse(urdf).findall('.//mesh'):
                     path = Path(mesh.get('filename'))
                     self.assertTrue(path.is_absolute())
@@ -126,40 +127,27 @@ class CollisionPortTests(unittest.TestCase):
             self.assertTrue(pair.first in monitored or pair.second in monitored)
         self.assertTrue(np.all(m.geometry_radii_m > 0))
 
-    def test_active_model_preserves_all_canonical_noncollision_metadata(self):
-        active, canonical = xml_tree(s.DEFAULT_COLLISION_URDF_PATH), xml_tree(FULL_URDF)
+    def test_overlay_preserves_all_canonical_noncollision_metadata(self):
+        active, canonical = s.collision_urdf_tree(), ET.parse(FULL_URDF).getroot()
         self.assertEqual(len(active.findall('link')), 70)
         self.assertEqual(len(active.findall('joint')), 69)
         self.assertEqual(len(active.findall('joint/mimic')), 10)
         # Includes all joint origins/axes/limits/dynamics/mimics, link inertias,
-        # native sensor frames, visuals, plugins, and supplied arm provenance comments.
+        # native sensor frames, visuals and plugins.
         self.assertEqual(structure(active, ignore_collisions=True),
                          structure(canonical, ignore_collisions=True))
-        for index in range(1, 8):
-            joint = active.find(f"joint[@name='arm_right_{index}_joint']")
-            comments = ' '.join(child.text or '' for child in joint if child.tag is ET.Comment)
-            self.assertIn('TIAGO_MPC dynamics:', comments)
-            self.assertIn('values supplied by Felix 2026-10-21', comments)
-            self.assertIn('QUESTIONABLE', comments)
-            self.assertNotIn('ASSUMED', comments)
 
-    def test_collision_overlay_and_reviewed_source_are_retained_exactly(self):
-        provenance = json.loads((s.REPO_ROOT / 'models/safety/provenance.json').read_text())
-        expected = provenance['sha256'][
-            'tiago_configs/collision_alpha_wrap_a3_o25_cap001/tiago_pro_collision_alpha_wrap_a3_o25_cap001.urdf']
-        self.assertEqual(hashlib.sha256(REVIEWED_SOURCE.read_bytes()).hexdigest(), expected)
-        active = {link.get('name'): link for link in xml_tree(s.DEFAULT_COLLISION_URDF_PATH).findall('link')}
-        reviewed = {link.get('name'): link for link in xml_tree(REVIEWED_SOURCE).findall('link')}
+    def test_collision_overlay_and_retained_sources(self):
+        # The reviewed source, blacklist and generation receipt are historical evidence.
+        for path, expected in RETAINED_SHA256.items():
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected, path.name)
+        active = {link.get('name'): link for link in s.collision_urdf_tree().findall('link')}
+        reviewed = {link.get('name'): link for link in xml_tree(s.COLLISION_OVERLAY_PATH).findall('link')}
         canonical = {link.get('name'): link for link in xml_tree(FULL_URDF).findall('link')}
         for name, link in active.items():
             expected_link = reviewed.get(name, canonical[name])
             self.assertEqual([structure(c) for c in link.findall('collision')],
                              [structure(c) for c in expected_link.findall('collision')], name)
-        # Original blacklist content and generation receipt are historical evidence.
-        for filename in ('comfortable_pose_collision_blacklist.json',
-                         'collision_alpha_wrap_a3_o25_cap001/alpha_wrap_results.json'):
-            self.assertEqual(hashlib.sha256((s.REPO_ROOT / 'models/safety' / filename).read_bytes()).hexdigest(),
-                             provenance['sha256']['tiago_configs/' + filename])
 
     def test_new_fixed_sensor_obstacles_are_present_and_paired_with_arm(self):
         expected = {'base_antenna_left_link_0', 'base_antenna_right_link_0',
@@ -182,7 +170,7 @@ class CollisionPortTests(unittest.TestCase):
     def test_safety_mesh_geometry_is_finite(self):  # the full model's meshes: test_models.py
         import hppfcl
         loader = hppfcl.MeshLoader()
-        meshes = sorted(s.DEFAULT_COLLISION_URDF_PATH.parent.glob('meshes/*.stl'))
+        meshes = sorted(s.COLLISION_DIRECTORY.glob('meshes/*.stl'))
         self.assertEqual(len(meshes), 18)
         for path in meshes:
             with self.subTest(mesh=str(path.relative_to(s.REPO_ROOT))):
@@ -190,11 +178,6 @@ class CollisionPortTests(unittest.TestCase):
                 self.assertGreater(mesh.num_vertices, 0)
                 self.assertGreater(mesh.num_tris, 0)
                 self.assertTrue(np.isfinite(mesh.vertices()).all())
-
-    def test_generator_is_deterministic_and_current(self):
-        result = subprocess.run([sys.executable, str(s.REPO_ROOT / 'scripts/prepare_safety_model.py'), '--check'],
-                                cwd=s.REPO_ROOT, check=True, capture_output=True, text=True)
-        self.assertIn('are current', result.stdout)
 
     def test_all_named_positions_and_velocities_required_and_finite(self):
         for field in ('position', 'velocity'):
@@ -272,7 +255,7 @@ class CollisionPortTests(unittest.TestCase):
         self.assertEqual(caught.exception.fault_kind, 'joint_limit')
 
     def test_missing_assets_and_blacklist_fail_closed(self):
-        missing = s.REPO_ROOT / '_expr_data' / 'not-a-safety-asset'
+        missing = s.REPO_ROOT / 'models' / 'not-a-safety-asset'
         with self.assertRaises(FileNotFoundError):
             s.build_tiago_collision_model(urdf_path=missing)
         with self.assertRaises(FileNotFoundError):
@@ -285,9 +268,7 @@ class CollisionPortTests(unittest.TestCase):
 class SpawnedSafetyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = s.build_tiago_collision_model(
-            urdf_path=s.DEFAULT_COLLISION_URDF_PATH,
-            blacklist_path=s.DEFAULT_COLLISION_BLACKLIST_PATH)
+        cls.model = s.build_tiago_collision_model(blacklist_path=s.DEFAULT_COLLISION_BLACKLIST_PATH)
 
     def test_spawned_transport_checks_new_sequences_and_closes(self):
         state = make_state(self.model)

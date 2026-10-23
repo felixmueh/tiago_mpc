@@ -12,7 +12,7 @@ from tiago_mpc.loops import Fixed, run_simulation
 from tiago_mpc.mpc import MpcParams
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import ARM_URDF, Q_START, RIGHT_ARM_JOINTS, fk, urdf_friction
+from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, arm_urdf, fk, urdf_friction
 
 
 def test_figure8_reference_includes_edge_clearance_and_leaves_orientation_free():
@@ -46,7 +46,7 @@ class Mpc:
     """Gravity-holding plans from each requested state."""
     def __init__(self, params):
         self.params, self.N, self.dt = params, params.N, params.dt_s
-        model = pin.buildModelFromUrdf(str(ARM_URDF))
+        model = pin.buildModelFromUrdf(str(arm_urdf()))
         self.model, self.data, self.plan = model, model.createData(), None
 
     def warmup(self, state, reference):

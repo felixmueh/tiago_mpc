@@ -58,15 +58,26 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 ## Model and coefficients
 
 - **2026-10-20: the canonical robot description is the simulator URDF**
-  (`/workspace/GATO/tiago_tools/sim_tiago_urdf.xml`), kept byte for byte as
-  `models/tiago_pro/tiago_pro_sim_source.urdf`.
-  `/workspace/GATO/TiagoProURDF/tiago_pro.urdf` is outdated. The reduced right
-  arm already came from the simulator model; its fixed torso root and gripper
-  inertia lumped at zero posture are intentional.
+  (`/workspace/GATO/tiago_tools/sim_tiago_urdf.xml`; its original bytes are in
+  `d86e041`). `/workspace/GATO/TiagoProURDF/tiago_pro.urdf` is outdated. The
+  reduced right arm's fixed torso root and gripper inertia summed at zero
+  posture are intentional.
 - **2026-10-21: supplied joint parameters** for both arms (Coulomb, viscous,
-  effort, armature) replace earlier midpoints and guesses (`models/README.md`).
-  Armature is metadata that no loader reads, never folded into link inertia.
-  kp/kd are not stored: they belong to a different controller.
+  effort, armature) replace earlier midpoints and guesses
+  (`models/tiago_pro/README.md`). The armature is not in the URDF (no loader
+  reads it) and never folded into link inertia. kp/kd are not stored: they
+  belong to a different controller.
+- **2026-10-23: one committed robot description; every other robot file is
+  derived at run time and never committed.** `models/tiago_pro/tiago_pro.urdf`
+  is PAL's simulator URDF with the arm values written in once. The reduced arm
+  with the grasp frame (`tiago.arm_urdf`, ported from GATO's
+  `generate_tiago_dynamics.py`), its GPU copy (`runtime_urdf`) and the safety
+  collision model (`safety.collision_urdf_tree`) are written, content-addressed,
+  into the cache that also holds GATO's modules (`GATO_CACHE_DIR`). Removed: the
+  committed arm and active collision URDFs, the preserved sim source,
+  `prepare_models.py`, `prepare_safety_model.py`, `models/manifest.json` and
+  `models/safety/provenance.json`. Reason: a committed generated file can go
+  stale when someone forgets to regenerate or commit it.
 - **2026-10-22: the coefficients are questionable; every coefficient is a
   parameter.** Develop with them and test against plants with other
   coefficients. Identified values matter for tuning on the robot, not for the
@@ -99,7 +110,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   Friction-enabled reaching is not qualified.
 - **Tracking uses friction on both sides:** hard-sign Coulomb plus viscous in
   the plant, tanh Coulomb (width 0.03 rad/s) plus viscous in the predictor, both
-  from the reduced URDF.
+  from the URDF.
 - **2026-10-22: the smoothing width becomes compile-time only**, to diverge less
   from upstream GATO. Not done: the pinned fork still has the runtime-width
   commits; the friction work follows the refactor.
