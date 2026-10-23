@@ -106,9 +106,12 @@ without ROS.
 - **GPU:** one job at a time; check `nvidia-smi` first.
 - **Agents:** use them for bounded tasks; the root agent coordinates
   interpretation, shared edits and GPU use.
-- **Worktrees:** queue cleanup after merging. At the end of a session propose
-  the exact worktrees and branches to remove and where useful work is kept;
-  never remove them automatically.
+- **Worktrees:** a worktree and branch that you created and used for
+  development may be removed without asking once merged (Felix, 2026-10-23),
+  after moving any data worth keeping from its `_expr_data/` into the main
+  checkout's. For all others, propose the exact worktrees and branches to
+  remove at the end of a session and where useful work is kept; never remove
+  them automatically.
 - **Remotes:** this repository is `felixmueh/gato_tiago`; the GATO submodule is
   the fork `felixmueh/GATO`. Do not push or update the historical `felix-devel`
   branch.
