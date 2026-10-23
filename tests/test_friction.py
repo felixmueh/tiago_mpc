@@ -16,7 +16,7 @@ def test_subthreshold_load_holds_exactly_with_constraints_but_moves_with_sign(sc
     f = replace(f, coulomb_nm=tuple(scale*np.array(f.coulomb_nm)),
                 viscous_nm_s_per_rad=tuple(scale*np.array(f.viscous_nm_s_per_rad)))
     for solver in ("sign", "constraint"):
-        plant = SimPlant(friction=f, friction_solver=solver)
+        plant = SimPlant(friction=f, coulomb_law=solver)
         assert plant.substep == .001
         gravity = pin.computeGeneralizedGravity(plant.model, plant.data, plant.q).copy()
         plant.start()
@@ -50,13 +50,27 @@ def test_coupled_friction_torque_satisfies_stick_slip_conditions(scale):
         np.testing.assert_allclose(q_new, pin.integrate(plant.model, q, h*v_new), atol=1e-14)
 
 
-@pytest.mark.parametrize("solver", ["sign", "constraint"])
-def test_zero_losses_agree_with_aba_despite_nonzero_urdf_tags(solver):
+@pytest.mark.parametrize("friction,solver", [(None, "constraint"), (Friction((0.,)*7, (0.,)*7, .03), "tanh"),
+                                             (Friction((0.,)*7, (0.,)*7), "sign"),
+                                             (Friction((0.,)*7, (0.,)*7), "constraint")])
+def test_zero_losses_agree_with_aba_despite_nonzero_urdf_tags(friction, solver):
     plant = SimPlant()
     v, u, h = np.linspace(-.1, .1, 7), np.linspace(-1., 1., 7), .001
     a = pin.aba(plant.model, plant.data, Q_START, v, u).copy()
-    _, v_new = plant_euler(plant.model, plant.data, Q_START, v, u, h, Friction((0.,)*7, (0.,)*7), solver)
+    _, v_new = plant_euler(plant.model, plant.data, Q_START, v, u, h, friction, solver)
     np.testing.assert_allclose(v_new, v + h*a, atol=1e-12)
+
+
+def test_tanh_coulomb_approaches_sign_as_the_width_shrinks():
+    plant, f = SimPlant(), urdf_friction()
+    v, u, h = np.array([-.05, -.01, -.002, 0., .002, .01, .05]), np.linspace(-1., 1., 7), .001
+
+    def step(friction, law):
+        return plant_euler(plant.model, plant.data, Q_START, v, u, h, friction, law)[1]
+    sign = step(f, "sign")
+    np.testing.assert_allclose(step(replace(f, width_rad_s=1e-9), "tanh"), sign, atol=1e-12)
+    smooth = step(replace(f, width_rad_s=.03), "tanh")
+    assert np.max(np.abs(smooth - sign)) > 1e-5  # weaker Coulomb below the width
 
 
 def test_breakaway_and_stopping_without_numerical_reversal():

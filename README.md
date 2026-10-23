@@ -151,13 +151,17 @@ mpc.close()
 - **Friction simulation:** `SimPlant(friction=urdf_friction())` uses semi-implicit
   Euler, implicit viscous damping and a coupled Coulomb constraint solve. Joints
   hold at zero velocity while the needed friction lies within ±c, and slip at c.
-  `friction_solver="sign"` instead evaluates Coulomb as `c*sign(v_old)`; damping
-  stays implicit, but Coulomb can chatter and creep near zero. Both use the full
-  Pinocchio mass matrix and bias at the old state and advance q with the new
-  velocity. The default maximum substep is 1 ms (1 kHz), shortened to land on a
-  command tick; this does not set the command or control rate. Loss-free plants
-  keep RK4. Smoothing is predictor-only; armature remains disabled. These plant
-  choices do not qualify friction-enabled MPC or tracking.
+  `coulomb_law="sign"` instead evaluates Coulomb as `c*sign(v_old)` (it can chatter
+  and creep near zero), `coulomb_law="tanh"` as `c*tanh(v_old/width)` with the
+  `Friction`'s width (`urdf_friction(.03)`, the predictor's law; it creeps below
+  the threshold). Damping stays implicit in all three. They use the full Pinocchio
+  mass matrix and bias at the old state and advance q with the new velocity. The
+  default maximum substep is 1 ms (1 kHz), shortened to land on a command tick;
+  this does not set the command or control rate. `integrator` is `"rk4"` (GATO's
+  loss-free RK4; refuses a `Friction`) or `"euler"` (loss-free without a
+  `Friction`); the default is RK4 when loss-free, Euler with friction. Armature
+  remains disabled. These plant choices do not qualify friction-enabled MPC or
+  tracking.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
   the raw GATO `controller` and `step`, the latest solve's result), `run` and

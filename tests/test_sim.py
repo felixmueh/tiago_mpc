@@ -12,23 +12,27 @@ from tiago_mpc.tiago import urdf_friction
 U = np.linspace(-1., 1., 7)
 
 
-@pytest.mark.parametrize("friction,substep,solver", [(None, .003, "constraint"),
-                                                   (urdf_friction(), .001, "sign"),
-                                                   (urdf_friction(), .001, "constraint")])
-def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, substep, solver):
-    plant = SimPlant(substep=substep, friction=friction, friction_solver=solver)
+@pytest.mark.parametrize("friction,substep,integrator,solver", [(None, .003, "rk4", "constraint"),
+                                                              (None, .001, "euler", "constraint"),
+                                                              (urdf_friction(.03), .001, "euler", "tanh"),
+                                                              (urdf_friction(), .001, "euler", "sign"),
+                                                              (urdf_friction(), .001, "euler", "constraint")])
+def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, substep, integrator, solver):
+    plant = SimPlant(substep=substep, friction=friction, coulomb_law=solver,
+                     integrator=None if integrator == "rk4" else integrator)
     q, qd, t = plant.q.copy(), plant.qd.copy(), 0.
     plant.start()
     plant.apply(U)
     plant.advance(.01)
     while t < .01 - 1e-12:  # e.g. 3, 3, 3 and 1 ms
         h = min(substep, .01 - t)
-        q, qd = (rk4(plant.model, plant.data, q, qd, U, h) if friction is None
+        q, qd = (rk4(plant.model, plant.data, q, qd, U, h) if integrator == "rk4"
                  else plant_euler(plant.model, plant.data, q, qd, U, h, friction, solver))
         t += h
     s = plant.state()
     assert s.t == plant.now() == .01 and plant.settings["clock"] == "simulation"
-    assert plant.settings["friction_solver"] == (None if friction is None else solver)
+    assert plant.settings["coulomb_law"] == (None if friction is None else solver)
+    assert plant.settings["integrator"] == integrator
     np.testing.assert_array_equal(s.q, q)
     np.testing.assert_array_equal(s.qd, qd)
     plant.apply(-U)  # the state is at the simulation clock's time: nothing to integrate
@@ -39,7 +43,9 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, subste
 
 
 @pytest.mark.parametrize("settings", [dict(substep=0), dict(substep=-.001), dict(substep=np.nan),
-                                     dict(friction_solver="other"), dict(friction=urdf_friction(.03))])
+                                     dict(coulomb_law="other"), dict(friction=urdf_friction(.03)),
+                                     dict(friction=urdf_friction(), coulomb_law="tanh"),
+                                     dict(integrator="other"), dict(integrator="rk4", friction=urdf_friction())])
 def test_invalid_integration_settings_fail_before_a_run(settings):
     with pytest.raises(ValueError):
         SimPlant(**settings)

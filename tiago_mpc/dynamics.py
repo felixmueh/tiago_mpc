@@ -7,15 +7,15 @@ from typing import Any, Literal
 
 import numpy as np
 
-CoulombSolver = Literal["sign", "constraint"]
+CoulombLaw = Literal["tanh", "sign", "constraint"]
 
 
 @dataclass(frozen=True)
 class Friction:
     """Joint losses: Coulomb plus viscous, per native arm joint.
 
-    With width_rad_s the Coulomb term is tanh(v/width_rad_s), the law GATO predicts.
-    Without a width the plant uses these coefficients with sign or constraint Coulomb.
+    With width_rad_s the Coulomb term is tanh(v/width_rad_s), the law GATO predicts
+    and the plant's 'tanh' law; without a width the plant uses sign or constraint Coulomb.
     """
     coulomb_nm: tuple[float, ...]
     viscous_nm_s_per_rad: tuple[float, ...]
@@ -40,33 +40,44 @@ def passive_torque(velocity: np.ndarray, friction: Friction | None) -> np.ndarra
     return np.asarray(friction.viscous_nm_s_per_rad)*v + np.asarray(friction.coulomb_nm)*coulomb
 
 
+def check_coulomb_law(friction: Friction | None, law: CoulombLaw) -> None:
+    """'tanh' needs the Friction's width; 'sign' and 'constraint' take none."""
+    if law not in ("tanh", "sign", "constraint"):
+        raise ValueError(f"Unknown Coulomb law: {law}")
+    if friction is not None and (law == "tanh") != (friction.width_rad_s is not None):
+        raise ValueError(f"Coulomb law {law!r} " + ("needs a Friction width" if law == "tanh"
+                                                    else "takes no width; use 'tanh' for a smooth law"))
+
+
 def plant_euler(model: Any, data: Any, q: np.ndarray, velocity: np.ndarray, actuator_torque: np.ndarray,
-                dt: float, friction: Friction, solver: CoulombSolver = "constraint") -> tuple[np.ndarray, np.ndarray]:
+                dt: float, friction: Friction | None, law: CoulombLaw = "constraint") -> tuple[np.ndarray, np.ndarray]:
     """Native-coordinate Euler with implicit viscous damping; inertia and bias at (q, v).
 
     A = M(q) + dt*diag(b), r = M(q)*v + dt*(torque - bias(q, v)).
-    'sign' solves A*v_next = r - dt*c*sign(v): Coulomb is explicit and can chatter.
+    'tanh' and 'sign' solve A*v_next = r - dt*c*tanh(v/width) or r - dt*c*sign(v): Coulomb is
+    explicit in the old velocity, and sign can chatter.
     'constraint' minimises .5*v_next.T*A*v_next - r.T*v_next + dt*sum(c*abs(v_next)):
     at zero velocity friction lies in [-c, c]; slipping friction is c*sign(v_next).
-    Both advance position with v_next. This is not fully implicit rigid-body Euler.
-    URDF friction/damping tags do not enter CRBA/RNEA; losses are applied here once.
+    friction=None is loss-free. All advance position with v_next. This is not fully implicit
+    rigid-body Euler. URDF friction/damping tags do not enter CRBA/RNEA; losses are applied here once.
     """
     import pinocchio as pin
 
-    if friction.width_rad_s is not None:
-        raise ValueError("plant_euler uses hard Coulomb friction; smoothing is predictor-only")
+    check_coulomb_law(friction, law)
     mass = pin.crba(model, data, q)
     mass = np.triu(mass) + np.triu(mass, 1).T
     bias = pin.rnea(model, data, q, velocity, np.zeros(model.nv))
-    system = mass + dt*np.diag(friction.viscous_nm_s_per_rad)
     momentum = mass @ velocity + dt*(actuator_torque - bias)
-    threshold = dt*np.asarray(friction.coulomb_nm)
-    if solver == "sign":
-        new = np.linalg.solve(system, momentum - threshold*np.sign(velocity))
-    elif solver == "constraint":
-        new = _stick_slip(system, momentum, threshold)
+    if friction is None:
+        new = np.linalg.solve(mass, momentum)
     else:
-        raise ValueError(f"Unknown Coulomb solver: {solver}")
+        system = mass + dt*np.diag(friction.viscous_nm_s_per_rad)
+        threshold = dt*np.asarray(friction.coulomb_nm)
+        if law == "constraint":
+            new = _stick_slip(system, momentum, threshold)
+        else:
+            new = np.linalg.solve(system, momentum - threshold*(
+                np.sign(velocity) if friction.width_rad_s is None else np.tanh(velocity/friction.width_rad_s)))
     return pin.integrate(model, q, dt*new), new
 
 

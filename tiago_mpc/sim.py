@@ -1,20 +1,23 @@
 """SimPlant: the right arm as a Pinocchio plant in native coordinates.
 
-It holds each command until the next tick. Loss-free: GATO's RK4. With friction:
-semi-implicit Euler with implicit damping and sign or constraint Coulomb friction.
-The default maximum substep is 1 ms (1 kHz), independent of command/control rates.
+It holds each command until the next tick. integrator 'rk4' is GATO's loss-free RK4;
+'euler' is semi-implicit Euler with implicit damping and tanh, sign or constraint
+Coulomb friction (loss-free without a Friction). The default is RK4 when loss-free,
+Euler with friction. The default maximum substep is 1 ms (1 kHz), independent of
+command/control rates.
 """
 from __future__ import annotations
 
 from dataclasses import asdict
 import time
+from typing import Literal
 
 from gato.common import rk4
 import numpy as np
 import pinocchio as pin
 
 from .clock import Clock
-from .dynamics import CoulombSolver, Friction, plant_euler
+from .dynamics import CoulombLaw, Friction, check_coulomb_law, plant_euler
 from .plan import State
 from .tiago import Q_START, arm_urdf
 
@@ -29,21 +32,23 @@ class SimPlant:
     """
 
     def __init__(self, q: np.ndarray = Q_START, qd: np.ndarray | None = None, *, substep: float = .001,
-                 friction: Friction | None = None, friction_solver: CoulombSolver = "constraint",
-                 clock: Clock | None = None):
+                 friction: Friction | None = None, coulomb_law: CoulombLaw = "constraint",
+                 integrator: Literal["rk4", "euler"] | None = None, clock: Clock | None = None):
         if not np.isfinite(substep) or substep <= 0:
             raise ValueError("substep must be finite and positive")
-        if friction_solver not in ("sign", "constraint"):
-            raise ValueError(f"Unknown Coulomb solver: {friction_solver}")
-        if friction is not None and friction.width_rad_s is not None:
-            raise ValueError("SimPlant uses hard Coulomb friction; smoothing is predictor-only")
+        integrator = integrator or ("rk4" if friction is None else "euler")
+        if integrator not in ("rk4", "euler"):
+            raise ValueError(f"Unknown integrator: {integrator}")
+        if integrator == "rk4" and friction is not None:
+            raise ValueError("RK4 is loss-free; simulate friction with integrator='euler'")
+        check_coulomb_law(friction, coulomb_law)
         self.model = pin.buildModelFromUrdf(str(arm_urdf()))
         self.data = self.model.createData()
-        self.friction, self.substep, self.friction_solver = friction, substep, friction_solver
+        self.friction, self.substep, self.integrator = friction, substep, integrator
+        self.coulomb_law = coulomb_law
         self.clock = Clock.simulation() if clock is None else clock
         self.settings = dict(friction=friction and asdict(friction), substep_s=substep, clock=self.clock.kind,
-                             integrator="rk4" if friction is None else "semi_implicit_euler",
-                             friction_solver=None if friction is None else friction_solver)
+                             integrator=integrator, coulomb_law=None if friction is None else coulomb_law)
         self.q = np.array(q, dtype=float)
         self.qd = np.zeros(7) if qd is None else np.array(qd, dtype=float)
         self.command: np.ndarray | None = None
@@ -81,11 +86,11 @@ class SimPlant:
         # controller holds the arm until the first command activates effort control.
         while self.command is not None and self.t < t - 1e-12:
             h = min(self.substep, t - self.t)
-            if self.friction is None:
+            if self.integrator == "rk4":
                 q, qd = rk4(self.model, self.data, self.q, self.qd, self.command, h)
             else:
                 q, qd = plant_euler(self.model, self.data, self.q, self.qd, self.command, h,
-                                    self.friction, self.friction_solver)
+                                    self.friction, self.coulomb_law)
             if not np.isfinite(q).all() or not np.isfinite(qd).all():
                 raise FloatingPointError("Nonfinite simulated state")
             self.q, self.qd, self.t = q, qd, self.t + h

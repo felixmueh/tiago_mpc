@@ -130,6 +130,12 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   Coulomb is either sign(v_old), or a coupled constraint solve allowing sticking
   at zero (the proposed default). No MPC tuning or predictor changes. Reaching
   stays loss-free by default; armature stays disabled.
+- **2026-10-23: the plant's Coulomb law and integrator are choices** (Felix):
+  `coulomb_law` is `"tanh"` (with the `Friction`'s width, explicit in the old
+  velocity), `"sign"` or `"constraint"` (default); `integrator` is `"rk4"`
+  (loss-free only) or `"euler"` (semi-implicit, loss-free without a `Friction`),
+  by default implied by friction on/off. This supersedes "smoothing is
+  predictor-only" for the plant; the predictor is unchanged.
 - **2026-10-22: the smoothing width becomes compile-time only**, to diverge less
   from upstream GATO. Not done: the pinned fork still has the runtime-width
   commits; the friction work follows the refactor.
@@ -190,8 +196,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - **2026-10-22: garbage collection is paused during `run`** (full collections
   took 7–10 ms at 500 Hz). It must run in between; how is to be discussed.
 - **2026-10-23: the simulator's friction step is semi-implicit Euler**, with
-  sign and constraint Coulomb choices (see Friction and GATO). Loss-free plants
-  keep Pinocchio RK4 (reach 3 ms); substep and friction remain `SimPlant` arguments.
+  tanh, sign and constraint Coulomb choices (see Friction and GATO). Loss-free plants
+  keep Pinocchio RK4 by default (reach 3 ms); substep, integrator and friction
+  remain `SimPlant` arguments.
 - **2026-10-22: random100 runs one `MpcProcess` per case**, so a crash ends only
   that case.
 - **2026-10-22: `save_replay` lives in `experiments/replay.py`**; experiments
