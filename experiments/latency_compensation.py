@@ -41,7 +41,7 @@ from tiago_mpc.sim import SimPlant
 _TOLERANCE = 1e-9  # as loops.py: absorbs the rounding of summed periods
 
 
-def predict(mpc, plan, law, state, at, command_period):
+def predict(mpc, plan, law, state, at, command_period, substeps=1):
     """The state at tick time at, from state, under the commands the loop sends at the
     ticks in between: law(plan, tick, predicted state), each held for one command period,
     so a law that depends on the state is predicted too. Without a plan the arm is held.
@@ -51,21 +51,27 @@ def predict(mpc, plan, law, state, at, command_period):
     constant-acceleration (trapezoidal) step its transcription uses (check_model's step),
     in float32, with the predictor's friction and knot 0's external wrench. It reads only
     the model and writes only its own output buffer: the solver's warm start, duals and
-    rho are untouched. It works in GPU coordinates, so the sign map mpc.signs applies."""
-    t, x, signs = state.t, np.r_[state.q, state.qd], mpc.signs
+    rho are untouched. It works in GPU coordinates, so the sign map mpc.signs applies.
+
+    The step is explicit: with the URDF's friction in the predictor, one 2 ms step makes
+    joint 7 (0.0008 kg m^2 against 2.95 N m s/rad, plus the tanh slope) diverge, so each
+    tick can be split into substeps equal steps under the same command."""
+    t, x, ss = state.t, np.r_[state.q, state.qd], np.tile(mpc.signs, 2)
     while plan is not None and t < at - _TOLERANCE:
-        u = law(plan, t, State(t, x[:7], x[7:]))
-        x = np.tile(signs, 2) * np.asarray(mpc.controller.solver.sim_forward(
-            (x * np.tile(signs, 2))[None], (u * signs)[None], command_period), dtype=float)[0]
+        u = law(plan, t, State(t, x[:7], x[7:])) * mpc.signs
+        for _ in range(substeps):
+            x = ss * np.asarray(mpc.controller.solver.sim_forward(
+                (x * ss)[None], u[None], command_period / substeps), dtype=float)[0]
         t += command_period
     return State(at, x[:7], x[7:])
 
 
 def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_period, update_period,
-                    duration, latency_s, compensate=True):
+                    duration, latency_s, compensate=True, prediction_substep_s=None):
     """run_simulation(..., latency=Fixed(latency_s)), but each request is made from the
     state predicted (predict) at the tick its plan takes effect, and dated then.
     compensate=False requests from the measured state, dated now: run_simulation's timing.
+    prediction_substep_s: the longest prediction step (None: one step per command tick).
     Simulation clock only; compensating needs the in-process Mpc (its solver and signs).
 
     As in run: the warm-up before the first tick, one outstanding solve, the next request
@@ -80,6 +86,7 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
     if plant.clock.kind != "simulation":
         raise ValueError("run_compensated models the latency on a simulation clock; the robot keeps run_robot")
     ahead = math.ceil(latency_s / command_period - _TOLERANCE)  # a plan takes effect at the first tick at or after t + L
+    substeps = 1 if prediction_substep_s is None else math.ceil(command_period / prediction_substep_s - _TOLERANCE)
     due, plan, pending, start, taken = Schedule(update_period), None, None, None, []
     plant.start()
     try:
@@ -97,7 +104,7 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
                 at = t
                 for _ in range(ahead):  # summed as the loop sums its deadlines: the same tick times
                     at += command_period
-                x = predict(mpc, plan, law, s, at, command_period) if compensate else s
+                x = predict(mpc, plan, law, s, at, command_period, substeps) if compensate else s
                 mpc.request(x, *task.at(x.t - start, mpc.N, mpc.dt))
                 pending = (at, x, checked(mpc.result(block=True)))  # blocks: the solve takes no simulated time
                 if ahead == 0:  # zero latency: this tick
@@ -123,7 +130,7 @@ def run_compensated(plant, mpc, task, law=sample_knot, callbacks=(), *, command_
                 if isinstance(record, Record):
                     note(record, taken, start or 0., dict(
                         loop="run_compensated", latency_s=latency_s, effective_latency_s=ahead * command_period,
-                        compensate=compensate, law=getattr(law, "__name__", repr(law))))
+                        compensate=compensate, prediction_substeps=substeps, law=getattr(law, "__name__", repr(law))))
 
 
 def note(record, taken, start, settings):
