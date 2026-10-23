@@ -149,6 +149,9 @@ mpc.close()
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
   the raw GATO `controller` and `step`, the latest solve's result), `run` and
   `Record` directly, without `run_experiment`.
+- **Examples, two remedies for solve latency:** `experiments/plan_feedback.py`, a law
+  (a PD around the plan), and `experiments/latency_compensation.py`, its own loop
+  (solve from the predicted state); `experiments/latency_study.py` compares them.
 
 ## On the robot
 
