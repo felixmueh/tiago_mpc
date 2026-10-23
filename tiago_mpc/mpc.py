@@ -175,6 +175,7 @@ def load_controller(params: MpcParams, binary: Path | None):
     import importlib.util
 
     import gato
+    from gato import _cache
 
     model, gpu_path, signs, plant = _plant(params)
     name = f"bsqpN{params.N}_{plant}"
@@ -198,7 +199,12 @@ def load_controller(params: MpcParams, binary: Path | None):
             raise ImportError(f"Cannot import {binary}: {exc}") from exc
     elif Path(module.__file__ or "").resolve() != binary:
         raise RuntimeError(f"gato.{name} is already loaded from {module.__file__}, not {binary}")
-    _register(params, gpu_path, plant)
+    # Register only a plant new to this cache (e.g. a binary from another): registering
+    # takes the cache lock, which a compile holds for minutes, and rewrites the manifest.
+    # Skipping is safe because the plant name hashes every code-generation input.
+    found = _cache.resolve(plant)
+    if found is None or not all((found[1] / plant / f).exists() for f in ("grid.cuh", "limits.cuh")):
+        _register(params, gpu_path, plant)
     friction = params.friction
     # Explicit friction widths: BSQP then never looks up the registration that built the module.
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,

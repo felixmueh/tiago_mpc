@@ -89,6 +89,40 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     assert seen["register"].get("joint_friction_smoothing") == width == seen["width"]
 
 
+def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no_compile, tmp_path):
+    params, seen = replace(TIAGO, N=3), []
+    binary = fake_binary(tmp_path, params)
+
+    def register(name, path, **kwargs):  # what GATO's registration leaves in the cache
+        cache, key = _cache.cache_dir(), "key"
+        (cache / "robots" / key / name).mkdir(parents=True)
+        for header in ("grid.cuh", "limits.cuh"):
+            (cache / "robots" / key / name / header).write_text("")
+        _cache._save_manifest(cache, {"schema": _cache.MANIFEST_SCHEMA,
+                                      "robots": {name: {"name": name, "codegen_key": key}}})
+        seen.append(name)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("registered or locked again")
+
+    monkeypatch.setattr(gato, "register_robot", register)
+    monkeypatch.setattr(gato, "BSQP", lambda *args, **kwargs: NS(set_row_group_bounds=lambda *a: None))
+    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: None, raising=False)
+    monkeypatch.setattr(mpc, "check_model", lambda *args: None)
+    try:
+        mpc.load_controller(params, binary)  # missing entry: registers
+        assert len(seen) == 1
+        monkeypatch.setattr(gato, "register_robot", refuse)
+        monkeypatch.setattr(_cache, "_locked", refuse)
+        mpc.load_controller(params, binary)  # registered: neither registers nor locks
+        (_cache.cache_dir() / "robots" / "key" / seen[0] / "limits.cuh").unlink()
+        monkeypatch.setattr(gato, "register_robot", lambda name, path, **kwargs: seen.append(name))
+        mpc.load_controller(params, binary)  # headers missing: registers again
+    finally:
+        sys.modules.pop("gato." + binary.stem, None)
+    assert len(seen) == 2
+
+
 def test_load_controller_refuses_a_missing_or_foreign_binary_without_compiling(monkeypatch, no_compile, tmp_path):
     params = replace(TIAGO, N=3)
     with pytest.raises(FileNotFoundError, match="compile_binary"):
