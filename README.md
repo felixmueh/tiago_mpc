@@ -66,7 +66,9 @@ cd tiago_mpc && ./scripts/setup.sh   # LFS files, submodule, .venv from requirem
   relative paths ([models/README.md](models/README.md)); never commit a derived file.
 - **Container and host share this checkout.** The container
   (`/workspace/tiago_mpc`) uses `.venv` and `.cache/gato`; the host uses
-  `venv-host` with `GATO_CACHE_DIR=$PWD/.cache/host-gato` (nvcc 12.9, g++-14).
+  `venv-host` (nvcc 12.9, g++-14) with `GATO_CACHE_DIR` set to the main
+  checkout's `.cache/host-gato`, also from worktrees, which then reuse its
+  compiled modules.
 
 ## Running the experiments
 
