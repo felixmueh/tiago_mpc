@@ -51,6 +51,8 @@ def inertia_gains(bandwidth_rad_s, damping_ratio=1., q=Q_START):
 # 33 ms, is of the order of the latencies studied (0-45 ms), so an error is mostly
 # corrected before the next plan takes effect, and w h = 0.06 at 2 ms command ticks, so
 # the zero-order hold of each command barely delays it.
+# TODO: the gains are untuned (30 rad/s, zeta = 1). Follow-ups: a small gain sweep, and the
+# friction-plant test with the coefficients at +-50 %.
 KP, KD = inertia_gains(30.)
 
 
