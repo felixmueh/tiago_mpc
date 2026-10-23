@@ -34,7 +34,7 @@ from experiments.reach import Reach, reach
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.plan import PlanEnded
 from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import ARM_URDF, Q_START
+from tiago_mpc.tiago import Q_START, arm_urdf
 
 
 def inertia_gains(bandwidth_rad_s, damping_ratio=1., q=Q_START):
@@ -42,7 +42,7 @@ def inertia_gains(bandwidth_rad_s, damping_ratio=1., q=Q_START):
     joint-space inertia at q: each joint alone, as a mass m, corrects its error as a
     second-order system with natural frequency w and damping ratio zeta. One scalar gain
     cannot fit all joints: m spans 0.39 (joint 2) to 0.0008 kg m^2 (joint 7) at Q_START."""
-    model = pin.buildModelFromUrdf(str(ARM_URDF))
+    model = pin.buildModelFromUrdf(str(arm_urdf()))
     m = np.diag(pin.crba(model, model.createData(), np.asarray(q, dtype=float)))
     return tuple(m * bandwidth_rad_s**2), tuple(2 * damping_ratio * m * bandwidth_rad_s)
 

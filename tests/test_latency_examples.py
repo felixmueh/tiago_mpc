@@ -13,7 +13,7 @@ from tiago_mpc.loops import Fixed, run_simulation
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.record import Record
-from tiago_mpc.tiago import ARM_URDF, Q_START, urdf_friction
+from tiago_mpc.tiago import Q_START, arm_urdf, urdf_friction
 
 pytestmark = pytest.mark.filterwarnings("ignore:a plan took effect")  # run_simulation's late plans
 
@@ -101,7 +101,7 @@ def test_compensation_refuses_a_wall_clock():
 
 def test_the_implicit_step_is_aba_without_friction_and_stable_with_it():
     import pinocchio as pin
-    model = pin.buildModelFromUrdf(str(ARM_URDF))
+    model = pin.buildModelFromUrdf(str(arm_urdf()))
     data, u, h = model.createData(), np.full(7, .5), .002
     x = np.r_[Q_START, np.full(7, .1)]
     a = pin.aba(model, data, Q_START, x[7:], u)

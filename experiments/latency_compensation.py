@@ -39,7 +39,7 @@ from tiago_mpc.plan import State, Tick
 from tiago_mpc.record import Record
 from tiago_mpc.dynamics import passive_torque
 from tiago_mpc.sim import SimPlant
-from tiago_mpc.tiago import ARM_URDF
+from tiago_mpc.tiago import arm_urdf
 
 _TOLERANCE = 1e-9  # as loops.py: absorbs the rounding of summed periods
 
@@ -88,7 +88,7 @@ def implicit_step(friction):
     tanh's steep slope at zero: near rest joint 7's speed chatters by about h c / (m + h b)
     (0.15 rad/s at 2 ms), bounded, with a negligible position error. friction: the
     predictor's (MpcParams.friction), None loss-free. Native coordinates."""
-    model = pin.buildModelFromUrdf(str(ARM_URDF))
+    model = pin.buildModelFromUrdf(str(arm_urdf()))
     data = model.createData()
 
     def step(x, u, h):
