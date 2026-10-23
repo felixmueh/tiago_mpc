@@ -74,8 +74,10 @@ without ROS.
 
 ## Experiment data and handoff (Felix, 2026-10-21)
 
-- All new data goes in this checkout's (or worktree's) `_expr_data/`: raw
-  results, logs, analysis, figures. Keep it ignored by Git.
+- All data goes in this checkout's (or worktree's) `_expr_data/` (Felix,
+  2026-10-23): raw results, logs, analysis and figures, of experiments and of
+  scratch runs, checks and internal investigations alike. No other results
+  directory (such as `results/`). Keep it ignored by Git.
 - Portable replays go to the shared ingest directory: `impl/_expr_data/ingest/`
   on the host, `/workspace/_expr_data/ingest/` in the container (the same
   mount), in study subfolders with distinct `.npz` names; no raw archives or logs.
