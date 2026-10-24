@@ -18,7 +18,7 @@ _MODULES = {
     "robot": "RosPlant",
     "sim": "SimPlant",
     "tiago": "FLANGE_FRAME FULL_URDF GRASP_FRAME Q_REACH Q_START RIGHT_ARM_JOINTS ROOT "
-             "ROOT_FRAME Limits arm_urdf fk limits urdf_friction",
+             "ROOT_FRAME Limits arm_urdf ee_position fk limits urdf_friction",
 }
 _SOURCE = {name: module for module, names in _MODULES.items() for name in names.split()}
 __all__ = sorted(_SOURCE)

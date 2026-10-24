@@ -166,6 +166,11 @@ def fk(q: np.ndarray, frame: str = GRASP_FRAME) -> np.ndarray:
     return data.oMf[model.getFrameId(frame)].translation.copy()
 
 
+def ee_position(q: np.ndarray) -> np.ndarray:
+    """Position of the grasp frame (GRASP_FRAME) in ROOT_FRAME, metres."""
+    return fk(q, GRASP_FRAME)
+
+
 def runtime_urdf(friction=None):
     """The GPU URDF and the GPU coordinate signs.
 

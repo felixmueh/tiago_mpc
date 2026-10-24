@@ -26,6 +26,9 @@ class SimPlant:
     """Starts at rest in q (default: the comfortable pose) when the run starts and stays
     there until the first command.
 
+    It integrates with implicit Euler (semi-implicit, with implicit damping) when it has
+    friction, RK4 otherwise.
+
     clock is Clock.simulation() by default; Clock.wall() runs in real time (for
     run_robot). state() first integrates up to the clock's time, so State.t is when
     the state is read. model and data are the Pinocchio handles.

@@ -36,6 +36,9 @@ convention, not a calibrated TCP, and it does not follow the opening gripper.
 GATO selects it through `ee_frame`, Pinocchio by name; the full URDF does not
 have it.
 
+Every task measures it through `tiago.ee_position`, including random100 (the
+grasp-frame positions at its frozen goal postures) and the latency study's far
+reach; `reach()` rejects an MPC whose `ee_frame` is not the grasp frame.
 Replays record `end_effector_frame`; missing metadata means the flange. Old
-absolute goals must not be relabeled as grasp-center goals; random100 keeps the
-flange for its frozen goals.
+flange-goal results, such as earlier random100 runs, must not be relabeled as
+grasp-center results.

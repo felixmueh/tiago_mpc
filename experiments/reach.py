@@ -16,12 +16,12 @@ import tiago_mpc as tm
 
 @dataclass(frozen=True)
 class Reach:
-    """Reach target_m with ee_frame; done within the position and joint-speed L1 tolerances.
+    """Reach the grasp-frame position target_m; done within the position and joint-speed
+    L1 tolerances.
 
-    The default target is the frame's position at a nearby posture (not a posture goal).
+    The default target is the position at a nearby posture (not a posture goal).
     """
-    target_m: tuple[float, float, float] = tuple(map(float, tm.fk(tm.Q_REACH)))
-    ee_frame: str = tm.GRASP_FRAME
+    target_m: tuple[float, float, float] = tuple(map(float, tm.ee_position(tm.Q_REACH)))
     position_tol_m: float = .05
     speed_l1_tol_rad_s: float = 1.
     timeout_s: float = 8.
@@ -32,7 +32,7 @@ class Reach:
         return out, None
 
     def distance(self, q):
-        return float(np.linalg.norm(tm.fk(q, self.ee_frame) - self.target_m))
+        return float(np.linalg.norm(tm.ee_position(q) - self.target_m))
 
     def done(self, state, t):
         return bool(self.distance(state.q) <= self.position_tol_m
@@ -43,8 +43,9 @@ def reach(plant, mpc, run=tm.run_simulation, task=Reach(), law=tm.sample_knot, o
           command_period=None, update_period=None, duration=None):
     """Reach task with mpc on plant (common.run_experiment); duration (seconds) caps
     the task's timeout."""
-    if task.ee_frame != mpc.params.ee_frame:
-        raise ValueError("the task and the MPC must track the same frame")
+    if mpc.params.ee_frame != tm.GRASP_FRAME:
+        raise ValueError(f"the reach task measures the grasp frame {tm.GRASP_FRAME}; "
+                         f"the MPC tracks {mpc.params.ee_frame}")
 
     def evaluate(record):
         trajectory = record.trajectory

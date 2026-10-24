@@ -24,15 +24,16 @@ from experiments.reach import Reach, reach
 import tiago_mpc as tm
 
 COMMAND_PERIOD = .002  # the experiments' default; the control-update period is the knot interval
-# "far" is T01 goal 3 of the latency analysis: the flange at Q_START plus this joint offset
-# (31.7 cm there; Q_START's joint 4 has since moved from -2.35 to -2.33 rad).
+# "far" reaches the grasp-frame position at T01 goal 3's posture of the latency analysis,
+# Q_START plus this joint offset (T01 measured the flange, 31.7 cm away with Q_START's joint 4
+# at its former -2.35 rad).
 # "reach-friction" runs the loss-free predictor against a plant with the URDF's friction;
 # the figure eight predicts tanh friction against a plant with constraint Coulomb friction.
 T01_GOAL3 = np.array([.36, 1.2, 0., .45, 0., .15, 0.])
 TASKS = {  # name: (experiment, task or None for its default, params, plant)
     "reach": (reach, Reach(), tm.TIAGO, lambda: tm.SimPlant(substep=.003)),
-    "far": (reach, Reach(tuple(map(float, tm.fk(tm.Q_START + T01_GOAL3, tm.FLANGE_FRAME))), ee_frame=tm.FLANGE_FRAME),
-            replace(tm.TIAGO, ee_frame=tm.FLANGE_FRAME), lambda: tm.SimPlant(substep=.003)),
+    "far": (reach, Reach(tuple(map(float, tm.ee_position(tm.Q_START + T01_GOAL3)))), tm.TIAGO,
+            lambda: tm.SimPlant(substep=.003)),
     "reach-friction": (reach, Reach(), tm.TIAGO, lambda: tm.SimPlant(friction=tm.urdf_friction())),
     "figure8": (figure8, None, FIGURE8, lambda: tm.SimPlant(friction=tm.urdf_friction())),
 }

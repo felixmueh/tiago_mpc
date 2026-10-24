@@ -107,7 +107,12 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   massless frame 0.139 m along the flange's +z: the nominal midpoint of the
   finger pads at zero gripper posture, not a calibrated TCP. Summaries and
   replays record `end_effector_frame`; missing metadata means the flange.
-  random100's frozen goals stay on the flange (`arm_right_tool_joint`).
+- **2026-10-24: every task measures the grasp frame** (Felix), through
+  `tiago.ee_position`, with no historical exceptions: random100 reaches the
+  grasp-frame positions at its frozen goal postures (a new protocol; old
+  flange results stay as they were and are not comparable), and the latency
+  study's far reach targets the grasp frame. `reach()` requires an MPC on the
+  grasp frame. `MpcParams.ee_frame` and `FLANGE_FRAME` stay.
 
 ## Friction and GATO
 

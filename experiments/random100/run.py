@@ -1,4 +1,5 @@
-"""Run the historical random100 inputs once: one reach and one MpcProcess per case.
+"""Run the historical random100 inputs once: one reach and one MpcProcess per case, each to
+the grasp-frame position at the case's goal posture.
 
 Run from the checkout's root: python -m experiments.random100.run --dry-run (parameters only),
 then without --dry-run for all 100 cases or with --pairs 8990 for a subset."""
@@ -21,8 +22,7 @@ HERE = Path(__file__).resolve().parent
 from experiments.reach import Reach, reach
 import tiago_mpc as tm
 
-PARAMS = replace(tm.TIAGO, ee_frame=tm.FLANGE_FRAME,  # the historical tasks track the flange
-                 max_sqp_time_s=None)  # no wall-time limit on the simulation clock
+PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
 
 
 def aggregate(out, rows, expected):
@@ -66,6 +66,8 @@ def main():
                 raise ValueError(f"Nonconstant or inconsistent position target: {name}")
             if not np.allclose(a["target_xyz"], tm.fk(a["source_goal_q"], tm.FLANGE_FRAME), atol=1e-5, rtol=1e-4):
                 raise ValueError(f"Target differs from the goal posture's flange position: {name}")
+            # The inputs' flange targets only check their consistency; each case reaches the
+            # grasp-frame position at the same goal posture instead (a new protocol).
             # The historical seed matches the state-hold, zero-torque warm start.
             if not np.allclose(a["first_seed"].ravel(), np.tile(np.r_[a["initial_state"], np.zeros(7)], 32)[:-7],
                                atol=1e-6):
@@ -75,8 +77,8 @@ def main():
                   application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT, text=True).strip(),
                   source_status=subprocess.check_output(["git", "status", "--short"], cwd=tm.ROOT, text=True),
                   params=asdict(PARAMS),
-                  cohort="reaching-position-only-fixed-clock-8s",
-                  differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, parameters recorded in params and per case. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/position goals/order; no original goal posture is used as a trajectory seed.")
+                  cohort="reaching-grasp-frame-position-only-fixed-clock-8s",
+                  differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, parameters recorded in params and per case. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/goal postures/order; the position goals are the grasp frame's at the goal postures (historical: the flange's), so results are not comparable with the historical cohort; no original goal posture is used as a trajectory seed.")
     if args.dry_run:
         print(json.dumps(config, indent=2)); return 0
     out = (args.output or tm.ROOT / "_expr_data" /
@@ -100,12 +102,12 @@ def main():
     for index, task in enumerate(ids):
         case = out / f"pair_{task:05d}"
         with np.load(out / "inputs" / f"random_{task:05d}.npz") as a:
-            x0, target = a["initial_state"], tuple(map(float, a["target_xyz"]))
+            x0, target = a["initial_state"], tuple(map(float, tm.ee_position(a["source_goal_q"])))
         start = time.perf_counter()
         plant, mpc = tm.SimPlant(x0[:7], x0[7:], substep=.003), None
         try:
             mpc = tm.MpcProcess(PARAMS, binary)
-            reach(plant, mpc, task=Reach(target, ee_frame=tm.FLANGE_FRAME), out=case)
+            reach(plant, mpc, task=Reach(target), out=case)
         except Exception:
             traceback.print_exc()
         finally:

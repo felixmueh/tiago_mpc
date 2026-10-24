@@ -20,9 +20,9 @@ class Figure8:
     """One period of a horizontal figure eight in the reduced arm's root frame, metres.
 
     It starts edge_clearance_m ahead (+x) of start_m, by default the comfortable
-    pose's position of the default end-effector frame.
+    pose's grasp-frame position.
     """
-    start_m: tuple[float, float, float] = tuple(map(float, tm.fk(tm.Q_START)))
+    start_m: tuple[float, float, float] = tuple(map(float, tm.ee_position(tm.Q_START)))
     x_span_m: float = .28
     y_amplitude_m: float = .09
     edge_clearance_m: float = .02
@@ -62,7 +62,7 @@ def figure8(plant, mpc, run=tm.run_simulation, task=Figure8(), law=tm.sample_kno
     def evaluate(record):
         trajectory = record.trajectory
         t = trajectory["state_time_s"]  # when each position was measured
-        xyz = np.array([tm.fk(q, record.params.ee_frame) for q in trajectory["state"][:, :7]])
+        xyz = np.array([tm.ee_position(q) for q in trajectory["state"][:, :7]])
         error = np.linalg.norm(xyz - task.path(t), axis=1)
         record.arrays.update(ee_xyz_m=xyz, reference_xyz_m=task.path(t))
         record.summary.update(
