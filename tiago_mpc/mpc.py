@@ -18,13 +18,14 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 import queue
+import signal
 import sys
 from typing import Any, cast
 
 from gato import SolverParams
 import numpy as np
 
-from tiago_mpc.dynamics import LAWS, Friction, Tanh, passive_torque
+from tiago_mpc.dynamics import Friction, Tanh, passive_torque
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
 from tiago_mpc.util import cache_root, digest
@@ -81,16 +82,6 @@ class MpcParams:
             raise ValueError("max_sqp_time_s must be finite and positive, or None")
         if not (self.friction is None or isinstance(self.friction.law, Tanh)):
             raise ValueError("GATO predicts Tanh Coulomb friction only; Sign and StickSlip are plant-only")
-
-    @classmethod
-    def from_dict(cls, values: dict[str, Any]) -> MpcParams:
-        """Inverse of dataclasses.asdict, also after a JSON round trip."""
-        values = dict(values, solver=SolverParams(**values["solver"]),
-                      admm=AdmmLimits(**values["admm"]))
-        if values["friction"] is not None:
-            law = dict(values["friction"]["law"])
-            values["friction"] = Friction(**dict(values["friction"], law=LAWS[law.pop("name")](**law)))
-        return cls(**values)
 
 
 TIAGO = MpcParams()
@@ -472,7 +463,9 @@ class MpcProcess:
 
 def _serve(params, binary, requests, replies):
     """The process: load, reply None when ready (or the error), then one reply per
-    request: a plan, or None after the warm-up."""
+    request: a plan, or None after the warm-up. It ignores SIGINT: Ctrl-C reaches the whole
+    foreground process group, and the parent stops the run and closes this process."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         mpc = Mpc(params, binary)
         replies.put(None)

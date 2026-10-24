@@ -15,18 +15,25 @@ robot), and select the intended DDS domain and network. The package never
 loads ROS itself; constructing the client raises a `RuntimeError` if the ROS
 packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
-- **Check-only (default):** `python -m experiments.reach --plant robot` creates
-  `RosPlant(execute=False)`, runs `start(Wall())` and `stop()`, and prints the checked
-  settings. It reads the controller inventory but loads no controller, switches
-  nothing, publishes nothing and builds no MPC. Nothing is saved.
+- **Check-only (default):** `python -m experiments.reach --plant robot` builds
+  `RobotConfig(execute=False)`'s `RosPlant`, runs `start(WallClock())` and `stop()`,
+  and prints its `run_state`. It reads the controller inventory but loads no
+  controller, switches nothing, publishes nothing and builds no MPC. Nothing is saved.
 - **Execution:** `--execute --target X_M Y_M Z_M` (target required). You type
-  `EXECUTE` before the ROS client exists. Then `launch` (`experiments/common.py`)
-  compiles GATO's module unless it is cached and builds the `MpcProcess`
-  (`MpcProcess.compile`), and `run_real_time` calls `plant.start(Wall())`, so the startup
+  `EXECUTE` before the ROS client exists; anything else returns exit status 2.
+  The main has installed the stop signals first (`handle_stop_signals`). Then
+  `launch` (`experiments/common.py`) compiles GATO's module unless it is cached and
+  builds the `MpcProcess` (`MpcProcess.compile`);
+  `run_experiment` builds the `RosPlant` from `RobotConfig(execute=True)`, and
+  `run_real_time` calls `plant.start(WallClock())`, so the startup
   checks see a state read after the build, then `mpc.warmup` from a state read
   after them (GATO's warm-up solve); meanwhile the arm stays under PAL's
-  position controller. SIGTERM ends the run like Ctrl-C. `launch` closes the
-  MPC and the plant at the end.
+  position controller. Ctrl-C or SIGTERM sets the stop flag: the loop finishes its
+  tick, the next one sends nothing, and `stop()` zeroes the torque and hands back;
+  the run is saved as `interrupted`. A second signal raises `KeyboardInterrupt`
+  (for the blocking first-state wait or a compile); `stop()` still runs in the
+  loop's `finally`. The MPC process and the safety worker ignore SIGINT.
+  `run_experiment` closes the plant (and with it the safety worker), `launch` the MPC.
 - **`--duration S`** ends a run after at most S seconds (otherwise the reach
   times out after 8 s and the figure eight runs its 24 s period); use it for
   first runs.
@@ -41,7 +48,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
 | Process | Runs |
 |---|---|
-| 1 (launching) | compiling GATO's module before the run (`compile_binary`); loop, task, law, `guard`, `Record`, `RosPlant` and the ROS client |
+| 1 (launching) | compiling GATO's module before the run (`compile_binary`); loop, task, law, the fault checks, `RunRecord`, `RosPlant` and the ROS client |
 | 2 (spawned) | `MpcProcess`: loads that module, builds the GATO controller and solves on the GPU |
 | 3 (spawned) | the safety worker (`AsyncSafetyMonitor`), owned by `RosPlant`: no robot run without it |
 
@@ -49,15 +56,19 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
 | Where | Check |
 |---|---|
-| `RosPlant(...)` | refuses a disabled safety worker or one monitoring other joints than the right arm |
+| `RosPlant(config)` | refuses a disabled safety worker or one monitoring other joints than the right arm |
 | `RosPlant.start()` | first state within 180 s; safety worker started with it; PAL's `arm_right_controller` active (existing effort control is not adopted; mixed or unknown arm owners are rejected); with `execute`, the effort controller loaded and configured; then a newer state passes `state()`'s checks, lies within 0.05 rad of the comfortable pose at joint-speed L1 ≤ 1 rad/s, and the safety worker has checked it |
 | `RosPlant.state()` | receipt age ≤ 100 ms; finite stamp; seven finite q, qd within the URDF position and speed limits; sequence never reversed; a new sample has a later ROS stamp (a clock reset faults); full named body state; every other body joint within 0.02 rad (torso 5 mm) of its start value; the state goes to the safety worker, whose faults latch |
-| loop (`run_real_time`) | `plant.start(Wall())` (any other clock raises before a ROS call) and `mpc.warmup` before the first tick; `task.done` before any command (a met goal never activates effort control); no command before the first plan; every knot of a plan within the raw effort limits when it arrives, before any of its knots is commanded (`checked`); `plant.stop()` first on exit |
+| loop (`run_real_time`) | `plant.start(WallClock())` (any other clock raises before a ROS call) and `mpc.warmup` before the first tick; `task.done` and the stop flag before any command (a met goal never activates effort control); no command before the first plan; every knot of a plan within the raw effort limits when it arrives, before any of its knots is commanded (`plan_fault`); `plant.stop()` first on exit |
 | `MpcProcess.result()` | every knot finite; expected shapes and knot interval; the plan answers the pending request; an error reply or a dead process raises, polled every tick |
-| `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; the tick's time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time |
+| `lease_fault`, `command_fault` (`loops.py`) | before the law, the tick's time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time; then the command finite, seven torques, within the raw effort limits; never clipped |
 
-The checks raise; nothing retries. Limits are the full URDF's; the
-tolerances are fields of `Checks` in `robot.py`.
+The loop's checks (`plan_fault`, `lease_fault`, `command_fault`) return a reason
+(`effort_limit`, `lease_expired`, `invalid_command`): the tick sends nothing,
+reaches the callbacks, and the run ends as `fault` with that reason. The plant's
+checks (`RosPlant`, the safety worker) and the MPC's raise: the run ends as
+`error`. Nothing retries. Limits are the full URDF's; the tolerances are fields
+of `Checks` in `robot.py`.
 
 ## Activation and handback
 
@@ -75,19 +86,24 @@ tolerances are fields of `Checks` in `robot.py`.
 - **`stop()`** after an activation attempt: five zero-torque publications 10 ms
   apart, then the switch back to `arm_right_controller`, which first gets
   `set_last_command_interface_value_as_state_on_activation=False` so it holds
-  the measured pose. Errors are collected and raised; `restored` is recorded.
-  An interrupted activation call leaves restoration uncertain (the server may
-  still switch); `stop()` then raises and asks for manual controller
-  reconciliation.
+  the measured pose. Errors are collected and raised after the `handback` event
+  (`restored`, `errors`); `run_state` keeps `restored` and `cleanup_errors`, which
+  the record saves as `metadata.plant`. An interrupted activation call leaves
+  restoration uncertain (the server may still switch); `stop()` then raises and
+  asks for manual controller reconciliation.
+- **Events:** `activated` when the switch is done (`switch_s`, how long it took),
+  `handback` in `stop()`, after the loop; `run_experiment` takes the latter after the
+  loop returns, and the console prints both.
 - **`close()`** stops the safety worker and the ROS client.
 
 ## Latency
 
-A plan starts at its state's time t₀, and `sample_knot` commands the knot due
+A plan starts at its state's time t₀, and `SampleKnot` commands the knot due
 at the tick's time t. A plan that first takes effect at t − t₀ ≥ dt (one
 knot interval) never runs its knot 0. Consecutive plans differ mainly in that
 knot, so with every plan that late the loop loses the feedback and can
-diverge. Both loops warn at the first such plan, once per run.
+diverge. Each such plan is a `late_plan` event in both loops; the console prints
+the first.
 
 - On wall time (`run_real_time`) a plan takes effect at the first command tick
   after it arrives. With command ticks of one knot (10 ms), any solve delays it by a
@@ -104,15 +120,16 @@ diverge. Both loops warn at the first such plan, once per run.
 ## Time
 
 `RosPlant` runs on wall time only: `start(clock)` refuses anything but the
-loop's `Wall`. `State.t` is the state's monotonic receipt time, on the same
+loop's `WallClock`. `State.t` is the state's monotonic receipt time, on the same
 clock; it starts the plan and the reference phase. `run_real_time` reads the
 clock at every tick and samples the plan, checks the lease and schedules with
 it, so a repeated or stale state cannot extend a lease. The loop sets each
 tick's deadline one command period after the previous one; `advance()` waits
 until the clock reaches it. A tick that starts a command period or more late
-skips the missed ones, warns once (not the tick after the first command, which
-switches to effort control through blocking service calls) and is counted in
-the summary (`timing.late_ticks`). Freshness compares receipt times with
+skips the missed ones and is a `late_tick` event (`late_s`, `skipped`), counted in
+the results (`late_ticks`); not the tick after the first command, which switches
+to effort control through blocking service calls, whose duration the `activated`
+event records. Freshness compares receipt times with
 `time.monotonic()`. **Open for Gazebo:** a third clock fed from `/clock`, with
 the ROS stamps as `State.t` (a comment in `RosPlant.__init__`); not implemented.
 

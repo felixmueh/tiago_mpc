@@ -7,7 +7,6 @@ A library, not a command; export_replay is called by run_experiment (experiments
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
 import os
@@ -16,35 +15,38 @@ import tempfile
 
 import numpy as np
 
+from tiago_mpc.record import to_dict
 from tiago_mpc.tiago import FLANGE_FRAME, FULL_URDF, GRASP_FRAME, RIGHT_ARM_JOINTS, ROOT_FRAME
 
 FORMAT = "tiago-replay"
-TIME_BASIS = {"virtual": "simulation", "wall": "wall"}  # the plant's kind of time: the format's strings
 VERSION = 1
 
 
 def export_replay(record):
-    """Write <record.out>/replay.npz on the run's time: the state and command at each
-    tick, the task's reference, every plan and the MpcParams (provenance.params);
-    nothing for fewer than two ticks."""
-    trajectory = record.trajectory
-    time_s, state, command = trajectory["time_s"], trajectory["state"], trajectory["command"]
+    """Write <record.out>/replay.npz on the run's time from the record's read interface (a
+    RunRecord, or load_run's with the task's class): the state and command at each tick,
+    the task's reference, every plan and the MpcParams (provenance.params); nothing for
+    fewer than two ticks. The time basis follows the timing's type: RealTime is wall time,
+    every other timing virtual time ("simulation")."""
+    ticks, plans, params, task = record.ticks, record.plans, record.config["params"], record.config["task"]
+    time_s, command = ticks["t"], ticks["command"]
     if len(time_s) < 2:
         return None
     sent = np.isfinite(command).all(axis=1)
-    dt, n = record.params.dt_s, record.params.N
-    plans = [dict(origin_time_s=float(t0), time_s=np.arange(n) * dt, q=states[:, :7],
-                  qd_rad_s=states[:, 7:], torque_nm=torques, torque_time_s=np.arange(n - 1) * dt)
-             for t0, states, torques in zip(trajectory["plan_t0_s"], trajectory["plan_states"],
-                                            trajectory["plan_torques"])]
-    return save_replay(record.out / "replay.npz", time_s=time_s, q=state[:, :7], qd_rad_s=state[:, 7:],
-                       joint_names=RIGHT_ARM_JOINTS, time_basis=TIME_BASIS[record.plant.settings["time"]],
+    dt, n = params.dt_s, params.N
+    predictions = [dict(origin_time_s=float(t0), time_s=np.arange(n) * dt, q=states[:, :7],
+                        qd_rad_s=states[:, 7:], torque_nm=torques, torque_time_s=np.arange(n - 1) * dt)
+                   for t0, states, torques in zip(plans["t0"], plans["states"], plans["torques"])]
+    timing = record.config["timing"]
+    wall = (timing["type"] if isinstance(timing, dict) else type(timing).__name__) == "RealTime"
+    return save_replay(record.out / "replay.npz", time_s=time_s, q=ticks["q"], qd_rad_s=ticks["qd"],
+                       joint_names=RIGHT_ARM_JOINTS, time_basis="wall" if wall else "simulation",
                        torque_nm=command[sent] if sent.any() else None,
                        torque_time_s=time_s[sent] if sent.any() else None,
-                       reference_xyz_m=np.array([record.task.at(t, 2, dt)[0][0, :3] for t in time_s]),
-                       reference_time_s=time_s, reference_frame=ROOT_FRAME, plans=plans,
+                       reference_xyz_m=np.array([task.at(t, 2, dt)[0][0, :3] for t in time_s]),
+                       reference_time_s=time_s, reference_frame=ROOT_FRAME, plans=predictions,
                        end_effector_frame=GRASP_FRAME, label=record.out.name,
-                       provenance=dict(params=asdict(record.params)))
+                       provenance=dict(params=to_dict(params)))
 
 
 def model_sha256(model_urdf):

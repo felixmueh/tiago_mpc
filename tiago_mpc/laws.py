@@ -1,19 +1,29 @@
-"""Control laws: law(plan, t, state) -> command, once per command tick (plan.Law)."""
+"""Control laws: frozen dataclasses called law(plan, t, state) -> command, once per command
+tick (plan.Law), so a run records them as its configuration."""
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 
-from tiago_mpc.plan import Plan, PlanEnded, State
+from tiago_mpc.plan import Plan, State
 
 
-def sample_knot(plan: Plan, t: float, state: State) -> np.ndarray:
-    """The torque of the knot due at t; past the plan's last knot this raises PlanEnded."""
-    k = plan.index(t - plan.t0)
-    if k >= len(plan.torques):
-        raise PlanEnded("time is past the plan's last knot")
-    return plan.torques[k]
+@dataclass(frozen=True)
+class SampleKnot:
+    """The torque of the knot due at t. The loops never ask past the plan's lease, which
+    ends before its last knot does; past it, a broken invariant, this raises."""
+
+    def __call__(self, plan: Plan, t: float, state: State) -> np.ndarray:
+        k = plan.index(t - plan.t0)
+        if k >= len(plan.torques):
+            raise RuntimeError("time is past the plan's last knot, beyond its lease")
+        return plan.torques[k]
 
 
-def hold_first(plan: Plan, t: float, state: State) -> np.ndarray:
+@dataclass(frozen=True)
+class HoldFirst:
     """The plan's first torque, whatever t is."""
-    return plan.torques[0]
+
+    def __call__(self, plan: Plan, t: float, state: State) -> np.ndarray:
+        return plan.torques[0]

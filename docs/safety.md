@@ -32,6 +32,8 @@ monitor.close()
   check pending longer than `check_timeout_sec` (50 ms) faults as stale, and the
   deadline is enforced before replies are read, so a late success cannot clear
   it. A dead worker faults at the next call.
+- **Ctrl-C:** the worker ignores SIGINT, which reaches the whole foreground process
+  group; the parent stops the run and `close()` shuts the worker down.
 - **Faults latch** until the monitor is closed: every later call raises.
   `safety_status`, `safety_fault` and `safety_message` describe the fault.
 - **Sequence numbers:** `SafetyCheckState` carries q, qd, both timestamps, `seq`

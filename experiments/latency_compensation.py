@@ -2,35 +2,34 @@
 plan takes effect, and date the plan from then (Findeisen and Allgöwer; Mastalli et al.).
 
 run_virtual_time(..., solve_latency=L) solves from the state measured at tick t, dates the
-plan t and lets it take effect at t + L, so sample_knot enters it at knot floor(L / dt).
+plan t and lets it take effect at t + L, so SampleKnot enters it at knot floor(L / dt).
 Once L reaches one knot interval, knot 0, where each new solve's correction sits, never
 runs, and the reach diverges (docs/robot.md, Latency). run_compensated predicts the state
 at t + L under the commands the loop sends until then, solves from it and dates the plan
 t + L, so every plan starts at its knot 0. It is its own loop, not run_virtual_time: run_virtual_time
 requests from the measured state, and its late-plan check, plan.index(t - plan.t0), raises
-for a plan dated in the future. It has run_virtual_time's calling convention, without
-solve_latency; bind its own arguments:
+for a plan dated in the future. Its timing is Compensated, which any experiment takes:
 
-    reach(SimPlant(substep=.003), Mpc.compile(replace(TIAGO, max_sqp_time_s=None)),
-          run=partial(run_compensated, latency_s=.02))
+    reach(SimConfig(substep=.003), Mpc.compile(replace(TIAGO, max_sqp_time_s=None)),
+          timing=Compensated(latency_s=.02))
 
 The other remedy needs only a control law (plan_feedback.py); latency_study.py compares
-both, alone and together, with stock sample_knot. The main runs one compensated reach.
+both, alone and together, with stock SampleKnot. The main runs one compensated reach.
 
 Run from the checkout's root: python -m experiments.latency_compensation --solve-latency .02
 """
 from __future__ import annotations
 
-from dataclasses import replace
-from functools import partial
+from dataclasses import asdict, dataclass, replace
 import json
 import math
 import sys
+from typing import Literal
 
 import numpy as np
 import pinocchio as pin
 
-from experiments.common import arguments
+from experiments.common import arguments, handle_stop_signals
 from experiments.reach import reach
 import tiago_mpc as tm
 
@@ -98,7 +97,7 @@ def run_compensated(
     plant,
     mpc,
     task,
-    law=tm.sample_knot,
+    law=tm.SampleKnot(),
     callbacks=(),
     *,
     command_period,
@@ -119,87 +118,120 @@ def run_compensated(
 
     As in run_virtual_time: the warm-up before the first tick, one outstanding solve, the next request
     at the first control-update slot at or after its plan took effect, each plan checked
-    on arrival and each command guarded, the last tick without a command, plant.stop()
-    first on exit. Left out: the garbage-collection pause, the overrun count, and the
-    late-plan warning. A Record among the callbacks
-    gets the loop's settings and, per plan, the requested state (predicted or measured)
-    and the plant's state at the tick the plan took effect.
+    on arrival and each command before it is sent, a fault or STOP ending the run, late_plan
+    events, the last tick without a command, plant.stop() first on exit. Left out: the
+    garbage-collection pause and the overrun events. Each plan's stats carry the state it
+    was requested from (requested_state, predicted or measured), a plans column of the record.
     """
     ahead = math.ceil(latency_s / command_period - _TOLERANCE)  # a plan takes effect at the first tick at or after t + L
     substeps = 1 if prediction_substep_s is None else math.ceil(command_period / prediction_substep_s - _TOLERANCE)
     step = None
     if compensate:
         step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction)
-    clock, due, plan, pending, start, taken = tm.VirtualClock(), tm.Schedule(update_period), None, None, None, []
+    clock, due, plan, pending, start, plans = tm.VirtualClock(), tm.Schedule(update_period), None, None, None, 0
     plant.start(clock)
     try:
         mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])  # the arm is still held
         deadline = None
         while True:
             s, t = plant.state(), clock.now()
+            events = []
             start = s.t if start is None else start
-            done = task.done(s, t - start)
-            end = done or t - start >= duration - _TOLERANCE
+            done, stopped = task.done(s, t - start), tm.STOP.is_set()
+            end = done or stopped or t - start >= duration - _TOLERANCE
             new = pending if pending is not None and t >= pending[0] - _TOLERANCE else None
-            if new is not None:  # (time it takes effect, requested state, plan)
-                plan, pending = new[2], None
+            if new is not None:  # (time it takes effect, plan)
+                plan, pending = new[1], None
+            fault, update, faulted = None, False, None
             if pending is None and not end and due(t):
-                at = t
+                update, at = True, t
                 for _ in range(ahead):  # summed as the loop sums its deadlines: the same tick times
                     at += command_period
                 x = predict(plan, law, s, at, command_period, step, substeps) if compensate else s
                 mpc.request(x, *task.at(x.t - start, mpc.N, mpc.dt))
-                pending = (at, x, tm.checked(mpc.result(block=True)))  # blocks: the solve takes no virtual time
-                if ahead == 0:  # zero latency: this tick
-                    new, plan, pending = pending, pending[2], None
+                solved = mpc.result(block=True)  # blocks: the solve takes no virtual time
+                assert solved is not None
+                solved = replace(solved, stats={**solved.stats, "requested_state": np.r_[x.q, x.qd]})
+                fault = tm.plan_fault(solved)
+                if fault is None:
+                    pending = (at, solved)
+                    if ahead == 0:  # zero latency: this tick
+                        new, plan, pending = pending, pending[1], None
+                else:
+                    faulted = solved  # it never takes effect
             if new is not None:
-                taken.append((new[1], s))
+                plans += 1
             command = None
-            if plan is not None and not end:
-                command = tm.guard(law(plan, t, s), plan, t)
-                plant.apply(command)
+            if plan is not None and not end and fault is None:
+                if new is not None and t >= plan.t0 and plan.index(t - plan.t0) >= 1:  # uncompensated only
+                    events.append(tm.Event(t, "late_plan", f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after "
+                                                           f"its state, {1e3 * plan.dt:g} ms knots: its knot 0 never "
+                                                           "runs (docs/robot.md, Latency)",
+                                           dict(plan=plans - 1, delay_s=t - plan.t0)))
+                fault = tm.lease_fault(plan, t)  # before the law: never past the last knot
+                if fault is None:
+                    command = np.asarray(law(plan, t, s), dtype=float)
+                    fault = tm.command_fault(command)
+                    if fault is None:
+                        plant.apply(command)
+                    else:
+                        command = None
+            tick = tm.Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
             for callback in callbacks:
-                callback(tm.Tick(t, s, command, plan, new is not None))
+                callback(tick)
+            if fault is not None:
+                return tm.Outcome("fault", fault, t - start)
             if end:
-                return tm.Outcome(done)
+                return tm.Outcome("done" if done else "interrupted" if stopped else "timeout",
+                                  "stop_requested" if stopped and not done else None, t - start)
             deadline = t if deadline is None else deadline
             deadline += command_period
             plant.advance(deadline)
     finally:
-        try:
-            plant.stop()  # zero torque first
-        finally:
-            for record in callbacks:
-                if isinstance(record, tm.Record):
-                    note(record, taken, start or 0., dict(
-                        loop="run_compensated", latency_s=latency_s, effective_latency_s=ahead * command_period,
-                        compensate=compensate, predictor=predictor, prediction_substeps=substeps, law=getattr(law, "__name__", repr(law))))
+        plant.stop()  # zero torque first
 
 
-def note(record, taken, start, settings):
-    """The loop's settings and the per-plan prediction error into record."""
-    requested = np.array([np.r_[x.q, x.qd] for x, _ in taken]).reshape(-1, 14)
-    actual = np.array([np.r_[s.q, s.qd] for _, s in taken]).reshape(-1, 14)
-    error = np.abs(actual - requested)
-    record.arrays.update(effect_time_s=np.array([s.t - start for _, s in taken]),
-                         requested_state=requested, effect_state=actual)
-    record.summary.update(loop=settings, prediction_error_max=dict(
-        q_rad=float(error[:, :7].max(initial=0.)), qd_rad_s=float(error[:, 7:].max(initial=0.))))
+@dataclass(frozen=True)
+class Compensated:
+    """run_compensated's timing, its settings with the defaults of a 20 ms latency."""
+    latency_s: float = .02
+    command_period: float = .002
+    update_period: float = .01
+    compensate: bool = True
+    prediction_substep_s: float | None = None
+    predictor: Literal["implicit", "gpu"] = "implicit"
+
+    def run(self, plant, mpc, task, law, callbacks, *, duration):
+        return run_compensated(plant, mpc, task, law, callbacks, duration=duration, **asdict(self))
+
+
+def first_tick_of_each_plan(record):
+    """The index of the tick at which each plan of record took effect."""
+    plans, first = np.unique(record.ticks["plan"], return_index=True)
+    return first[plans >= 0]
 
 
 def main(argv=None):
-    """One compensated reach on SimPlant, --solve-latency seconds (declared)."""
+    """One compensated reach on SimPlant, --solve-latency seconds (declared; default the timing's)."""
+    handle_stop_signals()
     args = arguments(__doc__, argv)
     if args.plant != "sim" or args.solve_latency == "measured":
         raise SystemExit("latency_compensation.py: simulation with a declared --solve-latency only")
+    given = dict(latency_s=args.solve_latency, command_period=args.command_period, update_period=args.update_period)
+    timing = Compensated(**{key: value for key, value in given.items() if value is not None})
     mpc = tm.Mpc.compile(replace(tm.TIAGO, max_sqp_time_s=None))  # in this process: predict uses its solver
-    record = reach(tm.SimPlant(substep=.003), mpc, run=partial(run_compensated, latency_s=args.solve_latency),
-                   out=args.output, command_period=args.command_period, update_period=args.update_period,
-                   duration=args.duration)
-    print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},
-                     indent=2, default=str))
-    mpc.close()
-    return 0 if record.summary["reached"] and record.summary["limits_pass"] else 1
+    try:
+        record = reach(tm.SimConfig(substep=.003), mpc, timing=timing, duration=args.duration, out=args.output)
+    finally:
+        mpc.close()
+    effect = first_tick_of_each_plan(record)
+    actual = np.c_[record.ticks["q"][effect], record.ticks["qd"][effect]]
+    error = np.abs(actual - record.plans["requested_state"]) if len(effect) else np.zeros((0, 14))
+    record.metadata["results"]["prediction_error_max"] = dict(q_rad=float(error[:, :7].max(initial=0.)),
+                                                              qd_rad_s=float(error[:, 7:].max(initial=0.)))
+    record.save()
+    print(json.dumps(record.metadata, indent=2, default=str))
+    return 0 if record.metadata["status"] == "arrived" and record.metadata["results"]["limits_pass"] else 1
 
 
 if __name__ == "__main__":

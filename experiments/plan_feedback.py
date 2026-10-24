@@ -1,6 +1,6 @@
 """Feedback around the plan, as a control law: one remedy for solve latency.
 
-sample_knot sends only the plan's torques. Once a plan takes effect a knot interval or
+SampleKnot sends only the plan's torques. Once a plan takes effect a knot interval or
 more after its state, its knot 0, where each new solve's correction sits, never runs,
 and nothing corrects the arm between solves (docs/robot.md, Latency). PlanFeedback adds
 a joint-space PD on the plan's own knot states, at the command rate:
@@ -12,7 +12,7 @@ effect. OCS2 feeds back with Riccati gains here; GATO returns none, hence a PD.
 A law needs no loop of its own: it plugs into run_virtual_time, run_real_time and the
 experiments (latency compensation, the other remedy, does: latency_compensation.py).
 
-    reach(SimPlant(substep=.003), mpc, run=run_virtual_time, solve_latency=.02, law=PlanFeedback())
+    reach(SimConfig(substep=.003), mpc, timing=VirtualTime.constant_latency(.02), law=PlanFeedback())
 
 The main runs one reach in simulation as experiments/reach.py does, with this law.
 
@@ -27,7 +27,7 @@ import sys
 import numpy as np
 import pinocchio as pin
 
-from experiments.common import arguments, launch
+from experiments.common import arguments, handle_stop_signals, launch
 from experiments.reach import Reach, reach
 import tiago_mpc as tm
 
@@ -66,7 +66,7 @@ class PlanFeedback:
     def __call__(self, plan, t, state):
         k = plan.index(t - plan.t0)
         if k >= len(plan.torques):
-            raise tm.PlanEnded("time is past the plan's last knot")
+            raise RuntimeError("time is past the plan's last knot, beyond its lease")
         s = min(max(t - plan.t0 - k * plan.dt, 0.), plan.dt)  # rounding at the knot boundary
         q, qd = plan.states[k, :7], plan.states[k, 7:]
         a = (plan.states[k + 1, 7:] - qd) / plan.dt
@@ -76,12 +76,16 @@ class PlanFeedback:
 
 
 def main(argv=None):
+    handle_stop_signals()
     args = arguments(__doc__, argv)
     if args.plant != "sim":
         raise SystemExit("plan_feedback.py runs in simulation only: the law is untested on the robot")
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    record = launch(args, partial(reach, task=task, law=PlanFeedback()), lambda: tm.SimPlant(substep=.003), tm.TIAGO)
-    return 0 if record is None or record.summary["reached"] and record.summary["limits_pass"] else 1
+    record = launch(args, partial(reach, task=task, law=PlanFeedback()), tm.SimConfig(substep=.003), tm.TIAGO,
+                    tm.VirtualTime.ideal())
+    if isinstance(record, int):
+        return record
+    return 0 if record.metadata["status"] == "arrived" and record.metadata["results"]["limits_pass"] else 1
 
 
 if __name__ == "__main__":

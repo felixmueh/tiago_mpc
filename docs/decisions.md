@@ -195,7 +195,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   default, the former `"constraint"`), frozen dataclasses without methods. Each
   integrator interprets the law with `match`, covering every case; each law
   stores its `name` so that `asdict` tells them apart, and `MpcParams.from_dict`
-  rebuilds it through `dynamics.LAWS`. `urdf_friction(law=StickSlip())` replaces
+  rebuilds it through `dynamics.LAWS` (superseded by the run-data entry below: the
+  type name tells them apart, `record.from_dict` rebuilds). `urdf_friction(law=StickSlip())` replaces
   the width argument; `check_coulomb_law` and `SimPlant`'s `coulomb_law` are gone.
   `MpcParams.friction` must be `Tanh`, the only law GATO predicts. RK4 with the
   passive torque at every stage (`plant_rk4`) is restored for `Tanh` and `Sign`;
@@ -278,7 +279,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   the timing (`timing`: the loop, `command_period_s`, `update_period_s`,
   `solve_latency` for virtual-time runs, the counts); the plant's `settings` record
   `time` (`"virtual"` or `"wall"`; the replay's `time_basis` keeps
-  `"simulation"` and `"wall"`). Renamed the same day (Felix): "stepped time" became "virtual time",
+  `"simulation"` and `"wall"`). The warnings, counts, `Outcome`, `timing` and
+  `settings` are superseded by the run-data entry below. Renamed the same day (Felix): "stepped time" became "virtual time",
   `run_stepped` → `run_virtual_time`, `Stepped` → `VirtualClock` (and `Wall` → `WallClock`), the plant's `time` `"stepped"` → `"virtual"`.
 - **2026-10-22: one `Mpc` per run.** `run` calls `mpc.warmup(state, reference)`
   once before the first tick (arm still held); it resets the controller and, with
@@ -342,6 +344,78 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   plan's own lease end; left as is, to review with the safety work.
 
 ## Records and history
+
+- **2026-10-24: run data and configuration** (Felix; the design is
+  `agent-reading/tiago-mpc-design/run-data-design.md` v2 in the thesis workspace,
+  its section 8 deciding the points left open).
+  - **`record.py` is the one module of the format,** imported by everything that
+    writes or reads a run: `to_dict`/`from_dict` (dataclasses with their type
+    name; rebuilt from `CLASSES`, the package's config classes, imported at the
+    module's top, plus the caller's; JSON arrays become tuples; two classes of one
+    name raise), `provenance()` (commit, source status, versions, GATO's source,
+    `ROS_DISTRO`; `gato_source` became its internal `_gato_source`), `Console`,
+    `RunRecord(out, **pieces)` (renamed from `Record`) and `load_run(path,
+    classes)`, which share one read interface (`config`, `ticks`, `plans`,
+    `events`, `metadata`), and `FORMAT = 1`. `Event` lives in `plan.py`, beside
+    `Tick`, so that inside the package only the root imports `record.py`, and no
+    import is lazy (Felix, same day).
+  - **A run directory:** `summary.json` (`format`, `provenance`, `config`, the
+    pieces written at the start, and `metadata`: `status`, `reason`, `end_t`, one
+    flat `results`, `error`, `plant`), `ticks.npz` (with `plan` and `update`
+    indices), `plans.npz` (with `update_t`), `events.json`, and `replay.npz`, the
+    visualizer's contract, exported from the record. A plan that faulted
+    (`plan_fault`) is saved as the last row of `plans.npz`; it never takes effect,
+    so no tick's `plan` index points at it, and the faulting tick carries it as
+    `Tick.faulted` (Felix, same day). Old recordings stay readable only by their own
+    code (22 October).
+  - **Events, not warnings:** the loops and plants emit `late_tick`, `overrun`,
+    `late_plan`, `pacing_behind`, `activated` and `handback`; every occurrence is
+    recorded, the console prints the first of each kind. Plants hand theirs to the
+    loop with `take_events()`, once per tick and once after the loop (`stop()`'s).
+    The late tick after the robot's activation is not emitted; its delay is the
+    `activated` event's `switch_s`. `PlantInterface.settings` became `run_state`,
+    the plant's final values.
+  - **Configuration by construction:** every piece is a frozen dataclass and is
+    recorded as given, without a wrapper or `Options`: the task, `MpcParams`,
+    `SimConfig`/`RobotConfig` with `build()`, the laws `SampleKnot()` and
+    `HoldFirst()` (replacing `sample_knot`, `hold_first`), the timings
+    `VirtualTime` (presets `ideal`, `constant_latency`, `as_fast_as_possible`,
+    `constant_rate`) and `RealTime` in `loops.py`, each running its loop.
+    `SimConfig.integrator` is explicit, with no `None`: a plant with friction
+    names its integrator. Fields that would not round-trip convert in
+    `__post_init__` (`SimConfig.q`/`qd` to tuples, `CollisionSafetySettings`'s
+    paths from strings); `MpcParams.from_dict`, the laws' `name` and
+    `dynamics.LAWS` went.
+  - **Ending without exceptions:** a loop returns `Outcome(status, reason, t)`:
+    `done`, `timeout`, `fault` (`effort_limit`, `lease_expired`,
+    `invalid_command`, from `plan_fault`, `lease_fault`, `command_fault`, which
+    gate `plant.apply`) or `interrupted` (`stop_requested`, the module-level
+    `STOP` flag checked every tick). `handle_stop_signals()` clears and sets the
+    flag on the first SIGINT/SIGTERM; a second restores the defaults and raises
+    `KeyboardInterrupt`. Every main that runs the simulation or the arm calls it
+    first, so Ctrl-C behaves the same everywhere; the studies stop after an
+    interrupted run. The MPC process and the safety worker ignore SIGINT (the
+    parent stops the run and closes them); the cancelled `EXECUTE` prompt returns
+    exit status 2. `PlanEnded` went: a law asked past the plan's last knot, which
+    the lease check rules out, raises a plain `RuntimeError` (Felix, same day). The
+    plant-side checks (`RosPlant._check`, the safety worker) stay exceptions, to be
+    decided with the todo item "Rethink error handling in real-time runs".
+  - **`run_experiment` returns the record,** building the plant inside its
+    `try`, and saves and exports it in `finally`; the experiment adds its results
+    and saves again. There is no `done_status`: the reach sets `"arrived"`
+    itself, the figure eight ends as `done`. `RunRecord` also works on its own,
+    with the same duties written out. `launch(args, experiment, plant, params,
+    timing)` takes the main's `VirtualTime` explicitly (Felix, same day).
+  - **Many runs:** no study class in the library; an experiment defines its own
+    frozen study classes (random100: `Random100Config`, `Case`, `Random100Study`,
+    `study.json` once before the first run, one `RunRecord` per case, stop on
+    `interrupted`, `load(path)`).
+  - **Runs are limited to `MAX_RUNTIME_MIN` = 10 minutes** (`loops.py`): both
+    loops raise before the plant starts for a longer duration. Long runs are not
+    validated: the record keeps every tick in memory (about 2 KB per tick in
+    simulation) and the loops pause garbage collection for the whole run, which
+    stays (a check of 24 October found no cyclic garbage per tick on the CPU
+    paths; rclpy unchecked). A loop of an experiment's own is not checked.
 
 - **2026-10-21: completed experiment cleanup.** Felix removed ten completed
   experiment worktrees and branches with their raw results and replays, and the

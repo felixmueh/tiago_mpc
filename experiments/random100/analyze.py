@@ -11,7 +11,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from experiments.random100.run import load
 import tiago_mpc as tm
+
+DIFFERENCES = ("Modern GATO/GRiD, finite-budget ADMM limit rows, parameters recorded in study.json and per case. "
+               "Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical "
+               "retained). Same native starts/goal postures/order; the position goals are the grasp frame's at the "
+               "goal postures (historical: the flange's), so results are not comparable with the historical cohort; "
+               "no original goal posture is used as a trajectory seed.")
 
 
 def main():
@@ -19,69 +26,74 @@ def main():
     p.add_argument("output", type=Path)
     args = p.parse_args()
     out = args.output.resolve()
-    saved = json.loads((out / "summary.json").read_text())
-    config = json.loads((out / "configuration.json").read_text())
-    rows = saved["cases"]
-    if len(config["task_ids"]) != 100:
+    study, records = load(out)
+    provenance = json.loads((out / "study.json").read_text())["provenance"]
+    manifest = json.loads((out / "input_manifest.json").read_text())
+    if len(study.cases) != 100:
         raise ValueError("analyze.py expects a complete 100-case run, not a --pairs subset")
-    if [r["task_id"] for r in rows] != config["task_ids"]:
+    if [r.config["case"] for r in records] != [c.name for c in study.cases]:
         raise ValueError("Incomplete cohort or changed task order")
+    statuses = [r.metadata["status"] for r in records]
+    results = [r.metadata["results"] for r in records]
+    complete = [s in ("arrived", "timeout") for s in statuses]
+    counts = dict(assigned=len(study.cases), attempted=len(records), completed=sum(complete),
+                  arrivals=statuses.count("arrived"),
+                  full_limit_passes=sum(c and bool(r.get("limits_pass")) for c, r in zip(complete, results)),
+                  valid_arrivals=sum(s == "arrived" and bool(r.get("limits_pass")) for s, r in zip(statuses, results)),
+                  timeouts=statuses.count("timeout"), execution_errors=len(records) - sum(complete))
     limits = tm.limits()
     audits = []
     total_work = Counter()
     inner_modes = Counter()
     native_us, wall_s = [], []
-    for row in rows:
-        task = row["task_id"]
-        file = out / "inputs" / f"random_{task:05d}.npz"
-        with np.load(file) as inputs, np.load(out / f"pair_{task:05d}/trajectory.npz") as raw:
-            # The command sent at each tick but the last; NaN: none sent yet (zero torque held).
-            t, x, u = raw["time_s"], raw["state"], np.nan_to_num(raw["command"][:-1])
-            if len(t) == 0 or x.shape != (len(t), 14) or len(u) != len(t)-1:
-                raise ValueError(f"Incomplete/invalid trajectory arrays: {task}")
-            if not np.allclose(x[0], inputs["initial_state"], atol=1e-12):
-                raise ValueError(f"Wrong initial state: {task}")
-            finite = bool(np.isfinite(x).all() and np.isfinite(u).all())
-            if not finite or np.any(np.diff(t) <= 0):
-                raise ValueError(f"Nonfinite retained trajectory or invalid clock: {task}")
-            q_ex = np.maximum(limits.lower-x[:, :7], x[:, :7]-limits.upper)
-            v_ex = np.abs(x[:, 7:])-limits.velocity
-            u_ex = np.abs(u)-limits.effort if len(u) else np.zeros((0, 7))
-            maxima = {k: float(max(0, a.max(initial=0))) for k, a in
-                      (("joint", q_ex), ("speed", v_ex), ("torque", u_ex))}
-            complete = row["status"] in ("arrived", "timeout")
-            actual_pass = complete and max(maxima.values()) <= 1e-5
-            if complete and actual_pass != row["limits_pass"]:
-                raise ValueError(f"Independent physical audit disagrees: {task}")
-            if complete and not np.isclose(raw["distance_m"][-1], row["final_distance_m"], atol=1e-12):
-                raise ValueError(f"Final error disagrees: {task}")
-            first = {}
-            for label, a, ts in (("joint", q_ex, t), ("speed", v_ex, t), ("torque", u_ex, t[:-1])):
-                bad = np.argwhere(a > 1e-5)
-                if len(bad):
-                    i, j = bad[0]
-                    first[label] = dict(time_s=float(ts[i]), joint=int(j+1), excess=float(a[i, j]))
-            audits.append(dict(task_id=task, status=row["status"], reached=bool(row.get("reached")),
-                               full_limit_pass=actual_pass, max_excess=maxima,
-                               first_violations=first, command_ticks=len(t),
-                               final_error_mm=1000*float(raw["distance_m"][-1])))
-            native_us.extend(raw["plan_solve_time_us"].tolist())
-            wall_s.extend(raw["plan_wall_s"].tolist())
-            for key in ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows"):
-                total_work[key] += int(raw[f"plan_{key}"].sum())
-            inner_modes.update(raw["plan_admm_linsys_mode"].tolist())
-    arrivals = [r for r in rows if r.get("reached")]
-    valid = [r for r in arrivals if r.get("limits_pass")]
-    first = rows[0]
-    params = first["params"]
-    setting_line = (f"N{params['N']}, B1, {1000*params['dt_s']:g} ms feedback/knots, "
-                    f"{1000*first['plant']['substep_s']:g} ms Pinocchio RK4, "
-                    f"SQP{params['solver']['max_sqp_iters']}/PCG{params['solver']['max_pcg_iters']}, "
-                    f"{(params['N']-1)*params['dt_s']:.3g} s preview, "
-                    f"terminal weight {params['solver']['N_cost']:g}, {first['task']['timeout_s']:g} simulated seconds.")
-    admm_settings = first["params"]["admm"]
-    bound_settings = {k: first["params"][k] for k in ("joint_margin_rad", "velocity_fraction", "effort_fraction")}
-    result = dict(counts=saved["counts"], raw_audit_cases=len(audits),
+    for case, record, status, row in zip(study.cases, records, statuses, results):
+        ticks, plans = record.ticks, record.plans
+        # The command sent at each tick but the last; NaN: none sent yet (zero torque held).
+        t, x, u = ticks["t"], np.c_[ticks["q"], ticks["qd"]], np.nan_to_num(ticks["command"][:-1])
+        if len(t) == 0 or x.shape != (len(t), 14) or len(u) != len(t)-1:
+            raise ValueError(f"Incomplete/invalid trajectory arrays: {case.name}")
+        if not np.allclose(x[0], case.initial_state, atol=1e-12):
+            raise ValueError(f"Wrong initial state: {case.name}")
+        finite = bool(np.isfinite(x).all() and np.isfinite(u).all())
+        if not finite or np.any(np.diff(t) <= 0):
+            raise ValueError(f"Nonfinite retained trajectory or invalid clock: {case.name}")
+        q_ex = np.maximum(limits.lower-x[:, :7], x[:, :7]-limits.upper)
+        v_ex = np.abs(x[:, 7:])-limits.velocity
+        u_ex = np.abs(u)-limits.effort if len(u) else np.zeros((0, 7))
+        maxima = {k: float(max(0, a.max(initial=0))) for k, a in
+                  (("joint", q_ex), ("speed", v_ex), ("torque", u_ex))}
+        done = status in ("arrived", "timeout")
+        actual_pass = done and max(maxima.values()) <= 1e-5
+        if done and actual_pass != row["limits_pass"]:
+            raise ValueError(f"Independent physical audit disagrees: {case.name}")
+        if done and not np.isclose(ticks["distance_m"][-1], row["final_distance_m"], atol=1e-12):
+            raise ValueError(f"Final error disagrees: {case.name}")
+        first = {}
+        for label, a, ts in (("joint", q_ex, t), ("speed", v_ex, t), ("torque", u_ex, t[:-1])):
+            bad = np.argwhere(a > 1e-5)
+            if len(bad):
+                i, j = bad[0]
+                first[label] = dict(time_s=float(ts[i]), joint=int(j+1), excess=float(a[i, j]))
+        audits.append(dict(case=case.name, status=status, reached=status == "arrived",
+                           full_limit_pass=actual_pass, max_excess=maxima,
+                           first_violations=first, command_ticks=len(t),
+                           final_error_mm=1000*float(ticks["distance_m"][-1])))
+        native_us.extend(plans["solve_time_us"].tolist())
+        wall_s.extend(plans["wall_s"].tolist())
+        for key in ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows"):
+            total_work[key] += int(plans[key].sum())
+        inner_modes.update(plans["admm_linsys_mode"].tolist())
+    arrivals = [r for r, s in zip(records, statuses) if s == "arrived"]
+    valid = [r for r in arrivals if r.metadata["results"]["limits_pass"]]
+    params, timeout_s = study.config.params, records[0].config["task"].timeout_s
+    setting_line = (f"N{params.N}, B1, {1000*params.dt_s:g} ms feedback/knots, "
+                    f"{1000*study.config.plant.substep:g} ms Pinocchio RK4, "
+                    f"SQP{params.solver.max_sqp_iters}/PCG{params.solver.max_pcg_iters}, "
+                    f"{(params.N-1)*params.dt_s:.3g} s preview, "
+                    f"terminal weight {params.solver.N_cost:g}, {timeout_s:g} simulated seconds.")
+    admm_settings = tm.to_dict(params.admm)
+    bound_settings = {k: getattr(params, k) for k in ("joint_margin_rad", "velocity_fraction", "effort_fraction")}
+    result = dict(counts=counts, raw_audit_cases=len(audits),
                   violating_episodes={k:sum(a["max_excess"][k] > 1e-5 for a in audits)
                                       for k in ("joint", "speed", "torque")},
                   max_excess={k:max(a["max_excess"][k] for a in audits)
@@ -90,32 +102,31 @@ def main():
                   all_native_solve_time_s=float(np.sum(native_us)/1e6),
                   controller_wall_time_s=float(np.sum(wall_s)),
                   solve_time_median_ms=float(np.median(native_us)/1000),
-                  episode_process_wall_sum_s=sum(r["wall_s"] for r in rows),
-                  arrival_time_median_s=float(np.median([r["simulated_time_s"] for r in arrivals])) if arrivals else None,
-                  timeout_ids=[r["task_id"] for r in rows if r["status"] == "timeout"],
-                  error_ids=[r["task_id"] for r in rows if r["status"] not in ("arrived", "timeout")],
+                  arrival_time_median_s=float(np.median([r.metadata["end_t"] for r in arrivals])) if arrivals else None,
+                  timeout_cases=[c.name for c, s in zip(study.cases, statuses) if s == "timeout"],
+                  error_cases=[c.name for c, s in zip(study.cases, statuses) if s not in ("arrived", "timeout")],
                   audits=audits)
     (out / "analysis.json").write_text(json.dumps(result, indent=2)+"\n")
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
     for group, label in ((arrivals, "All arrivals"), (valid, "Arrivals within limits")):
-        times = sorted(r["simulated_time_s"] for r in group)
+        times = sorted(r.metadata["end_t"] for r in group)
         axes[0].step([0, *times, 8], [0, *range(1, len(times)+1), len(times)], where="post", label=label)
     axes[0].set(xlabel="Simulation time (s)", ylabel="Arrivals / 100 assigned tasks", xlim=(0, 8), ylim=(0, 100))
     axes[0].legend()
-    for status, color in (("arrived", "tab:blue"), ("timeout", "tab:orange"), ("error", "tab:red")):
-        indices = [i for i, r in enumerate(rows) if r["status"] == status]
+    for status, color in (("arrived", "tab:blue"), ("timeout", "tab:orange"), ("fault", "tab:purple"),
+                          ("error", "tab:red")):
+        indices = [i for i, s in enumerate(statuses) if s == status]
         if indices:
             axes[1].scatter([i+1 for i in indices], [audits[i]["final_error_mm"] for i in indices], s=16, label=status, color=color)
     axes[1].axhline(50, color="gray", ls="--", label="50 mm arrival threshold")
     axes[1].set(xlabel="Frozen task order", ylabel="Final position error (mm)", yscale="log")
     axes[1].legend()
-    fig.suptitle(f"Frozen random100 — ADMM, N{params['N']}, SQP{params['solver']['max_sqp_iters']}, {1000*params['dt_s']:g} ms fixed clock")
+    fig.suptitle(f"Frozen random100 — ADMM, N{params.N}, SQP{params.solver.max_sqp_iters}, {1000*params.dt_s:g} ms fixed clock")
     fig.tight_layout(); fig.savefig(out / "overview.png", dpi=160); fig.savefig(out / "overview.pdf")
-    counts = result["counts"]
     plt.close(fig)
     (out / "REPORT.md").write_text(f"""# Frozen random100 on modern GATO / ADMM
 
-Source `{config['application_commit']}`; exact 100 inputs from `{config['input_source_commit']}`.
+Source `{provenance['repository_commit']}`; exact 100 inputs from `{manifest['source_commit']}`.
 All tasks were attempted once in the original order, each from its own random
 posture at rest. No comfortable-start substitution, filtering or retries.
 
@@ -139,14 +150,14 @@ Settings: {setting_line}
 Position tolerance 5 cm, grasp-point speed <= 2 cm/s, zero dwell. Position-only;
 no final approach, collisions, clipping or physical hardware. Fixed simulation
 pacing leaves solve latency unpaid. ADMM uses its finite upstream budget;
-actual inner modes/work are retained. GATO `{json.dumps(first['gato'])}`, package
-versions `{json.dumps(first['versions'])}` (the first case's summary).
+actual inner modes/work are retained. GATO `{json.dumps(provenance['gato'])}`, package
+versions `{json.dumps(provenance['versions'])}` (study.json).
 
 Effective ADMM settings: `{json.dumps(admm_settings)}`.
 Planning bounds: `{json.dumps(bound_settings)}`; the physical
 URDF limits used for grading remain unchanged.
 
-{config['differences_from_historical']}
+{DIFFERENCES}
 
 This is a new cohort, not an isolated test of ADMM or an exact historical
 reproduction. Arrival stops each successful episode, so this does not establish

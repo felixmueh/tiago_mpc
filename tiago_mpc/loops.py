@@ -2,27 +2,33 @@
  and one for experiments, running in virtual time.
 
 The timing of each loop, with diagrams, is explained in its docstring: run_real_time
-(the robot and the rehearsal) and run_virtual_time (experiments).
+(the robot and the rehearsal) and run_virtual_time (experiments). Their timings,
+RealTime and VirtualTime, carry each loop's settings and run it. A run ends without an
+exception when the task is done, the time is up, a fault is found or a stop is
+requested (STOP); the loop returns how in its Outcome.
 """
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import gc
 import math
+import threading
 from typing import Literal
-import warnings
 
 import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
-from tiago_mpc.laws import sample_knot
-from tiago_mpc.plan import Callback, Law, MpcInterface, Plan, PlantInterface, TaskInterface, Tick
+from tiago_mpc.laws import SampleKnot
+from tiago_mpc.plan import Callback, Event, Law, MpcInterface, Plan, PlantInterface, TaskInterface, Tick
 from tiago_mpc.tiago import limits
 
 LEASE_S = .1  # a plan may be commanded at most this long after its state's time
 _TOLERANCE = 1e-9  # absorbs the rounding of summed periods
-# The late-plan warning of both loops: knot 0 holds the correction each new plan makes,
+# Not validated for long runs. Records stored in memory and GC disabled.
+# Only raise after verification or handling these issues yourself.
+MAX_RUNTIME_MIN = 10
+# The late-plan event of both loops: knot 0 holds the correction each new plan makes,
 # and a plan that first takes effect a knot interval or more after its state never runs
 # it (docs/robot.md, Latency). Remedies (thesis workspace, research/tiago-mpc-latency-
 # analysis.md, "How other MPC systems apply their plans"): (a) feedback around the plan
@@ -31,15 +37,27 @@ _TOLERANCE = 1e-9  # absorbs the rounding of summed periods
 # compensation: solve from the state predicted at the plan's application time under the
 # committed torques and date the plan from then (Findeisen and Allgöwer; Mastalli et al.).
 
+# A stop request: both loops check it every tick and end the run as interrupted. Set by
+# experiments.common.handle_stop_signals (Ctrl-C, SIGTERM), which also clears it.
+STOP = threading.Event()
+
 
 @dataclass(frozen=True)
 class Outcome:
-    """What a loop returns: whether the task is done, the ticks of run_real_time that
-    started a command period or more late, and the solves of run_virtual_time that took
-    longer than their declared solve_latency."""
-    done: bool
-    late_ticks: int = 0
-    overruns: int = 0
+    """How a loop ended: status "done" (the task is done), "timeout" (the duration
+    ended), "fault" or "interrupted" (STOP); reason, for a fault "effort_limit",
+    "lease_expired" or "invalid_command", for an interruption "stop_requested", else
+    None; t: the last tick's time, counted from the first state's."""
+    status: str
+    reason: str | None
+    t: float
+
+
+def _ended(done: bool, stopped: bool, t: float) -> Outcome:
+    """The Outcome of a last tick without a fault."""
+    if done:
+        return Outcome("done", None, t)
+    return Outcome("interrupted", "stop_requested", t) if stopped else Outcome("timeout", None, t)
 
 
 class Schedule:
@@ -62,33 +80,40 @@ class Schedule:
         return True
 
 
-def checked(plan: Plan | None) -> Plan | None:
-    """The plan, if every knot is within the raw effort limits: any knot may be
-    commanded before its lease ends, so each plan is checked when it arrives."""
-    if plan is not None and np.any(np.abs(plan.torques) > limits().effort):
-        raise RuntimeError("MPC plan exceeds the raw effort limit")
-    return plan
+def plan_fault(plan: Plan) -> str | None:
+    """"effort_limit" if a knot torque exceeds the raw effort limit, else None: any knot
+    may be commanded before its lease ends, so each plan is checked when it arrives."""
+    return "effort_limit" if np.any(np.abs(plan.torques) > limits().effort) else None
 
 
-def guard(command: np.ndarray, plan: Plan, t: float) -> np.ndarray:
-    """The command, if finite and within the raw effort limits, while the plan's lease lasts.
+def lease_fault(plan: Plan, t: float) -> str | None:
+    """"lease_expired" once the plan's lease has ended at t0 + min(100 ms, the plan's
+    length), else None: no plan is commanded past its end (31 x 2 ms knots span only
+    62 ms), so a law is never asked past the last knot."""
+    return "lease_expired" if t >= plan.t0 + min(LEASE_S, len(plan.torques) * plan.dt) else None
 
-    The lease ends at t0 + min(100 ms, the plan's length), so no plan is commanded
-    past its end: 31 x 2 ms knots span only 62 ms.
-    """
-    if t >= plan.t0 + min(LEASE_S, len(plan.torques) * plan.dt):
-        raise RuntimeError("MPC command lease expired")
+
+def command_fault(command: np.ndarray) -> str | None:
+    """"invalid_command" unless the command is seven finite torques, "effort_limit" beyond
+    the raw effort limits, else None."""
     command, effort = np.asarray(command, dtype=float), limits().effort
-    if command.shape != effort.shape or not np.isfinite(command).all() or np.any(np.abs(command) > effort):
-        raise RuntimeError("invalid command or raw effort limit exceeded")
-    return command
+    if command.shape != effort.shape or not np.isfinite(command).all():
+        return "invalid_command"
+    return "effort_limit" if np.any(np.abs(command) > effort) else None
+
+
+def _late_plan(plan: Plan, t: float, index: int) -> Event:
+    """The late-plan event of plan number index, which takes effect at t."""
+    return Event(t, "late_plan", f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, "
+                                 f"{1e3 * plan.dt:g} ms knots: its knot 0 never runs (docs/robot.md, Latency)",
+                 dict(plan=index, delay_s=t - plan.t0))
 
 
 def run_real_time(
     plant: PlantInterface,
     mpc: MpcInterface,
     task: TaskInterface,
-    law: Law = sample_knot,
+    law: Law = SampleKnot(),
     callbacks: Sequence[Callback] = (),
     *,
     command_period: float,
@@ -101,7 +126,7 @@ def run_real_time(
     Time is the computer's monotonic clock (WallClock), and everything takes its real time:
     the solve, the plant, the callbacks. MpcProcess solves concurrently while the loop
     keeps ticking, and a plan is used at the first tick after it arrives; on the robot
-    a state's own age adds to the delay. update_period=.01:
+    a state's own age adds to the delay. RealTime(), update_period=.01:
 
       wall time (ms)  0    2    4    6    8    10   12   14   16   18
       command ticks   |    |    |    |    |    |    |    |    |    |
@@ -116,65 +141,81 @@ def run_real_time(
 
     Ticks are command_period apart. A late tick, one that starts a command period or
     more after its deadline because the work before it ran past the next tick, skips
-    the missed ticks; the first one warns, once per run, unless it follows the first
-    command (on the robot, that command switches to effort control through blocking
-    service calls). Outcome.late_ticks counts them all.
+    the missed ticks and is a late_tick event, unless it follows the first command (on
+    the robot, that command switches to effort control through blocking service calls,
+    whose duration is the activated event's switch_s).
 
     The task's t is counted from the first state's time: the tick's time for done and
     the duration, the state's time for at. Before the first tick, mpc.warmup runs
     from the started plant's state, the arm still held, so its time counts against no
-    plan's lease. Each plan is checked when it arrives (checked), each command before
-    it is sent (guard): within the plan's lease, t0 + min(LEASE_S = 0.1 s, its
-    length), never past its last knot. Polling result() at every tick also notices a
-    dead MPC process within one tick. The first plan that takes effect a knot
-    interval or more after its state, so that its knot 0 never runs, warns, once per
-    run (docs/robot.md, Latency). The last tick, which sees the task done or the time up,
-    sends no command but reaches the callbacks. Garbage collection pauses while it
-    runs: a full collection over the buffered ticks takes several milliseconds.
+    plan's lease. Each plan is checked when it arrives (plan_fault), each command before
+    it is sent (lease_fault, command_fault): within the plan's lease, t0 + min(LEASE_S =
+    0.1 s, its length), never past its last knot. A fault ends the run; its tick sends
+    nothing, and a faulting plan never takes effect (the tick carries it as Tick.faulted,
+    so the record keeps it). Polling result() at every tick also
+    notices a dead MPC process within one tick (it raises). Each plan that takes effect a
+    knot interval or more after its state, so that its knot 0 never runs, is a late_plan
+    event (docs/robot.md, Latency). The last tick, which sees the task done, the time up
+    or STOP set, sends no command but reaches the callbacks. Garbage collection pauses
+    while the loop runs: a full collection over the buffered ticks takes several
+    milliseconds. A duration over MAX_RUNTIME_MIN raises before the plant starts.
     """
+    if duration > 60 * MAX_RUNTIME_MIN:
+        raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
     clock, due = WallClock(), Schedule(update_period)
     plan, solving, start, deadline = None, False, None, None
-    sent, late_ticks, warned_tick, warned_plan = 0, 0, False, False
+    sent, plans = 0, 0
     plant.start(clock)  # startup checks on a fresh state; the robot accepts wall time only
-    # Paused for the whole run: full collections took 7-10 ms at 500 Hz. It must be
-    # enabled in between (e.g. collecting at safe points); to be discussed (todo.org).
-    gc.disable()
+
+    # NOTE: IMPORTANT: Fine for exprs, but for real world use: DON'T use a GC language!
+    gc.disable()  # for the whole run: full collections took 7-10 ms at 500 Hz
     try:
         mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])  # the arm is still held
         while True:
             s, t = plant.state(), clock.now()  # the newest state, and the tick's time
+            events = []
             if deadline is None:
                 deadline = t  # the first tick
             elif t >= deadline + command_period:  # late: the work before it ran past the next tick
-                late_ticks += 1
-                if not warned_tick and sent != 1:  # sent == 1: the tick after the first command
-                    warned_tick = True
-                    warnings.warn(f"a command tick started {1e3 * (t - deadline):.1f} ms after its deadline, "
-                                  f"{1e3 * command_period:g} ms ticks: the missed ticks were skipped "
-                                  "(warned once per run; the summary counts late ticks)")
+                if sent != 1:  # the tick after the first command: the activated event has its delay
+                    events.append(Event(t, "late_tick", f"a command tick started {1e3 * (t - deadline):.1f} ms after "
+                                                        f"its deadline, {1e3 * command_period:g} ms ticks: the "
+                                                        "missed ticks were skipped",
+                                        dict(late_s=t - deadline,
+                                             skipped=math.floor((t - deadline) / command_period + _TOLERANCE))))
                 deadline = t  # skip the missed ticks
             start = s.t if start is None else start
-            done = task.done(s, t - start)
-            end = done or t - start >= duration - _TOLERANCE
-            new = checked(mpc.result())  # a plan that arrived since the last tick
+            done, stopped = task.done(s, t - start), STOP.is_set()
+            end = done or stopped or t - start >= duration - _TOLERANCE
+            new, fault, faulted = mpc.result(), None, None  # a plan that arrived since the last tick
             if new is not None:
-                plan, solving = new, False
+                solving, fault = False, plan_fault(new)
+                if fault is None:
+                    plan, plans = new, plans + 1
+                else:
+                    new, faulted = None, new  # it never takes effect
             command = None
-            if plan is not None and not end:
-                if new is not None and not warned_plan and plan.index(t - plan.t0) >= 1:
-                    warned_plan = True
-                    warnings.warn(f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, "
-                                  f"{1e3 * plan.dt:g} ms knots: its knot 0 never runs "
-                                  "(docs/robot.md, Latency; warned once per run)")
-                command = guard(law(plan, t, s), plan, t)
-                plant.apply(command)
-                sent += 1
-            tick = Tick(t, s, command, plan, new is not None)
+            if plan is not None and not end and fault is None:
+                if new is not None and plan.index(t - plan.t0) >= 1:
+                    events.append(_late_plan(plan, t, plans - 1))
+                fault = lease_fault(plan, t)  # before the law: never past the last knot
+                if fault is None:
+                    command = np.asarray(law(plan, t, s), dtype=float)
+                    fault = command_fault(command)
+                    if fault is None:
+                        plant.apply(command)
+                        sent += 1
+                    else:
+                        command = None
+            update = not end and fault is None and not solving and due(t)  # requested after the callbacks
+            tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
             for callback in callbacks:
                 callback(tick)
+            if fault is not None:
+                return Outcome("fault", fault, t - start)
             if end:
-                return Outcome(done, late_ticks=late_ticks)
-            if not solving and due(t):  # the command is out: now ask for a new plan
+                return _ended(done, stopped, t - start)
+            if update:  # the command is out: now ask for a new plan
                 mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
                 solving = True
             deadline += command_period
@@ -190,7 +231,7 @@ def run_virtual_time(
     plant: PlantInterface,
     mpc: MpcInterface,
     task: TaskInterface,
-    law: Law = sample_knot,
+    law: Law = SampleKnot(),
     callbacks: Sequence[Callback] = (),
     *,
     command_period: float,
@@ -226,14 +267,16 @@ def run_virtual_time(
     solve_latency, required, says how long a solve lasts on the timeline:
       a number    declared, in seconds: the plan is available that long after the
                   request, whatever the solve really took. A solve that took longer
-                  warns once (0, the explicit ideal, never does); Outcome.overruns
-                  counts them.
+                  is an overrun event (0, the explicit ideal, never is).
       "measured"  this computer's own solve time (plan.stats["wall_s"]): the loop
                   waits for the solve, then uses its time as the declared one.
 
-    Three settings, 2 ms command ticks:
+    The timing VirtualTime holds these settings; its constructors are the common
+    ones. VirtualTime.ideal(): each plan in effect at the tick of its request
+    (solve_latency 0). Three more, 2 ms command ticks:
 
-      Declared latency, solve_latency=.005, update_period=.01:
+      VirtualTime.constant_latency(solve_latency=.005), a declared latency,
+      update_period=.01 (the preset's own latency is 50 ms):
 
       time (ms)       0    2    4    6    8    10   12   14   16   18   20
       command ticks   |    |    |    |    |    |    |    |    |    |    |
@@ -242,8 +285,8 @@ def run_virtual_time(
       in effect       old============P0=======================P1==========
                                      ^ the first tick at or after 5 ms
 
-      As fast as possible, solve_latency="measured", update_period=0; the solves
-      took 3.5 and 4.1 ms of wall time:
+      VirtualTime.as_fast_as_possible(), solve_latency="measured", update_period=0;
+      the solves took 3.5 and 4.1 ms of wall time:
 
       time (ms)       0    2    4    6    8    10   12   14   16
       command ticks   |    |    |    |    |    |    |    |    |
@@ -252,8 +295,9 @@ def run_virtual_time(
       in effect       old=======P0=============P1===============
                                 ^ R1 at the tick P0 takes effect
 
-      Constant control rate, solve_latency=update_period=.01: a request at every
-      slot, its plan in effect at the next (warns once if a solve took longer):
+      VirtualTime.constant_rate(), a constant control rate, solve_latency =
+      update_period = .01: a request at every slot, its plan in effect at the next
+      (an overrun event if a solve took longer):
 
       time (ms)       0    2    4    6    8    10   12   14   16   18   20
       command ticks   |    |    |    |    |    |    |    |    |    |    |
@@ -261,67 +305,146 @@ def run_virtual_time(
       in effect       old======================P0=======================P1
 
     Watching. SimPlant(sync_real_time=True) holds each tick until the wall clock has
-    caught up, so the run can be watched at real speed; it warns once when it falls
-    behind and never changes the results. It is not a rehearsal: a rehearsal runs a
-    SimPlant on run_real_time.
+    caught up, so the run can be watched at real speed; falling behind is a
+    pacing_behind event and never changes the results. It is not a rehearsal: a
+    rehearsal runs a SimPlant on run_real_time.
 
     As in run_real_time: the task's t counts from the first state's time, the
-    warm-up runs before the first tick, each plan is checked and each command
-    guarded, the first plan that never runs its knot 0 warns, the last tick sends no
-    command, and garbage collection pauses while it runs.
+    warm-up runs before the first tick, each plan is checked (here when its solve
+    returns) and each command, a fault ends the run, each plan that never runs its
+    knot 0 is a late_plan event, the last tick (also on STOP) sends no command,
+    garbage collection pauses while the loop runs, and a duration over MAX_RUNTIME_MIN
+    raises before the plant starts.
     """
     if not (solve_latency == "measured"
             or isinstance(solve_latency, (int, float)) and math.isfinite(solve_latency) and solve_latency >= 0):
         raise ValueError(f"solve_latency must be seconds (finite, >= 0) or 'measured', not {solve_latency!r}")
+    if duration > 60 * MAX_RUNTIME_MIN:
+        raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
     clock, due = VirtualClock(), Schedule(update_period)
     plan, pending, available, start = None, None, 0., None  # pending: the solved plan
-    overruns, warned_plan = 0, False
+    updates, plans = 0, 0
     plant.start(clock)
     gc.disable()  # full collections took 7-10 ms at 500 Hz
     try:
         mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])  # the arm is still held
         while True:
             s, t = plant.state(), clock.now()
+            events = []
             start = s.t if start is None else start
-            done = task.done(s, t - start)
-            end = done or t - start >= duration - _TOLERANCE
-            new = None
+            done, stopped = task.done(s, t - start), STOP.is_set()
+            end = done or stopped or t - start >= duration - _TOLERANCE
+            new, fault, update, faulted = None, None, False, None
             if pending is not None and t >= available - _TOLERANCE:  # the first tick at or after it
                 new, pending = pending, None
             # Between requests nothing is polled: a dead MpcProcess is noticed at the next request.
             if pending is None and not end and due(t):
+                update, updates = True, updates + 1
                 mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
-                pending = checked(mpc.result(block=True))  # wait for it: no virtual time passes
-                assert pending is not None
-                took = pending.stats["wall_s"]
-                latency = took if solve_latency == "measured" else solve_latency
-                if 0. < latency < took:
-                    overruns += 1
-                    if overruns == 1:
-                        warnings.warn(f"a solve took {1e3 * took:.1f} ms, longer than solve_latency="
-                                      f"{1e3 * latency:g} ms (warned once per run; the summary counts overruns)")
-                available = t + latency
-                if t >= available - _TOLERANCE:  # zero latency: in effect at this tick
-                    new, pending = pending, None
+                solved = mpc.result(block=True)  # wait for it: no virtual time passes
+                assert solved is not None
+                fault = plan_fault(solved)
+                if fault is None:
+                    pending, took = solved, solved.stats["wall_s"]
+                    latency = took if solve_latency == "measured" else solve_latency
+                    if 0. < latency < took:
+                        events.append(Event(t, "overrun", f"a solve took {1e3 * took:.1f} ms, longer than "
+                                                          f"solve_latency={1e3 * latency:g} ms",
+                                            dict(plan=updates - 1, wall_s=took, solve_latency=latency)))
+                    available = t + latency
+                    if t >= available - _TOLERANCE:  # zero latency: in effect at this tick
+                        new, pending = pending, None
+                else:
+                    faulted = solved  # it never takes effect
             if new is not None:
-                plan = new
+                plan, plans = new, plans + 1
             command = None
-            if plan is not None and not end:
-                if new is not None and not warned_plan and plan.index(t - plan.t0) >= 1:
-                    warned_plan = True
-                    warnings.warn(f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, "
-                                  f"{1e3 * plan.dt:g} ms knots: its knot 0 never runs "
-                                  "(docs/robot.md, Latency; warned once per run)")
-                command = guard(law(plan, t, s), plan, t)
-                plant.apply(command)
-            tick = Tick(t, s, command, plan, new is not None)
+            if plan is not None and not end and fault is None:
+                if new is not None and plan.index(t - plan.t0) >= 1:
+                    events.append(_late_plan(plan, t, plans - 1))
+                fault = lease_fault(plan, t)  # before the law: never past the last knot
+                if fault is None:
+                    command = np.asarray(law(plan, t, s), dtype=float)
+                    fault = command_fault(command)
+                    if fault is None:
+                        plant.apply(command)
+                    else:
+                        command = None
+            tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
             for callback in callbacks:
                 callback(tick)
+            if fault is not None:
+                return Outcome("fault", fault, t - start)
             if end:
-                return Outcome(done, overruns=overruns)
+                return _ended(done, stopped, t - start)
             plant.advance(t + command_period)  # the plant integrates to it, and the clock moves there
     finally:
         try:
             plant.stop()  # zero torque first
         finally:
             gc.enable()
+
+
+@dataclass(frozen=True)
+class VirtualTime:
+    """run_virtual_time's timing: its three settings, without defaults; the common
+    timings are the constructors below, which its docstring draws."""
+    command_period: float
+    update_period: float
+    solve_latency: float | Literal["measured"]
+
+    @classmethod
+    def ideal(cls, command_period: float = .002, update_period: float = .01) -> VirtualTime:
+        """Each plan in effect at the tick of its request."""
+        return cls(command_period, update_period, 0.)
+
+    @classmethod
+    def constant_latency(
+        cls,
+        solve_latency: float = .05,
+        command_period: float = .002,
+        update_period: float = .01,
+    ) -> VirtualTime:
+        """Each plan available solve_latency seconds after its request."""
+        return cls(command_period, update_period, solve_latency)
+
+    @classmethod
+    def as_fast_as_possible(cls, command_period: float = .002) -> VirtualTime:
+        """Each solve takes its measured time, and the next is requested when its plan takes effect."""
+        return cls(command_period, 0., "measured")
+
+    @classmethod
+    def constant_rate(cls, period: float = .01, command_period: float = .002) -> VirtualTime:
+        """A request every period, its plan in effect a period later."""
+        return cls(command_period, period, period)
+
+    def run(
+        self,
+        plant: PlantInterface,
+        mpc: MpcInterface,
+        task: TaskInterface,
+        law: Law,
+        callbacks: Sequence[Callback],
+        *,
+        duration: float,
+    ) -> Outcome:
+        return run_virtual_time(plant, mpc, task, law, callbacks, duration=duration, **asdict(self))
+
+
+@dataclass(frozen=True)
+class RealTime:
+    """run_real_time's timing."""
+    command_period: float = .002
+    update_period: float = .01
+
+    def run(
+        self,
+        plant: PlantInterface,
+        mpc: MpcInterface,
+        task: TaskInterface,
+        law: Law,
+        callbacks: Sequence[Callback],
+        *,
+        duration: float,
+    ) -> Outcome:
+        return run_real_time(plant, mpc, task, law, callbacks, duration=duration, **asdict(self))

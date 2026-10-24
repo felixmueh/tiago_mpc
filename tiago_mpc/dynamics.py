@@ -1,7 +1,7 @@
 """Joint friction, its Coulomb laws, and the plant's Euler and RK4 steps."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 from typing import Any
 
@@ -13,7 +13,6 @@ from typing_extensions import assert_never
 class Tanh:
     """Smooth Coulomb c*tanh(v/width_rad_s); the only law GATO predicts."""
     width_rad_s: float
-    name: str = field(default="tanh", init=False)  # tells the laws apart in asdict
 
     def __post_init__(self):
         if not (math.isfinite(self.width_rad_s) and self.width_rad_s > 0):
@@ -23,17 +22,14 @@ class Tanh:
 @dataclass(frozen=True)
 class Sign:
     """Coulomb c*sign(v), explicit in the old velocity; it may chatter."""
-    name: str = field(default="sign", init=False)
 
 
 @dataclass(frozen=True)
 class StickSlip:
     """Coulomb as the Euler step's coupled stick/slip solve (_stick_slip); no torque law."""
-    name: str = field(default="stick_slip", init=False)
 
 
-CoulombLaw = Tanh | Sign | StickSlip
-LAWS = {"tanh": Tanh, "sign": Sign, "stick_slip": StickSlip}  # name -> law, to rebuild from a dict
+CoulombLaw = Tanh | Sign | StickSlip  # record.to_dict tells them apart by their type names
 
 
 @dataclass(frozen=True)

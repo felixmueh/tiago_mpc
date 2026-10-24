@@ -24,7 +24,7 @@ string-valued Coulomb-law interface:
 - [dynamics.py](../tiago_mpc/dynamics.py): `Friction(coulomb_nm,
   viscous_nm_s_per_rad, law=StickSlip())`; the law is plain frozen data:
   `StickSlip()`, `Sign()` or `Tanh(width_rad_s)`.
-- [sim.py](../tiago_mpc/sim.py): `SimPlant(friction=..., integrator=...)`.
+- [sim.py](../tiago_mpc/sim.py): `SimConfig(friction=..., integrator=...)`, built into a `SimPlant`.
   `StickSlip` uses semi-implicit Euler with implicit viscous damping and the
   coupled `_stick_slip` solve. The default maximum substep is 1 ms. RK4 supports
   loss-free dynamics or explicit `Sign`/`Tanh` friction, but rejects `StickSlip`.
@@ -33,7 +33,7 @@ string-valued Coulomb-law interface:
   not committed. Native joint coordinates stay unchanged.
 - [mpc.py](../tiago_mpc/mpc.py): `MpcParams.friction` accepts `Tanh` only.
   Reaching predicts no friction by default; tracking predicts the URDF values
-  with `Tanh(.03)`. `MpcParams.from_dict` reconstructs recorded law data.
+  with `Tanh(.03)`. `record.from_dict` reconstructs recorded law data by type name.
 
 The current stick/slip model uses the **same** per-joint `coulomb_nm` value for
 holding and sliding. `passive_torque` handles `Sign`/`Tanh`; it deliberately
@@ -172,7 +172,7 @@ physics does not require changing generic GATO/GRiD code or controller tuning.
    above it, continued sliding under a load between `tau_c` and `tau_s`, stopping,
    reversal, zero losses, `tau_s == tau_c`, coupled motion and friction opposing
    sliding. Check practical substep sensitivity and resets if modes are retained.
-3. Check parameter serialization through plant settings and `MpcParams` and the
+3. Check parameter serialization through `SimConfig` and `MpcParams` (`record.to_dict`) and the
    existing MPC/experiment tests. Predictor friction remains `Tanh`; plant-only
    static coefficients must not silently alter the compiled predictor.
 4. Reuse the saved-command comparison for a small, identified successor. Change

@@ -199,7 +199,7 @@ def test_body_only_update_gets_new_safety_identity_without_new_arm_sample(client
     client.clock.now = 1.01
     arm._on_sea_state(message(1.01))
     first = arm.latest_state()
-    plant = robot.RosPlant()
+    plant = robot.RosPlant(robot.RobotConfig())
     plant._initial = first
     plant._check(first)
     client.clock.now = 1.02

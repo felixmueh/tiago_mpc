@@ -6,11 +6,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 
-from experiments.common import arguments, launch, run_experiment
+from experiments.common import arguments, handle_stop_signals, launch, run_experiment
 import tiago_mpc as tm
 
 
@@ -26,6 +28,9 @@ class Reach:
     speed_tol_m_s: float = .02
     timeout_s: float = 8.
 
+    def __post_init__(self):
+        object.__setattr__(self, "target_m", tuple(map(float, self.target_m)))
+
     def at(self, t, n, dt):
         out = np.zeros((n, 6), dtype=np.float32)  # orientation unconstrained
         out[:, :3] = self.target_m
@@ -40,41 +45,45 @@ class Reach:
 
 
 def reach(
-    plant,
-    mpc,
-    run=tm.run_virtual_time,
-    task=Reach(),
-    law=tm.sample_knot,
-    out=None,
-    command_period=None,
-    update_period=None,
-    duration=None,
-    solve_latency=None,
-):
-    """Reach task with mpc on plant with the loop run (common.run_experiment; run_virtual_time
-    needs solve_latency); duration (seconds) caps the task's timeout."""
-
-    def evaluate(record: tm.Record) -> None:
-        trajectory = record.trajectory
-        distance = np.array([task.distance(q) for q in trajectory["state"][:, :7]])
-        record.arrays["distance_m"] = distance
-        record.summary.update(
-            reached=record.summary["status"] == "arrived", duration_cap_s=duration,
-            simulated_time_s=float(trajectory["time_s"][-1]), initial_distance_m=distance[0],
-            final_distance_m=distance[-1], max_distance_m=distance.max(),
-            final_speed_m_s=float(np.linalg.norm(tm.ee_velocity(*np.split(trajectory["state"][-1], [7])))))
-
-    return run_experiment(plant, mpc, task, law, run, command_period=command_period,
-                          update_period=update_period, solve_latency=solve_latency,
-                          duration=task.timeout_s if duration is None else min(task.timeout_s, duration),
-                          out=out, done_status="arrived", evaluate=evaluate)
+    plant: tm.SimConfig | tm.RobotConfig,
+    mpc: tm.MpcInterface,
+    *,
+    task: Reach = Reach(),
+    law: tm.Law = tm.SampleKnot(),
+    timing: tm.Timing = tm.VirtualTime.ideal(),
+    duration: float | None = None,
+    out: str | Path | None = None,
+    **pieces: Any,
+) -> tm.RunRecord:
+    """Reach task with mpc on plant (common.run_experiment); duration (seconds) caps the
+    task's timeout. The status "arrived" replaces "done"."""
+    record = run_experiment(plant, mpc, task, law, timing, out=out,
+                            duration=task.timeout_s if duration is None else min(task.timeout_s, duration),
+                            **pieces)
+    if record.metadata["status"] == "done":
+        record.metadata["status"] = "arrived"
+    ticks, results = record.ticks, record.metadata["results"]
+    if len(ticks["t"]) == 0:  # stopped before the first tick
+        return record
+    distance = np.array([task.distance(q) for q in ticks["q"]])
+    ticks["distance_m"] = distance
+    results["initial_distance_m"] = distance[0]
+    results["final_distance_m"] = distance[-1]
+    results["max_distance_m"] = distance.max()
+    results["final_speed_m_s"] = float(np.linalg.norm(tm.ee_velocity(ticks["q"][-1], ticks["qd"][-1])))
+    record.save()
+    return record
 
 
 def main(argv=None):
+    handle_stop_signals()
     args = arguments(__doc__, argv)
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    record = launch(args, partial(reach, task=task), lambda: tm.SimPlant(substep=.003), tm.TIAGO)
-    return 0 if record is None or record.summary["reached"] and record.summary["limits_pass"] else 1
+    record = launch(args, partial(reach, task=task), tm.SimConfig(substep=.003), tm.TIAGO,
+                    tm.VirtualTime.ideal())
+    if isinstance(record, int):  # the robot's checks, or a cancelled execution
+        return record
+    return 0 if record.metadata["status"] == "arrived" and record.metadata["results"]["limits_pass"] else 1
 
 
 if __name__ == "__main__":

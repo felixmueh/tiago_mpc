@@ -7,7 +7,7 @@ import pytest
 
 from tiago_mpc.clock import VirtualClock
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh, plant_euler
-from tiago_mpc.sim import SimPlant
+from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import Q_START, urdf_friction
 
 
@@ -17,8 +17,8 @@ def test_subthreshold_load_holds_exactly_with_stick_slip_but_moves_with_sign(sca
     f = replace(f, coulomb_nm=tuple(scale*np.array(f.coulomb_nm)),
                 viscous_nm_s_per_rad=tuple(scale*np.array(f.viscous_nm_s_per_rad)))
     for law in (Sign(), StickSlip()):
-        plant = SimPlant(friction=replace(f, law=law))
-        assert plant.substep == .001
+        plant = SimConfig(friction=replace(f, law=law), integrator="euler").build()
+        assert plant.config.substep == .001
         gravity = pin.computeGeneralizedGravity(plant.model, plant.data, plant.q).copy()
         plant.start(VirtualClock())
         plant.apply(gravity + .5*np.array(f.coulomb_nm))
@@ -32,7 +32,7 @@ def test_subthreshold_load_holds_exactly_with_stick_slip_but_moves_with_sign(sca
 
 @pytest.mark.parametrize("scale", [.5, 1., 1.5])
 def test_coupled_friction_torque_satisfies_stick_slip_conditions(scale):
-    plant = SimPlant()
+    plant = SimConfig().build()
     f = urdf_friction()
     f = replace(f, coulomb_nm=tuple(scale*np.array(f.coulomb_nm)),
                 viscous_nm_s_per_rad=tuple(scale*np.array(f.viscous_nm_s_per_rad)))
@@ -54,7 +54,7 @@ def test_coupled_friction_torque_satisfies_stick_slip_conditions(scale):
 @pytest.mark.parametrize("friction", [None, Friction((0.,)*7, (0.,)*7, Tanh(.03)), Friction((0.,)*7, (0.,)*7, Sign()),
                                       Friction((0.,)*7, (0.,)*7, StickSlip())])
 def test_zero_losses_agree_with_aba_despite_nonzero_urdf_tags(friction):
-    plant = SimPlant()
+    plant = SimConfig().build()
     v, u, h = np.linspace(-.1, .1, 7), np.linspace(-1., 1., 7), .001
     a = pin.aba(plant.model, plant.data, Q_START, v, u).copy()
     _, v_new = plant_euler(plant.model, plant.data, Q_START, v, u, h, friction)
@@ -62,7 +62,7 @@ def test_zero_losses_agree_with_aba_despite_nonzero_urdf_tags(friction):
 
 
 def test_tanh_coulomb_approaches_sign_as_the_width_shrinks():
-    plant, f = SimPlant(), urdf_friction()
+    plant, f = SimConfig().build(), urdf_friction()
     v, u, h = np.array([-.05, -.01, -.002, 0., .002, .01, .05]), np.linspace(-1., 1., 7), .001
 
     def step(law):

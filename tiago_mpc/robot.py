@@ -1,16 +1,17 @@
-"""RosPlant: the TIAGo right arm (robot or Gazebo) through ROS 2, with the robot's checks.
+"""RobotConfig and RosPlant: the TIAGo right arm (robot or Gazebo) through ROS 2, with the
+robot's checks.
 
 Check-only is the default: start() runs the startup checks, and stop() has nothing
 to hand back. With execute=True the first apply() switches to effort control, and
 stop() sends zero torque and hands the arm back to PAL's position controller.
 The collision-safety worker (safety.AsyncSafetyMonitor) checks every state; the
-plant does not run without it. Importing this module does not load ROS.
+plant does not run without it. Importing this module does not load ROS; creating a
+RosPlant does.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import math
-import os
 import time
 from typing import Any
 
@@ -18,7 +19,7 @@ import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.loops import LEASE_S
-from tiago_mpc.plan import State
+from tiago_mpc.plan import Event, State
 from tiago_mpc.ros2 import ArmState, TiagoRightArmClient
 from tiago_mpc.safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState
 from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, limits
@@ -41,6 +42,21 @@ class Checks:
                 raise ValueError(f"{name} must be finite and positive")
 
 
+@dataclass(frozen=True)
+class RobotConfig:
+    """The robot (or Gazebo) through ROS 2, a value; build() is its RosPlant. execute:
+    effort control from the first command (default: the startup checks only);
+    sea_absolute: SEA absolute-position feedback; checks: the checks' tolerances;
+    safety: the collision-safety worker's settings."""
+    execute: bool = False
+    sea_absolute: bool = False
+    checks: Checks = Checks()
+    safety: CollisionSafetySettings = CollisionSafetySettings()
+
+    def build(self) -> RosPlant:
+        return RosPlant(self)
+
+
 def safety_state(s: ArmState) -> SafetyCheckState:
     """The safety worker's view of an ArmState; SEA body-only updates have their own seq."""
     if not s.joint_positions or not s.joint_velocities:
@@ -55,34 +71,28 @@ def safety_state(s: ArmState) -> SafetyCheckState:
 class RosPlant:
     """The plant interface on ROS 2; client is the ros2.TiagoRightArmClient.
 
-    settings records the run's ROS side: execute, the checks, the safety settings,
-    ROS_DISTRO, and after stop() whether the arm was handed back (restored).
+    run_state holds the run's final values: whether effort control was activated, after
+    stop() whether the arm was handed back (restored) and the cleanup errors. Events:
+    activated at the first command (switch_s: how long the switch took), handback in
+    stop() (restored, errors).
     """
 
-    def __init__(
-        self,
-        execute: bool = False,
-        *,
-        checks: Checks = Checks(),
-        safety: CollisionSafetySettings = CollisionSafetySettings(),
-        sea_absolute: bool = False,
-    ):
+    def __init__(self, config: RobotConfig):
+        safety = config.safety
         if not safety.enabled or tuple(safety.controlled_joint_names) != RIGHT_ARM_JOINTS:
             raise ValueError("the robot needs the safety worker on the controlled right-arm joints")
-        self.execute, self.checks, self.safety = execute, checks, safety
+        self.config = config
         # The loop's wall clock, from start. Gazebo would need a third clock fed from
         # /clock, with the ROS stamps as State.t.
         self.clock: WallClock
-        self.settings: dict[str, Any] = dict(
-            time="wall", execute=execute, sea_absolute=sea_absolute, checks=asdict(checks),
-            safety=asdict(safety), ros_distro=os.environ.get("ROS_DISTRO"),
-            activated=False, restored=None, cleanup_errors=[])
+        self.run_state: dict[str, Any] = dict(activated=False, restored=None, cleanup_errors=[])
         self.monitor: AsyncSafetyMonitor | None = None
         self._initial: ArmState | None = None
         self._last: ArmState | None = None
         self._seq, self._stamp = -1, None
         self._activated = self._uncertain = False
-        self.client = TiagoRightArmClient(sea_absolute=sea_absolute)
+        self._events: list[Event] = []
+        self.client = TiagoRightArmClient(sea_absolute=config.sea_absolute)
 
     def start(self, clock: VirtualClock | WallClock) -> None:
         """Startup checks on a fresh state: the safety worker's initial check, PAL's
@@ -91,12 +101,12 @@ class RosPlant:
         The robot runs on wall time only (run_real_time); any other clock raises first."""
         if not isinstance(clock, WallClock):
             raise ValueError("the robot runs on wall time only: use run_real_time")
-        self.clock, c, client = clock, self.checks, self.client
+        self.clock, c, client = clock, self.config.checks, self.client
         first = client.read_state(timeout_sec=c.first_state_s, max_age_sec=c.state_age_s)
-        self.monitor = AsyncSafetyMonitor(settings=self.safety, initial_state=safety_state(first))
+        self.monitor = AsyncSafetyMonitor(settings=self.config.safety, initial_state=safety_state(first))
         if client.active_arm_controller(timeout_sec=c.service_s) != "arm_right_controller":
             raise RuntimeError("start in PAL's position controller; existing effort control is not adopted")
-        if self.execute:
+        if self.config.execute:
             client.configure_runtime_effort_controller(timeout_sec=c.service_s)
         # The safety model and the configuration take time: check a state read after them.
         self._initial = client.read_state(timeout_sec=c.state_age_s, after_seq=first.seq,
@@ -115,6 +125,11 @@ class RosPlant:
         else:
             self._activate(command)
 
+    def take_events(self) -> list[Event]:
+        """The events since the last call (activated, handback), forgotten here."""
+        events, self._events = self._events, []
+        return events
+
     def advance(self, t: float) -> None:
         """Wait until the clock reaches t; late: return at once."""
         self.clock.reach(t)
@@ -122,10 +137,11 @@ class RosPlant:
     def stop(self) -> None:
         """Zero torque and handback to PAL's position controller; nothing before activation.
 
-        Raises if a step failed or the handback is uncertain (settings: cleanup_errors)."""
+        Raises if a step failed or the handback is uncertain (run_state: cleanup_errors),
+        after the handback event."""
         if not self._activated:
             return
-        self._activated, errors = False, self.settings["cleanup_errors"]
+        self._activated, errors = False, self.run_state["cleanup_errors"]
         self.client.service_progress = None
         for _ in range(5):  # attempt the handback even if zero publication fails
             try:
@@ -135,14 +151,19 @@ class RosPlant:
                 errors.append(f"zero effort: {exc}")
             time.sleep(.01)
         try:
-            self.client.switch_to_default_control(timeout_sec=self.checks.service_s)
-            self.settings["restored"] = not self._uncertain
+            self.client.switch_to_default_control(timeout_sec=self.config.checks.service_s)
+            self.run_state["restored"] = not self._uncertain
             if self._uncertain:
                 errors.append("restoration uncertain: the interrupted activation RPC may still "
                               "execute; manual controller reconciliation required")
         except BaseException as exc:
-            self.settings["restored"] = False
+            self.run_state["restored"] = False
             errors.append(f"controller handback: {exc}")
+        restored = self.run_state["restored"]
+        self._events.append(Event(self.clock.now(), "handback",
+                                  "zero torque, arm handed back to PAL's position controller" if restored and not errors
+                                  else f"handback: restored={restored}; {'; '.join(errors)}",
+                                  dict(restored=restored, errors=list(errors))))
         if errors:
             raise RuntimeError("; ".join(errors))
 
@@ -165,7 +186,7 @@ class RosPlant:
         if s is None:
             raise RuntimeError("joint state unavailable")
         age = time.monotonic() - s.received_monotonic_sec
-        if not math.isfinite(age) or age < 0 or age > self.checks.state_age_s:
+        if not math.isfinite(age) or age < 0 or age > self.config.checks.state_age_s:
             raise RuntimeError("joint state stale or invalid receipt time")
         if not math.isfinite(s.stamp_sec):
             raise RuntimeError("invalid ROS state stamp")
@@ -186,22 +207,23 @@ class RosPlant:
             raise RuntimeError("full named body feedback required")
         # The arm predictor has a fixed torso root, so the other independently updated
         # body joints must stay at their initial measured positions.
+        checks = self.config.checks
         for name, initial in self._initial.joint_positions.items():
             if name in RIGHT_ARM_JOINTS:
                 continue
             if name.startswith(("wheel_", "gripper_")) and not math.isfinite(initial):
                 continue  # unobserved fixed joints remain an explicit limitation
             value = s.joint_positions.get(name)
-            tolerance = self.checks.torso_drift_m if name == "torso_lift_joint" else self.checks.body_drift_rad
+            tolerance = checks.torso_drift_m if name == "torso_lift_joint" else checks.body_drift_rad
             if value is None or not math.isfinite(value) or abs(value - initial) > tolerance:
                 raise RuntimeError(f"non-controlled body joint moved or became invalid: {name}")
         return s
 
     def _ready(self, s):
         """At rest at the comfortable pose, and this state checked by the safety worker."""
-        if np.max(np.abs(np.asarray(s.q) - Q_START)) > self.checks.start_rad:
+        if np.max(np.abs(np.asarray(s.q) - Q_START)) > self.config.checks.start_rad:
             raise RuntimeError("position the arm at comfortable_high_clearance first; there is no automatic reset")
-        if np.sum(np.abs(s.qd)) > self.checks.start_speed_l1_rad_s:
+        if np.sum(np.abs(s.qd)) > self.config.checks.start_speed_l1_rad_s:
             raise RuntimeError("arm is moving too quickly to start effort control")
         self.monitor.wait_until_checked(safety_state(s))
 
@@ -209,13 +231,15 @@ class RosPlant:
         """Switch to effort control (blocking service calls), republishing command meanwhile.
 
         Each republication first reads and checks a fresh state; the command is held at
-        most LEASE_S after the state it was computed from, or the activation faults."""
-        if not self.execute:
+        most LEASE_S after the state it was computed from, or the activation faults. Done,
+        it emits the activated event with the switch's duration."""
+        if not self.config.execute:
             raise RuntimeError("check-only: effort control needs execute=True")
+        began = self.clock.now()
         s = self._last
         self._ready(s)  # recheck right before activation
         self.client.publish_effort(command)  # prime the inactive receiver
-        self._activated = self.settings["activated"] = True  # a failed switch may still activate
+        self._activated = self.run_state["activated"] = True  # a failed switch may still activate
         # Until the state's time + LEASE_S, not the plan's lease end (62 ms for 2 ms knots):
         # the plant cannot see the plan. Left as is for Felix's safety review.
         hold_until = s.received_monotonic_sec + LEASE_S
@@ -228,10 +252,13 @@ class RosPlant:
 
         self.client.service_progress = progress
         try:
-            self.client.switch_to_effort_control(timeout_sec=self.checks.service_s)
+            self.client.switch_to_effort_control(timeout_sec=self.config.checks.service_s)
         except BaseException:
             self._uncertain = True  # the server may still apply a dispatched switch
             raise
         finally:
             self.client.service_progress = None
         progress()
+        switch = self.clock.now() - began
+        self._events.append(Event(began, "activated", f"effort control active after a {1e3 * switch:.1f} ms switch",
+                                  dict(switch_s=switch)))

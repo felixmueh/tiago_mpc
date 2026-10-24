@@ -296,6 +296,28 @@ class SpawnedSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'closed'):
             monitor.check(state)
 
+    def test_the_spawned_worker_ignores_sigint(self):
+        """Ctrl-C reaches the worker too; the parent ends the run and closes it."""
+        state = make_state(self.model)
+        context = s.mp.get_context('spawn')
+        process_constructor = context.Process
+        def dummy_process(*args, **kwargs):
+            kwargs['target'] = dummy_worker_main
+            return process_constructor(*args, **kwargs)
+        with patch.object(s.mp, 'get_context', return_value=context):
+            with patch.object(context, 'Process', side_effect=dummy_process):
+                monitor = s.AsyncSafetyMonitor(settings=mechanics_settings(), initial_state=state)
+        try:
+            monitor.wait_until_checked(state)
+            os.kill(monitor._process.pid, signal.SIGINT)
+            time.sleep(.2)
+            self.assertTrue(monitor._process.is_alive())
+            monitor.wait_until_checked(replace(state, seq=2))
+            self.assertEqual(monitor.last_checked_seq, 2)
+        finally:
+            monitor.close()
+        self.assertFalse(monitor._process.is_alive())
+
     def test_worker_classifies_invalid_full_state_and_latches_fault(self):
         state = make_state(self.model)
         monitor = s.AsyncSafetyMonitor(settings=mechanics_settings(), initial_state=state)

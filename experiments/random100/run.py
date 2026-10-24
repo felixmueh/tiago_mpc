@@ -1,65 +1,65 @@
 """Run the historical random100 inputs once: one reach and one MpcProcess per case, each to
 the grasp-frame position at the case's goal posture.
 
+The study is its own frozen dataclasses: Random100Config, what defines it, and a Case per
+input pair, what varies. study.json holds both and the provenance, written once before the
+first run; each case's run record is runs/<name>/. load(path) reads them back.
+
 Run from the checkout's root: python -m experiments.random100.run --dry-run (parameters only),
 then without --dry-run for all 100 cases or with --pairs 8990 for a subset."""
-from dataclasses import asdict, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import argparse
-import csv
 import fcntl
+import hashlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import sys
-import time
 import traceback
 
 import numpy as np
 
-HERE = Path(__file__).resolve().parent
+from experiments.common import handle_stop_signals
 from experiments.reach import Reach, reach
 import tiago_mpc as tm
 
+HERE = Path(__file__).resolve().parent
 PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # a declared latency (0): no wall-time budget
 
 
-def aggregate(out, rows, expected):
-    complete = [r for r in rows if r.get("status") in ("arrived", "timeout")]
-    counts = dict(assigned=expected, attempted=len(rows), completed=len(complete),
-                  arrivals=sum(bool(r.get("reached")) for r in rows),
-                  full_limit_passes=sum(bool(r.get("limits_pass")) for r in complete),
-                  valid_arrivals=sum(bool(r.get("reached")) and bool(r.get("limits_pass")) for r in complete),
-                  timeouts=sum(r.get("status") == "timeout" for r in rows),
-                  execution_errors=sum(r.get("status") not in ("arrived", "timeout") for r in rows))
-    (out / "summary.json").write_text(json.dumps(dict(counts=counts, cases=rows), indent=2)+"\n")
-    fields = ["task_id", "status", "reached", "limits_pass", "simulated_time_s",
-              "initial_distance_m", "final_distance_m", "final_speed_m_s", "wall_s", "output"]
-    with (out / "cases.csv").open("w") as f:
-        writer = csv.DictWriter(f, fields, extrasaction="ignore")
-        writer.writeheader(); writer.writerows(rows)
-    return counts
+@dataclass(frozen=True)
+class Random100Config:
+    """What defines the study: the historical input pairs (inputs/random_<id>.npz, in this
+    order), the sha256 of manifest.json, which pins the input files, and each run's pieces."""
+    ids: tuple[int, ...]
+    inputs_sha256: str
+    params: tm.MpcParams = PARAMS
+    plant: tm.SimConfig = tm.SimConfig(substep=.003)
+    timing: tm.VirtualTime = tm.VirtualTime.ideal()
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--output", type=Path)
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--pairs", type=int, nargs="+", help="Declared diagnostic subset; default all100")
-    args = p.parse_args()
-    manifest = json.loads((HERE / "manifest.json").read_text())
-    ids = manifest["task_ids"]
-    if len(ids) != 100 or len(set(ids)) != 100:
-        raise ValueError("Expected the exact ordered 100 distinct historical task IDs")
-    if args.pairs:
-        if len(set(args.pairs)) != len(args.pairs) or not set(args.pairs).issubset(ids):
-            raise ValueError("Diagnostic task IDs must be distinct members of the frozen100")
-        ids = args.pairs
-    for task in ids:
+@dataclass(frozen=True)
+class Case:
+    """What varies: its run directory runs/<name>/, the start state (q, qd) at rest and the
+    grasp-frame position at the goal posture."""
+    name: str
+    initial_state: tuple[float, ...]
+    target_m: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class Random100Study:
+    config: Random100Config
+    cases: tuple[Case, ...]
+
+
+def cases(config):
+    """One case per id, from its input file, checked: the cases follow from the config."""
+    out = []
+    for task in config.ids:
         name = f"random_{task:05d}.npz"
-        file = HERE / "inputs" / name
-        with np.load(file, allow_pickle=False) as a:
+        with np.load(HERE / "inputs" / name, allow_pickle=False) as a:
             if a["initial_state"].shape != (14,) or a["reference"].shape != (1, 192):
                 raise ValueError(f"Invalid task dimensions: {name}")
             if not np.allclose(a["reference"].reshape(32, 6)[:, :3], a["target_xyz"], atol=1e-6):
@@ -72,15 +72,39 @@ def main():
             if not np.allclose(a["first_seed"].ravel(), np.tile(np.r_[a["initial_state"], np.zeros(7)], 32)[:-7],
                                atol=1e-6):
                 raise ValueError(f"Frozen task seed differs from the state-hold warm start: {name}")
-    config = dict(input_source_commit=manifest["source_commit"], task_ids=ids,
-                  end_effector_frame=tm.GRASP_FRAME,
-                  application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT, text=True).strip(),
-                  source_status=subprocess.check_output(["git", "status", "--short"], cwd=tm.ROOT, text=True),
-                  params=asdict(PARAMS),
-                  cohort="reaching-grasp-frame-position-only-fixed-clock-8s",
-                  differences_from_historical="Modern GATO/GRiD, finite-budget ADMM limit rows, parameters recorded in params and per case. Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical retained). Same native starts/goal postures/order; the position goals are the grasp frame's at the goal postures (historical: the flange's), so results are not comparable with the historical cohort; no original goal posture is used as a trajectory seed.")
+            out.append(Case(f"pair_{task:05d}", tuple(map(float, a["initial_state"])),
+                            tuple(map(float, tm.ee_position(a["source_goal_q"])))))
+    return tuple(out)
+
+
+def load(path):
+    """The study of a run directory and the run records of its cases that exist, in order."""
+    path = Path(path)
+    data = json.loads((path / "study.json").read_text())
+    study = tm.from_dict(data["study"], [Random100Study, Random100Config, Case])
+    return study, [tm.load_run(path / "runs" / c.name, classes=[Reach]) for c in study.cases
+                   if (path / "runs" / c.name).exists()]
+
+
+def main(argv=None):
+    handle_stop_signals()  # Ctrl-C: the running case ends as interrupted, and the study stops
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--output", type=Path)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--pairs", type=int, nargs="+", help="Declared diagnostic subset; default all100")
+    args = p.parse_args(argv)
+    manifest = json.loads((HERE / "manifest.json").read_text())
+    ids = manifest["task_ids"]
+    if len(ids) != 100 or len(set(ids)) != 100:
+        raise ValueError("Expected the exact ordered 100 distinct historical task IDs")
+    if args.pairs:
+        if len(set(args.pairs)) != len(args.pairs) or not set(args.pairs).issubset(ids):
+            raise ValueError("Diagnostic task IDs must be distinct members of the frozen100")
+        ids = args.pairs
+    config = Random100Config(ids=tuple(ids), inputs_sha256=hashlib.sha256((HERE / "manifest.json").read_bytes()).hexdigest())
+    study = Random100Study(config, cases(config))
     if args.dry_run:
-        print(json.dumps(config, indent=2)); return 0
+        print(json.dumps(tm.to_dict(config), indent=2)); return 0
     out = (args.output or tm.ROOT / "_expr_data" /
            ("random100-"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))).resolve()
     # Participate in both the newer benchmark locks and the original experiment lock.
@@ -91,37 +115,32 @@ def main():
             lock = path.open("a")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             locks.append(lock)
-    binary = tm.compile_binary(PARAMS)
-    tm.MpcProcess(PARAMS, binary).close()  # a shared setup failure (model check) stops here, before any case
+    binary = tm.compile_binary(config.params)
+    tm.MpcProcess(config.params, binary).close()  # a shared setup failure (model check) stops here, before any case
     out.mkdir(parents=True, exist_ok=False)
-    (out / "configuration.json").write_text(json.dumps(config, indent=2)+"\n")
+    (out / "study.json").write_text(json.dumps(dict(provenance=tm.provenance(), study=tm.to_dict(study)),
+                                               indent=2) + "\n")  # once, before the first run
     shutil.copyfile(__file__, out / "run.py")
     shutil.copyfile(HERE / "manifest.json", out / "input_manifest.json")
     shutil.copytree(HERE / "inputs", out / "inputs")
-    rows = []
-    for index, task in enumerate(ids):
-        case = out / f"pair_{task:05d}"
-        with np.load(out / "inputs" / f"random_{task:05d}.npz") as a:
-            x0, target = a["initial_state"], tuple(map(float, tm.ee_position(a["source_goal_q"])))
-        start = time.perf_counter()
-        plant, mpc = tm.SimPlant(x0[:7], x0[7:], substep=.003), None
+    for index, case in enumerate(study.cases):
+        mpc, record = None, None
         try:
-            mpc = tm.MpcProcess(PARAMS, binary)
-            reach(plant, mpc, task=Reach(target), out=case, solve_latency=0.)  # run_virtual_time
-        except Exception:
+            mpc = tm.MpcProcess(config.params, binary)  # one process per case
+            record = reach(replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:]), mpc,
+                           task=Reach(case.target_m), timing=config.timing, out=out / "runs" / case.name,
+                           case=case.name)
+        except Exception:  # an error is a result: run_experiment saved it; the other cases continue
             traceback.print_exc()
         finally:
             if mpc is not None:
                 mpc.close()
-            plant.close()
-        path = case / "summary.json"
-        row = json.loads(path.read_text()) if path.exists() else dict(status="error", error="no summary")
-        row.update(task_id=task, wall_s=time.perf_counter()-start, output=str(case))
-        rows.append(row)
-        counts = aggregate(out, rows, len(ids))
-        print(f"{index+1}/{len(ids)} id={task}: {row['status']}, limits={row.get('limits_pass')}; "
-              f"arrivals={counts['arrivals']} valid={counts['valid_arrivals']} errors={counts['execution_errors']}", flush=True)
-    print(json.dumps(dict(output=str(out), counts=counts), indent=2), flush=True)
+        status = "error" if record is None else record.metadata["status"]
+        limits = None if record is None else record.metadata["results"].get("limits_pass")
+        print(f"{index+1}/{len(study.cases)} {case.name}: {status}, limits={limits}", flush=True)
+        if status == "interrupted":
+            break
+    print(json.dumps(dict(output=str(out)), indent=2), flush=True)
     return 0
 
 

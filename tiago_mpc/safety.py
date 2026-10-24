@@ -13,6 +13,7 @@ import json
 import multiprocessing as mp
 from pathlib import Path
 import queue
+import signal
 import time
 import warnings
 from typing import Iterable, Mapping, Sequence
@@ -75,6 +76,9 @@ class CollisionSafetySettings:
     joint_velocity_scale: float = 1.0
 
     def __post_init__(self) -> None:
+        for name in ("urdf_path", "blacklist_path"):  # record.from_dict gives strings
+            if getattr(self, name) is not None:
+                object.__setattr__(self, name, Path(getattr(self, name)))
         for name in ("min_distance_m", "joint_position_margin_rad"):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
@@ -408,6 +412,9 @@ def _safety_worker_main(
     response_q: mp.Queue,
     stop_event: mp.Event,
 ) -> None:
+    # Ctrl-C reaches the whole foreground process group: the parent's stop request ends the
+    # run, and RosPlant.close() shuts this worker down (AsyncSafetyMonitor.close).
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         monitor = _SafetyChecker(settings=settings, initial_state=initial_state)
         response_q.put(_SafetyCheckResult(seq=-1, ok=True, kind="ready"))

@@ -21,6 +21,7 @@ from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction, Sign, Tanh
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.plan import Plan, State
+from tiago_mpc.record import from_dict, to_dict
 from tiago_mpc.tiago import GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
@@ -28,9 +29,9 @@ LOSSES = Friction([1.] * 7, [.5] * 7, Tanh(.03))
 
 
 @pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(TIAGO, N=8, admm=replace(TIAGO.admm, iters=5))])
-def test_asdict_round_trips_also_through_json_and_pickle(params):
-    assert MpcParams.from_dict(asdict(params)) == params
-    assert MpcParams.from_dict(json.loads(json.dumps(asdict(params)))) == params
+def test_to_dict_round_trips_also_through_json_and_pickle(params):
+    assert from_dict(to_dict(params)) == params
+    assert from_dict(json.loads(json.dumps(to_dict(params)))) == params
     assert pickle.loads(pickle.dumps(params)) == params
 
 
@@ -394,11 +395,15 @@ class Thread(threading.Thread):
 
 @pytest.fixture
 def process(controller, monkeypatch):
+    """make() is an MpcProcess on a thread; make.signals: the handlers its _serve set (a
+    thread cannot set them)."""
     monkeypatch.setattr(mpc, "_SPAWN", NS(Queue=Channel, Process=Thread))
-    processes = []
+    processes, signals = [], []
+    monkeypatch.setattr(mpc.signal, "signal", lambda *args: signals.append(args))
     def make(params=PARAMS):
         processes.append(MpcProcess(params, BINARY))
         return processes[-1]
+    make.signals = signals
     yield make
     for item in processes:
         item.close()
@@ -407,6 +412,7 @@ def process(controller, monkeypatch):
 def test_process_result_waits_for_its_reply(process, controller):
     p = process()
     assert (p.N, p.dt) == (N, DT)
+    assert process.signals == [(mpc.signal.SIGINT, mpc.signal.SIG_IGN)]  # Ctrl-C is the parent's
     assert p.result() is None  # nothing requested
     controller.gate = threading.Event()
     p.request(state(), REFERENCE)

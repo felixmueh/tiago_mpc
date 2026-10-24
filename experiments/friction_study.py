@@ -10,20 +10,18 @@ predicts no friction; figure-eight tracking predicts nominal tanh friction.
 Fixed 0/20 ms solve delays isolate delay tolerance; these are not wall-time
 performance measurements or real-robot qualifications.
 """
-from dataclasses import asdict, replace
+from dataclasses import replace
 import argparse
 import fcntl
-from functools import partial
 import hashlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 import numpy as np
 
-from experiments.common import limit_excess
+from experiments.common import handle_stop_signals, limit_excess
 from experiments.latency_study import CASES, COMMAND_PERIOD, TASKS, study, table
 import tiago_mpc as tm
 
@@ -34,7 +32,7 @@ def task_specs(scale):
     friction = replace(nominal,
                        coulomb_nm=tuple(scale * x for x in nominal.coulomb_nm),
                        viscous_nm_s_per_rad=tuple(scale * x for x in nominal.viscous_nm_s_per_rad))
-    return {name: (*TASKS[name][:3], partial(tm.SimPlant, friction=friction))
+    return {name: (*TASKS[name][:3], replace(TASKS[name][3], friction=friction))
             for name in ("reach-friction", "figure8")}
 
 
@@ -43,19 +41,16 @@ def describe(scales, latencies, tasks, cases):
                 plant_scales=scales, latencies_ms=latencies, tasks=tasks, cases=cases,
                 command_period_s=COMMAND_PERIOD, update_period_s=.01,
                 time_basis="simulation", predictor="implicit", prediction_substep_s=None,
-                repository_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT, text=True).strip(),
-                source_status=subprocess.check_output(["git", "status", "--short"], cwd=tm.ROOT, text=True),
-                gato=tm.gato_source(),
-                urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
-                laws={name: asdict(law) if hasattr(law, "__dataclass_fields__") else law.__name__
-                      for name, (_, law) in CASES.items() if name in cases},
-                models={str(scale): {name: dict(params=asdict(replace(params, max_sqp_time_s=None)),
-                                               plant=make_plant().settings)
-                                    for name, (_, _, params, make_plant) in task_specs(scale).items() if name in tasks}
+                provenance=tm.provenance(), urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
+                laws={name: tm.to_dict(law) for name, (_, law) in CASES.items() if name in cases},
+                models={str(scale): {name: dict(params=tm.to_dict(replace(params, max_sqp_time_s=None)),
+                                               plant=tm.to_dict(plant))
+                                    for name, (_, _, params, plant) in task_specs(scale).items() if name in tasks}
                         for scale in scales})
 
 
 def main(argv=None):
+    handle_stop_signals()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scales", type=float, nargs="+", default=[.5, 1., 1.5])
     parser.add_argument("--latencies-ms", type=float, nargs="+", default=[0., 20.])
@@ -99,19 +94,21 @@ def main(argv=None):
                           task_specs=task_specs(scale))
             for row in batch:
                 row["plant_scale"] = scale
-                summary = json.loads((Path(row["output"]) / "summary.json").read_text())
-                with np.load(Path(row["output"]) / "trajectory.npz") as saved:
-                    excess = limit_excess(saved)
-                    row["sampled_limits_pass"] = max(excess.values()) <= 1e-5 if len(saved["state"]) else None
-                    row["sampled_limit_excess"] = excess
-                    row["finite_states"] = bool(np.isfinite(saved["state"]).all()) if len(saved["state"]) else None
-                row["final_distance_mm"] = (None if "final_distance_m" not in summary
-                                             else float(summary["final_distance_m"]) * 1000)
+                run = tm.load_run(row["output"])
+                ticks, results = run.ticks, run.metadata["results"]
+                excess = limit_excess(ticks)
+                row["sampled_limits_pass"] = max(excess.values()) <= 1e-5 if len(ticks["t"]) else None
+                row["sampled_limit_excess"] = excess
+                row["finite_states"] = bool(np.isfinite(np.c_[ticks["q"], ticks["qd"]]).all()) if len(ticks["t"]) else None
+                row["final_distance_mm"] = (None if "final_distance_m" not in results
+                                             else float(results["final_distance_m"]) * 1000)
             rows.extend(batch)
             (out / "rows.json").write_text(json.dumps(rows, indent=2) + "\n")
             (out / "table.md").write_text("\n\n".join(
                 f"Plant coefficients {s:g}x\n\n" + table([r for r in rows if r["plant_scale"] == s])
                 for s in args.scales if any(r["plant_scale"] == s for r in rows)) + "\n")
+            if batch and batch[-1]["status"] == "interrupted":  # Ctrl-C: the study stops
+                break
     finally:
         for lock in locks:
             lock.close()
