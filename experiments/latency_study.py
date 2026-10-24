@@ -28,7 +28,7 @@ COMMAND_PERIOD = .002  # the experiments' default; the control-update period is 
 # Q_START plus this joint offset (T01 measured the flange, 31.7 cm away with Q_START's joint 4
 # at its former -2.35 rad).
 # "reach-friction" runs the loss-free predictor against a plant with the URDF's friction;
-# the figure eight predicts tanh friction against a plant with constraint Coulomb friction.
+# the figure eight predicts Tanh friction against a plant with StickSlip Coulomb friction.
 T01_GOAL3 = np.array([.36, 1.2, 0., .45, 0., .15, 0.])
 TASKS = {  # name: (experiment, task or None for its default, params, plant)
     "reach": (reach, Reach(), tm.TIAGO, lambda: tm.SimPlant(substep=.003)),

@@ -112,8 +112,8 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
 - **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm at a joint-speed L1 norm of at most 1 rad/s, timeout 8 s.
-- **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, constraint
-  Coulomb in the plant (1 ms substeps) and tanh (width 0.03 rad/s) in the predictor.
+- **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, `StickSlip`
+  Coulomb in the plant (1 ms substeps) and `Tanh(.03)` (width 0.03 rad/s) in the predictor.
 - **Exit status** 1 on a timeout or a raw-limit excess.
 
 ## Writing an experiment
@@ -148,20 +148,26 @@ mpc.close()
   `PlantInterface`, `MpcInterface` and `TaskInterface` declare.
 - `SimPlant(friction=...)` sets the **plant's** losses, `MpcParams.friction`
   the **predictor's**; the run records both.
-- **Friction simulation:** `SimPlant(friction=urdf_friction())` uses semi-implicit
-  Euler, implicit viscous damping and a coupled Coulomb constraint solve. Joints
-  hold at zero velocity while the needed friction lies within ±c, and slip at c.
-  `coulomb_law="sign"` instead evaluates Coulomb as `c*sign(v_old)` (it can chatter
-  and creep near zero), `coulomb_law="tanh"` as `c*tanh(v_old/width)` with the
-  `Friction`'s width (`urdf_friction(.03)`, the predictor's law; it creeps below
-  the threshold). Damping stays implicit in all three. They use the full Pinocchio
-  mass matrix and bias at the old state and advance q with the new velocity. The
-  default maximum substep is 1 ms (1 kHz), shortened to land on a command tick;
-  this does not set the command or control rate. `integrator` is `"rk4"` (GATO's
-  loss-free RK4; refuses a `Friction`) or `"euler"` (loss-free without a
-  `Friction`); the default is RK4 when loss-free, Euler with friction. Armature
-  remains disabled. These plant choices do not qualify friction-enabled MPC or
-  tracking.
+- **Friction simulation:** a `Friction` holds the coefficients and its Coulomb law,
+  plain data that each integrator interprets: `StickSlip()` (the default),
+  `Sign()` or `Tanh(width_rad_s)`. `SimPlant(friction=urdf_friction())` uses
+  semi-implicit Euler, implicit viscous damping and a coupled stick/slip solve.
+  Joints hold at zero velocity while the needed friction lies within ±c, and slip
+  at c. `urdf_friction(Sign())` instead evaluates Coulomb as `c*sign(v_old)` (it
+  can chatter and creep near zero), `urdf_friction(Tanh(.03))` as
+  `c*tanh(v_old/width)` (the predictor's law; it creeps below the threshold).
+  Damping stays implicit in all three. They use the full Pinocchio mass matrix and
+  bias at the old state and advance q with the new velocity. The default maximum
+  substep is 1 ms (1 kHz), shortened to land on a command tick; this does not set
+  the command or control rate. `integrator` is `"rk4"` or `"euler"`; the default
+  is RK4 when loss-free, Euler with friction. `"rk4"` is GATO's RK4 when
+  loss-free and, with `Tanh` or `Sign`, RK4 with the passive torque at every stage
+  (the URDF's damping needs substeps far below 1 ms there); it refuses
+  `StickSlip`, which exists only as the Euler step's solve. `passive_torque`
+  likewise covers `Tanh` and `Sign` only. `MpcParams.friction` takes `Tanh` only.
+  A saved `Friction` records its law's `name` (`"tanh"`, `"sign"`,
+  `"stick_slip"`). Armature remains disabled. These plant choices do not qualify
+  friction-enabled MPC or tracking.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
   the raw GATO `controller` and `step`, the latest solve's result), `run` and
@@ -218,3 +224,6 @@ More: [docs/robot.md](docs/robot.md) (robot path and checks),
 [docs/safety.md](docs/safety.md) (collision-safety worker),
 [docs/decisions.md](docs/decisions.md) (Felix's decisions, deferred work, open
 questions), [models/README.md](models/README.md) (model provenance).
+
+The [friction and breakaway handoff](docs/friction-breakaway-handoff.md) records
+the physical-fit comparison and the proposed separate static/sliding plant model.

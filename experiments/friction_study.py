@@ -1,4 +1,4 @@
-"""Compare the four latency execution controllers with constraint Coulomb friction.
+"""Compare the four latency execution controllers with StickSlip Coulomb friction.
 
     python -m experiments.friction_study --dry-run
     python -m experiments.friction_study --output _expr_data/controller-friction/<fresh-name>

@@ -86,7 +86,7 @@ def implicit_step(friction):
     def step(x, u, h):
         q, qd = x[:7], x[7:]
         slope = (0. if friction is None else np.asarray(friction.viscous_nm_s_per_rad)
-                 + np.asarray(friction.coulomb_nm) / friction.width_rad_s / np.cosh(qd / friction.width_rad_s)**2)
+                 + np.asarray(friction.coulomb_nm) / friction.law.width_rad_s / np.cosh(qd / friction.law.width_rad_s)**2)
         force = u - pin.rnea(model, data, q, qd, np.zeros(7)) - tm.passive_torque(qd, friction)
         qd_next = qd + np.linalg.solve(pin.crba(model, data, q) + h * np.diag(slope * np.ones(7)), h * force)
         return np.r_[q + h * qd_next, qd_next]

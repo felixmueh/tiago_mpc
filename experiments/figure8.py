@@ -1,6 +1,6 @@
 """Horizontal figure-eight tracking (robot: checks only by default).
 
-In simulation with constraint Coulomb friction in the plant and tanh in the predictor.
+In simulation with StickSlip Coulomb friction in the plant and Tanh in the predictor.
 
 Run from the checkout's root: python -m experiments.figure8 [--help]."""
 from __future__ import annotations
@@ -47,7 +47,7 @@ class Figure8:
 
 FIGURE8 = replace(tm.TIAGO, dt_s=.01, solver=tm.TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
                   admm=replace(tm.TIAGO.admm, rho_u=1e-5),  # GATO's value, for the control cost 1e-6
-                  friction=tm.urdf_friction(.03))
+                  friction=tm.urdf_friction(tm.Tanh(.03)))
 
 
 def metrics(error):

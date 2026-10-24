@@ -7,7 +7,7 @@ at run time and written to the cache (util.cache_root): the reduced arm (arm_urd
 GPU copy (runtime_urdf) and the safety collision model (safety.py). Nothing derived
 is committed, so nothing derived can go stale.
 
-Importing this module loads only NumPy; Pinocchio loads on first use. The native
+The native
 URDFs stay in ROS coordinates. Only the GPU URDF and the solver's state/control
 boundary normalize negative joint axes.
 """
@@ -20,8 +20,9 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 import numpy as np
+import pinocchio as pin
 
-from .dynamics import Friction
+from .dynamics import CoulombLaw, Friction, StickSlip
 from .util import cache_meshes, cached
 
 ROOT = Path(__file__).resolve().parents[1]  # the repository
@@ -77,7 +78,6 @@ def arm_urdf() -> Path:
 
 def _subtree_inertia(name, links, joints):
     """The inertia of link name and every link below it, all joints at zero, in name's frame."""
-    import pinocchio as pin
 
     total = pin.Inertia.Zero()
     pending = [(name, pin.SE3.Identity())]
@@ -103,7 +103,6 @@ def _link(joint, tag):
 
 def _origin(element):
     """The placement of element's <origin> (URDF's fixed-axis roll, pitch, yaw)."""
-    import pinocchio as pin
 
     origin = element.find("origin")
     attributes = {} if origin is None else origin.attrib
@@ -135,7 +134,6 @@ class Limits:
 
 @cache
 def _arm():
-    import pinocchio as pin
     model = pin.buildModelFromUrdf(str(arm_urdf()))
     return model, model.createData()
 
@@ -151,15 +149,14 @@ def limits() -> Limits:
     return Limits(*arrays)
 
 
-def urdf_friction(width_rad_s: float | None = None) -> Friction:
-    """The full URDF's right-arm friction and damping coefficients (the only default)."""
+def urdf_friction(law: CoulombLaw = StickSlip()) -> Friction:
+    """The full URDF's right-arm friction and damping coefficients (the only default), with law."""
     model = _arm()[0]
-    return Friction(tuple(model.friction), tuple(model.damping), width_rad_s)
+    return Friction(tuple(model.friction), tuple(model.damping), law)
 
 
 def fk(q: np.ndarray, frame: str = GRASP_FRAME) -> np.ndarray:
     """Position of frame in ROOT_FRAME, metres."""
-    import pinocchio as pin
     model, data = _arm()
     pin.forwardKinematics(model, data, np.asarray(q, dtype=float))
     pin.updateFramePlacements(model, data)

@@ -5,24 +5,24 @@ import numpy as np
 import pinocchio as pin
 import pytest
 
-from tiago_mpc.dynamics import Friction, plant_euler
+from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh, plant_euler
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import Q_START, urdf_friction
 
 
 @pytest.mark.parametrize("scale", [.5, 1., 1.5])
-def test_subthreshold_load_holds_exactly_with_constraints_but_moves_with_sign(scale):
+def test_subthreshold_load_holds_exactly_with_stick_slip_but_moves_with_sign(scale):
     f = urdf_friction()
     f = replace(f, coulomb_nm=tuple(scale*np.array(f.coulomb_nm)),
                 viscous_nm_s_per_rad=tuple(scale*np.array(f.viscous_nm_s_per_rad)))
-    for solver in ("sign", "constraint"):
-        plant = SimPlant(friction=f, coulomb_law=solver)
+    for law in (Sign(), StickSlip()):
+        plant = SimPlant(friction=replace(f, law=law))
         assert plant.substep == .001
         gravity = pin.computeGeneralizedGravity(plant.model, plant.data, plant.q).copy()
         plant.start()
         plant.apply(gravity + .5*np.array(f.coulomb_nm))
         plant.advance(.2)
-        if solver == "constraint":
+        if law == StickSlip():
             np.testing.assert_array_equal(plant.q, Q_START)
             np.testing.assert_array_equal(plant.qd, np.zeros(7))
         else:
@@ -50,14 +50,13 @@ def test_coupled_friction_torque_satisfies_stick_slip_conditions(scale):
         np.testing.assert_allclose(q_new, pin.integrate(plant.model, q, h*v_new), atol=1e-14)
 
 
-@pytest.mark.parametrize("friction,solver", [(None, "constraint"), (Friction((0.,)*7, (0.,)*7, .03), "tanh"),
-                                             (Friction((0.,)*7, (0.,)*7), "sign"),
-                                             (Friction((0.,)*7, (0.,)*7), "constraint")])
-def test_zero_losses_agree_with_aba_despite_nonzero_urdf_tags(friction, solver):
+@pytest.mark.parametrize("friction", [None, Friction((0.,)*7, (0.,)*7, Tanh(.03)), Friction((0.,)*7, (0.,)*7, Sign()),
+                                      Friction((0.,)*7, (0.,)*7, StickSlip())])
+def test_zero_losses_agree_with_aba_despite_nonzero_urdf_tags(friction):
     plant = SimPlant()
     v, u, h = np.linspace(-.1, .1, 7), np.linspace(-1., 1., 7), .001
     a = pin.aba(plant.model, plant.data, Q_START, v, u).copy()
-    _, v_new = plant_euler(plant.model, plant.data, Q_START, v, u, h, friction, solver)
+    _, v_new = plant_euler(plant.model, plant.data, Q_START, v, u, h, friction)
     np.testing.assert_allclose(v_new, v + h*a, atol=1e-12)
 
 
@@ -65,11 +64,11 @@ def test_tanh_coulomb_approaches_sign_as_the_width_shrinks():
     plant, f = SimPlant(), urdf_friction()
     v, u, h = np.array([-.05, -.01, -.002, 0., .002, .01, .05]), np.linspace(-1., 1., 7), .001
 
-    def step(friction, law):
-        return plant_euler(plant.model, plant.data, Q_START, v, u, h, friction, law)[1]
-    sign = step(f, "sign")
-    np.testing.assert_allclose(step(replace(f, width_rad_s=1e-9), "tanh"), sign, atol=1e-12)
-    smooth = step(replace(f, width_rad_s=.03), "tanh")
+    def step(law):
+        return plant_euler(plant.model, plant.data, Q_START, v, u, h, replace(f, law=law))[1]
+    sign = step(Sign())
+    np.testing.assert_allclose(step(Tanh(1e-9)), sign, atol=1e-12)
+    smooth = step(Tanh(.03))
     assert np.max(np.abs(smooth - sign)) > 1e-5  # weaker Coulomb below the width
 
 

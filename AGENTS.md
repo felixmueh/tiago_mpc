@@ -5,6 +5,13 @@ questions are in `docs/decisions.md`; add an entry there when he decides
 something lasting. The robot path is in `docs/robot.md`, the safety worker in
 `docs/safety.md`.
 
+For control of the sibling visualizer, read
+[the visualizer agent API guide](../tiago_mpc_visualizer/docs/agent-api.md).
+Run its `scripts/control.py` from the visualizer checkout to inspect and patch
+Live/presentation settings, send simulation commands, or select an MPC
+checkout/worktree or solver profile. Open viewers reflect shared changes;
+the guide documents partial patches, version checks and completion status.
+
 ## Felix owns this repository (Felix, 2026-10-24)
 
 - Felix owns the structure and code of this repository. Implement his decisions
@@ -30,6 +37,9 @@ something lasting. The robot path is in `docs/robot.md`, the safety worker in
   `tests/test_types.py`). Annotate public functions and methods; the interfaces
   are the structural protocols in `tiago_mpc/plan.py` (no inheritance, no
   run-time checks). Experiments stay untyped.
+- The root uses plain re-exports (Felix, 2026-10-24). Importing `tiago_mpc` may load Pinocchio and
+  GATO's Python package, but never ROS (only creating a `RosPlant` does) and never GATO's compiled
+  module (only the MPC process); `test_importing_the_package_loads_no_ros_and_no_compiled_gato` checks this.
 - Experiments use `import tiago_mpc as tm` (Felix, 2026-10-23); package modules import
   each other directly (`from .plan import State`), never through the root.
 - Run experiments as modules from the checkout's root, `python -m experiments.reach` (Felix,

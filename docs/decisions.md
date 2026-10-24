@@ -35,6 +35,12 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   each command before it is sent. Reason: a simulator such as the visualizer must
   be able to execute, clip or inspect an over-limit plan. Clipping stays a
   simulation setting: the robot path never clips a torque.
+- **2026-10-24: the root re-exports with plain imports.** Felix chose proposal A: ordinary
+  `from .module import Name` lines and an explicit `__all__`; a lazily loading root (PEP 562
+  `__getattr__`) was rejected. Importing `tiago_mpc` may load Pinocchio and GATO's Python
+  package (about 45 MB and a few hundredths of a second, and every process that matters uses
+  them anyway), but never ROS (only creating a `RosPlant` does) and never GATO's compiled
+  module (only the MPC process).
 - **2026-10-22: compiling GATO's module is explicit.** An `Mpc` takes its
   binary and never compiles: `Mpc(params, binary)` and `MpcProcess(params,
   binary)` load exactly that file; `find_binary(params)` looks it up without
@@ -126,7 +132,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (`../tiago_mpc_visualizer/docs/friction.md`) attributes this to viscous damping
   against joint 7's link-only inertia, stiff for explicit 3 ms RK4 substeps.
   Friction-enabled reaching is not qualified.
-- **Tracking uses friction on both sides:** constraint Coulomb plus viscous in
+- **Tracking uses friction on both sides:** `StickSlip` Coulomb plus viscous in
   the plant, tanh Coulomb (width 0.03 rad/s) plus viscous in the predictor, both
   from the URDF. The plant change does not qualify tracking.
 - **2026-10-23: compare both simulator friction proposals** (Felix). A fresh
@@ -140,10 +146,31 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   velocity), `"sign"` or `"constraint"` (default); `integrator` is `"rk4"`
   (loss-free only) or `"euler"` (semi-implicit, loss-free without a `Friction`),
   by default implied by friction on/off. This supersedes "smoothing is
-  predictor-only" for the plant; the predictor is unchanged.
+  predictor-only" for the plant; the predictor is unchanged. Its interface was
+  replaced on 2026-10-24 (below).
+- **2026-10-24: Coulomb laws as data** (Felix). A `Friction` holds the
+  coefficients and `law`: `Tanh(width_rad_s)`, `Sign()` or `StickSlip()` (the
+  default, the former `"constraint"`), frozen dataclasses without methods. Each
+  integrator interprets the law with `match`, covering every case; each law
+  stores its `name` so that `asdict` tells them apart, and `MpcParams.from_dict`
+  rebuilds it through `dynamics.LAWS`. `urdf_friction(law=StickSlip())` replaces
+  the width argument; `check_coulomb_law` and `SimPlant`'s `coulomb_law` are gone.
+  `MpcParams.friction` must be `Tanh`, the only law GATO predicts. RK4 with the
+  passive torque at every stage (`plant_rk4`) is restored for `Tanh` and `Sign`;
+  `StickSlip` stays Euler-only, and `passive_torque` refuses it. The plant names
+  still hash the coefficients and the width alone, so they did not change.
 - **2026-10-22: the smoothing width becomes compile-time only**, to diverge less
   from upstream GATO. Not done: the pinned fork still has the runtime-width
   commits; the friction work follows the refactor.
+
+- **2026-10-24: breakaway follow-up handoff** (Felix). Document the next plant
+  refinement with separate static/breakaway and sliding Coulomb values; keep
+  the MPC predictor independently configurable and simpler. The
+  [handoff](friction-breakaway-handoff.md) records recovered physical fits,
+  saved-command evidence, implementation choices and bounded validation work.
+  This request is documentation only; the current `StickSlip` still uses one
+  Coulomb value for holding and sliding, and no calibration/default change is
+  made by this handoff.
 
 ## Tasks
 
@@ -201,7 +228,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - **2026-10-22: garbage collection is paused during `run`** (full collections
   took 7–10 ms at 500 Hz). It must run in between; how is to be discussed.
 - **2026-10-23: the simulator's friction step is semi-implicit Euler**, with
-  tanh, sign and constraint Coulomb choices (see Friction and GATO). Loss-free plants
+  `Tanh`, `Sign` and `StickSlip` Coulomb choices (see Friction and GATO). Loss-free plants
   keep Pinocchio RK4 by default (reach 3 ms); substep, integrator and friction
   remain `SimPlant` arguments.
 - **2026-10-22: random100 runs one `MpcProcess` per case**, so a crash ends only

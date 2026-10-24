@@ -84,8 +84,8 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
     assert summary["plant"]["type"] == "SimPlant" and summary["limits_pass"]
     if name == "figure8":
         assert summary["plant"]["substep_s"] == .001
-        assert summary["plant"]["coulomb_law"] == "constraint"
-        assert summary["params"]["friction"]["width_rad_s"] == .03  # predictor stays smooth
+        assert summary["plant"]["friction"]["law"] == dict(name="stick_slip")
+        assert summary["params"]["friction"]["law"] == dict(width_rad_s=.03, name="tanh")  # predictor stays smooth
     assert summary["ticks"] == 6 and summary["plans"] == 5
     with np.load(tmp_path / name / "trajectory.npz") as saved:
         np.testing.assert_allclose(saved["time_s"], np.arange(6) * .01, atol=1e-12)

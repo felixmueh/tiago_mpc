@@ -18,13 +18,13 @@ import pytest
 
 from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
-from tiago_mpc.dynamics import Friction
+from tiago_mpc.dynamics import Friction, Sign, Tanh
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.tiago import FLANGE_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
-LOSSES = Friction([1.] * 7, [.5] * 7, .03)
+LOSSES = Friction([1.] * 7, [.5] * 7, Tanh(.03))
 
 
 @pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(TIAGO, N=8, admm=replace(TIAGO.admm, iters=5))])
@@ -85,7 +85,7 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
     assert seen["module"] == str(binary)
     # Smooth predictor friction is registered and passed only when the params have one.
-    width = params.friction and params.friction.width_rad_s
+    width = params.friction and params.friction.law.width_rad_s
     assert seen["register"].get("joint_friction_smoothing") == width == seen["width"]
 
 
@@ -166,7 +166,7 @@ def test_compile_binary_registers_and_rebuilds_without_overwriting(monkeypatch, 
 def test_same_plant_inputs_same_name(tmp_path):
     (tmp_path / "arm.urdf").write_text("<robot/>")
     a = mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES)
-    assert a == mpc.plant_name(tmp_path / "arm.urdf", "ee", Friction([1.] * 7, [.5] * 7, .03))
+    assert a == mpc.plant_name(tmp_path / "arm.urdf", "ee", Friction([1.] * 7, [.5] * 7, Tanh(.03)))
     assert len(a) == len("tiago_right_") + 8 and a.startswith("tiago_right_")
 
 
@@ -178,7 +178,7 @@ def test_changed_plant_identity_changes_name(tmp_path):
         mpc.plant_name(tmp_path / "other.urdf", "ee", LOSSES),
         mpc.plant_name(tmp_path / "arm.urdf", "other_ee", LOSSES),
         mpc.plant_name(tmp_path / "arm.urdf", "ee", None),
-        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, width_rad_s=.05)),
+        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, law=Tanh(.05))),
         mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, coulomb_nm=[2.] * 7)),
         mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, viscous_nm_s_per_rad=[.6] * 7)),
     }
@@ -194,7 +194,7 @@ def test_smooth_model_check_uses_requested_flange_frame():
     solver.sim_forward.side_effect = reached_dynamics
     with pytest.raises(RuntimeError, match="FK check passed"):
         mpc.check_model(solver, model, model.createData(), FLANGE_FRAME, np.ones(7),
-                        Friction([1.] * 7, [1.] * 7, .03))
+                        Friction([1.] * 7, [1.] * 7, Tanh(.03)))
     solver.sim_forward.assert_called_once()
 
 
@@ -218,7 +218,7 @@ def test_the_start_pose_lies_inside_the_planning_box():
 
 @pytest.mark.parametrize("change", [*(dict(max_sqp_time_s=b) for b in (0., -1., np.nan, np.inf)),
                                     *(dict(solver=TIAGO.solver.replace(max_sqp_iters=n)) for n in (0, 2.5)),
-                                    dict(friction=URDF_FRICTION)])  # hard sign: plant only
+                                    dict(friction=URDF_FRICTION), dict(friction=urdf_friction(Sign()))])  # plant-only laws
 def test_invalid_params_are_refused(change):
     with pytest.raises(ValueError):
         replace(TIAGO, **change)

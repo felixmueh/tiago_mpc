@@ -18,12 +18,12 @@ import os
 from pathlib import Path
 import queue
 import sys
-from typing import Any
+from typing import Any, cast
 
 from gato import SolverParams
 import numpy as np
 
-from .dynamics import Friction, passive_torque
+from .dynamics import LAWS, Friction, Tanh, passive_torque
 from .plan import Plan, State
 from .tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
 from .util import cache_root, digest
@@ -73,8 +73,8 @@ class MpcParams:
         time = self.max_sqp_time_s
         if time is not None and (not math.isfinite(time) or time <= 0):
             raise ValueError("max_sqp_time_s must be finite and positive, or None")
-        if self.friction is not None and self.friction.width_rad_s is None:
-            raise ValueError("GATO predicts smooth Coulomb friction only; hard sign is plant-only")
+        if not (self.friction is None or isinstance(self.friction.law, Tanh)):
+            raise ValueError("GATO predicts Tanh Coulomb friction only; Sign and StickSlip are plant-only")
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> MpcParams:
@@ -82,7 +82,8 @@ class MpcParams:
         values = dict(values, solver=SolverParams(**values["solver"]),
                       admm=AdmmLimits(**values["admm"]))
         if values["friction"] is not None:
-            values["friction"] = Friction(**values["friction"])
+            law = dict(values["friction"]["law"])
+            values["friction"] = Friction(**dict(values["friction"], law=LAWS[law.pop("name")](**law)))
         return cls(**values)
 
 
@@ -111,8 +112,10 @@ def set_bounds(solver, model, signs, params):
 # name hashes everything compiled into the module. The hash is a cache key, not provenance.
 def plant_name(gpu_urdf_path: Path, ee_frame: str, friction: Friction | None = None) -> str:
     """tiago_right_<hash> over the GPU URDF bytes, end-effector frame and predictor
-    friction as passed to registration (coefficients and width)."""
-    config = json.dumps(friction and asdict(friction), sort_keys=True).encode()
+    friction as passed to registration (coefficients and Tanh width)."""
+    config = json.dumps(friction and dict(
+        coulomb_nm=friction.coulomb_nm, viscous_nm_s_per_rad=friction.viscous_nm_s_per_rad,
+        width_rad_s=cast(Tanh, friction.law).width_rad_s), sort_keys=True).encode()
     return "tiago_right_" + digest(Path(gpu_urdf_path).read_bytes(), ee_frame.encode(), config)
 
 
@@ -140,7 +143,8 @@ def _register(params: MpcParams, gpu_path: Path, plant: str) -> None:
 
     friction = params.friction
     gato.register_robot(plant, gpu_path, N=[params.N], ee_frame=params.ee_frame,
-                        **({} if friction is None else dict(joint_friction_smoothing=friction.width_rad_s)))
+                        **({} if friction is None
+                           else dict(joint_friction_smoothing=cast(Tanh, friction.law).width_rad_s)))
 
 
 def find_binary(params: MpcParams) -> Path | None:
@@ -208,7 +212,7 @@ def load_controller(params: MpcParams, binary: Path | None):
     friction = params.friction
     # Explicit friction widths: BSQP then never looks up the registration that built the module.
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,
-                       params=params.solver, joint_friction_smoothing=friction and friction.width_rad_s)
+                       params=params.solver, joint_friction_smoothing=friction and cast(Tanh, friction.law).width_rad_s)
     check_model(solver, model, model.createData(), params.ee_frame, signs, friction)
     controller = gato.MPCController(
         solver, limits="admm", linsys="pcg", warm_start=params.warm_start,

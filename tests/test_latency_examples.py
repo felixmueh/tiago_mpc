@@ -10,6 +10,7 @@ from experiments.latency_compensation import implicit_step, run_compensated
 from experiments.latency_study import row
 from experiments.plan_feedback import PlanFeedback, inertia_gains
 from test_loops import Mpc, Plant, Task, commanded, go
+from tiago_mpc.dynamics import Tanh
 from tiago_mpc.laws import sample_knot
 from tiago_mpc.loops import Fixed, run_simulation
 from tiago_mpc.mpc import TIAGO
@@ -121,7 +122,7 @@ def test_the_implicit_step_is_aba_without_friction_and_stable_with_it():
     np.testing.assert_allclose(implicit_step(None)(x, u, h), np.r_[Q_START + h*(x[7:] + h*a), x[7:] + h*a], atol=1e-12)
     # URDF friction: joint 7's time constant is about 36 us. At rest under the holding torque its
     # speed chatters at about +-h c / (m + h b) = 0.15 rad/s from step to step, but does not grow.
-    hold, step = pin.rnea(model, data, Q_START, np.zeros(7), np.zeros(7)), implicit_step(urdf_friction(.03))
+    hold, step = pin.rnea(model, data, Q_START, np.zeros(7), np.zeros(7)), implicit_step(urdf_friction(Tanh(.03)))
     x, speeds = np.r_[Q_START, np.zeros(6), .1], []
     for _ in range(30):
         x = step(x, hold, h)
