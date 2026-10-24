@@ -5,6 +5,15 @@ questions are in `docs/decisions.md`; add an entry there when he decides
 something lasting. The robot path is in `docs/robot.md`, the safety worker in
 `docs/safety.md`.
 
+## Felix owns this repository (Felix, 2026-10-24)
+
+- Felix owns the structure and code of this repository. Implement his decisions
+  as specified; discuss any deviation with him before implementing it: another
+  mechanism, extra machinery or a different structure than he decided (for
+  example, a lazily loading package root where he asked for plain re-exports).
+- Do not commit, merge, rebase or push here. Leave the changes uncommitted in
+  the working tree for Felix to review; he commits.
+
 ## Keep it simple (Felix, 2026-10-22)
 
 - Simpler and smaller while staying correct. Every piece and method earns its
