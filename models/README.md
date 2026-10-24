@@ -33,12 +33,12 @@ that `arm_urdf` adds 0.139288457525 m along the flange's +z
 fingertip pads' inner faces at the neutral gripper posture, the posture at
 which the gripper's inertia is summed into the tool link: a geometric
 convention, not a calibrated TCP, and it does not follow the opening gripper.
-GATO selects it through `ee_frame`, Pinocchio by name; the full URDF does not
+The MPC always tracks it (there is no end-effector setting); GATO selects it through `ee_frame`, Pinocchio by name; the full URDF does not
 have it.
 
 Every task measures it through `tiago.ee_position`, including random100 (the
 grasp-frame positions at its frozen goal postures) and the latency study's far
-reach; `reach()` rejects an MPC whose `ee_frame` is not the grasp frame.
+reach.
 Replays record `end_effector_frame`; missing metadata means the flange. Old
 flange-goal results, such as earlier random100 runs, must not be relabeled as
 grasp-center results.

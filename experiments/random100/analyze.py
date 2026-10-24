@@ -3,7 +3,6 @@
 Run from the checkout's root: python -m experiments.random100.analyze <output-directory>"""
 import argparse
 from collections import Counter
-import csv
 import json
 from pathlib import Path
 

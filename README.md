@@ -74,7 +74,7 @@ uv run python -m mypy                     # the type check alone (pyproject.toml
 - **GATO's module is compiled explicitly.** `compile_binary(params)` generates
   the TIAGo dynamics and compiles one CUDA module per variant (minutes, CPU
   only), `bsqpN<N>_tiago_right_<hash>` with the hash over GATO's version, the
-  GPU URDF, end-effector frame and predictor friction, cached in `GATO_CACHE_DIR` (default
+  GPU URDF, grasp frame and predictor friction, cached in `GATO_CACHE_DIR` (default
   the main checkout's `.cache/gato`); once cached it returns at once,
   `use_cache=False` rebuilds.
   `find_binary(params)` returns the cached module or None. `Mpc(params, binary)`

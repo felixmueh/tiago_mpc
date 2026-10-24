@@ -12,7 +12,6 @@ from experiments.plan_feedback import PlanFeedback, inertia_gains
 from test_loops import Mpc, Plant, Task, commanded, go
 from tiago_mpc.dynamics import Tanh
 from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import run_stepped
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.record import Record

@@ -43,10 +43,6 @@ def reach(plant, mpc, run=tm.run_stepped, task=Reach(), law=tm.sample_knot, out=
           command_period=None, update_period=None, duration=None, solve_latency=None):
     """Reach task with mpc on plant with the loop run (common.run_experiment; run_stepped
     needs solve_latency); duration (seconds) caps the task's timeout."""
-    if mpc.params.ee_frame != tm.GRASP_FRAME:
-        raise ValueError(f"the reach task measures the grasp frame {tm.GRASP_FRAME}; "
-                         f"the MPC tracks {mpc.params.ee_frame}")
-
     def evaluate(record):
         trajectory = record.trajectory
         distance = np.array([task.distance(q) for q in trajectory["state"][:, :7]])

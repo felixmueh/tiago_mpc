@@ -21,7 +21,7 @@ from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction, Sign, Tanh
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.plan import Plan, State
-from tiago_mpc.tiago import FLANGE_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
+from tiago_mpc.tiago import GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
 LOSSES = Friction([1.] * 7, [.5] * 7, Tanh(.03))
@@ -86,7 +86,7 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     # Smooth predictor friction is registered, with its width, only when the params have one.
     friction = {} if params.friction is None else dict(joint_dynamics=True,
                                                          friction_width=params.friction.law.width_rad_s)
-    assert seen["register"] == dict(N=[params.N], ee_frame=params.ee_frame, **friction)
+    assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, **friction)
 
 
 def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no_compile, tmp_path):
@@ -165,42 +165,41 @@ def test_compile_binary_registers_and_rebuilds_without_overwriting(monkeypatch, 
 
 def test_same_plant_inputs_same_name(tmp_path):
     (tmp_path / "arm.urdf").write_text("<robot/>")
-    a = mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES)
-    assert a == mpc.plant_name(tmp_path / "arm.urdf", "ee", Friction([1.] * 7, [.5] * 7, Tanh(.03)))
+    a = mpc.plant_name(tmp_path / "arm.urdf", LOSSES)
+    assert a == mpc.plant_name(tmp_path / "arm.urdf", Friction([1.] * 7, [.5] * 7, Tanh(.03)))
     assert len(a) == len("tiago_right_") + 8 and a.startswith("tiago_right_")
 
 
 def test_changed_plant_identity_changes_name(tmp_path):
     (tmp_path / "arm.urdf").write_text("<robot/>")
     (tmp_path / "other.urdf").write_text("<robot name='x'/>")
-    base = mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES)
+    base = mpc.plant_name(tmp_path / "arm.urdf", LOSSES)
     names = {
-        mpc.plant_name(tmp_path / "other.urdf", "ee", LOSSES),
-        mpc.plant_name(tmp_path / "arm.urdf", "other_ee", LOSSES),
-        mpc.plant_name(tmp_path / "arm.urdf", "ee", None),
-        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, law=Tanh(.05))),
-        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, coulomb_nm=[2.] * 7)),
-        mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, viscous_nm_s_per_rad=[.6] * 7)),
+        mpc.plant_name(tmp_path / "other.urdf", LOSSES),
+        mpc.plant_name(tmp_path / "arm.urdf", None),
+        mpc.plant_name(tmp_path / "arm.urdf", replace(LOSSES, law=Tanh(.05))),
+        mpc.plant_name(tmp_path / "arm.urdf", replace(LOSSES, coulomb_nm=[2.] * 7)),
+        mpc.plant_name(tmp_path / "arm.urdf", replace(LOSSES, viscous_nm_s_per_rad=[.6] * 7)),
     }
-    assert base not in names and len(names) == 6
+    assert base not in names and len(names) == 5
 
 
 def test_another_gato_version_changes_name(monkeypatch, tmp_path):
     (tmp_path / "arm.urdf").write_text("<robot/>")
-    base = mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES)
+    base = mpc.plant_name(tmp_path / "arm.urdf", LOSSES)
     monkeypatch.setattr(mpc.importlib.metadata, "version", lambda name: "0.0.0")
-    assert mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES) != base
+    assert mpc.plant_name(tmp_path / "arm.urdf", LOSSES) != base
 
 
-def test_smooth_model_check_uses_requested_flange_frame():
+def test_smooth_model_check_uses_the_grasp_frame():
     model = pin.buildModelFromUrdf(str(arm_urdf()))
-    # Stop after FK: this regression tests frame selection, not CUDA dynamics.
+    # Stop after FK: this regression tests the frame, not CUDA dynamics.
     reached_dynamics = RuntimeError("FK check passed")
     solver = Mock()
-    solver.ee_pos.side_effect = lambda q: fk(q, FLANGE_FRAME)  # signs are ones
+    solver.ee_pos.side_effect = lambda q: fk(q, GRASP_FRAME)  # signs are ones
     solver.sim_forward.side_effect = reached_dynamics
     with pytest.raises(RuntimeError, match="FK check passed"):
-        mpc.check_model(solver, model, model.createData(), FLANGE_FRAME, np.ones(7),
+        mpc.check_model(solver, model, model.createData(), np.ones(7),
                         Friction([1.] * 7, [1.] * 7, Tanh(.03)))
     solver.sim_forward.assert_called_once()
 
@@ -470,7 +469,7 @@ def test_unknown_update_raises_in_the_callers_process(process, controller):
     assert p._requests.empty() and p.result() is None
 
 
-def test_a_spawned_process_reports_a_failed_build():
-    # A real spawned process: the build fails on the frame before any GPU work.
-    with pytest.raises(RuntimeError, match="Missing end-effector frame"):
-        MpcProcess(replace(TIAGO, ee_frame="no_such_frame"), BINARY)
+def test_a_spawned_process_reports_a_failed_load(tmp_path):
+    # A real spawned process: loading fails on the missing binary before any GPU work.
+    with pytest.raises(RuntimeError, match="FileNotFoundError"):
+        MpcProcess(TIAGO, tmp_path / "missing.so")

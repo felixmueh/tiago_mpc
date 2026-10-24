@@ -121,8 +121,14 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   `tiago.ee_position`, with no historical exceptions: random100 reaches the
   grasp-frame positions at its frozen goal postures (a new protocol; old
   flange results stay as they were and are not comparable), and the latency
-  study's far reach targets the grasp frame. `reach()` requires an MPC on the
-  grasp frame. `MpcParams.ee_frame` and `FLANGE_FRAME` stay.
+  study's far reach targets the grasp frame.
+  `FLANGE_FRAME` stays.
+
+- **2026-10-24: the MPC tracks the grasp frame only** (Felix).
+  `MpcParams.ee_frame` is removed; `mpc.py` uses `GRASP_FRAME`, and `reach()`
+  has no frame check. Plant names are unchanged (they hash the grasp frame's
+  bytes as before), so compiled modules stay valid. `FLANGE_FRAME` and `fk(q, frame)`
+  stay for historical replays.
 
 ## Friction and GATO
 

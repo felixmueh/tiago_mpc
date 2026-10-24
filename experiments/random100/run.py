@@ -73,7 +73,7 @@ def main():
                                atol=1e-6):
                 raise ValueError(f"Frozen task seed differs from the state-hold warm start: {name}")
     config = dict(input_source_commit=manifest["source_commit"], task_ids=ids,
-                  end_effector_frame=PARAMS.ee_frame,
+                  end_effector_frame=tm.GRASP_FRAME,
                   application_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT, text=True).strip(),
                   source_status=subprocess.check_output(["git", "status", "--short"], cwd=tm.ROOT, text=True),
                   params=asdict(PARAMS),
