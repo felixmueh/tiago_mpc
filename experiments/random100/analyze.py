@@ -27,7 +27,7 @@ def main():
         raise ValueError("analyze.py expects a complete 100-case run, not a --pairs subset")
     if [r["task_id"] for r in rows] != config["task_ids"]:
         raise ValueError("Incomplete cohort or changed task order")
-    raw = tm.limits()
+    limits = tm.limits()
     audits = []
     total_work = Counter()
     inner_modes = Counter()
@@ -45,9 +45,9 @@ def main():
             finite = bool(np.isfinite(x).all() and np.isfinite(u).all())
             if not finite or np.any(np.diff(t) <= 0):
                 raise ValueError(f"Nonfinite retained trajectory or invalid clock: {task}")
-            q_ex = np.maximum(raw.lower-x[:, :7], x[:, :7]-raw.upper)
-            v_ex = np.abs(x[:, 7:])-raw.velocity
-            u_ex = np.abs(u)-raw.effort if len(u) else np.zeros((0, 7))
+            q_ex = np.maximum(limits.lower-x[:, :7], x[:, :7]-limits.upper)
+            v_ex = np.abs(x[:, 7:])-limits.velocity
+            u_ex = np.abs(u)-limits.effort if len(u) else np.zeros((0, 7))
             maxima = {k: float(max(0, a.max(initial=0))) for k, a in
                       (("joint", q_ex), ("speed", v_ex), ("torque", u_ex))}
             complete = row["status"] in ("arrived", "timeout")
@@ -140,7 +140,7 @@ Settings: {setting_line}
 Position tolerance 5 cm, joint-speed L1 <= 1 rad/s, zero dwell. Position-only;
 no final approach, collisions, clipping or physical hardware. Fixed simulation
 pacing leaves solve latency unpaid. ADMM uses its finite upstream budget;
-actual inner modes/work are retained. GATO `{first['gato_commit']}`, package
+actual inner modes/work are retained. GATO `{json.dumps(first['gato'])}`, package
 versions `{json.dumps(first['versions'])}` (the first case's summary).
 
 Effective ADMM settings: `{json.dumps(admm_settings)}`.

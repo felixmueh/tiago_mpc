@@ -1,3 +1,42 @@
+# A uv project: `uv sync` creates this checkout's environment (.venv; .venv-container in
+# the container, through UV_PROJECT_ENVIRONMENT) from uv.lock, with tiago_mpc installed
+# editable. README.md has the setup.
+[project]
+name = "tiago-mpc"
+version = "0.1.0"
+requires-python = "==3.10.*"  # ROS 2 Humble's rclpy is 3.10; GATO's module key includes the Python ABI
+dependencies = [
+    "gato-mpc==0.1.5",         # pins grid-rbd==0.5.5 itself (0.5.5 in uv.lock)
+    "pin==3.9.0",
+    "cmeel-urdfdom==4.0.1",    # Pinocchio 3.9 wheels link urdfdom 4 / tinyxml2 10; unconstrained latest breaks import
+    "cmeel-tinyxml2==10.0.0",
+    "matplotlib==3.10.9",
+    "cmake==3.31.10",          # GATO compiles with the environment's cmake (mpc.py puts it first on PATH)
+    "typing-extensions==4.16.0",  # dynamics.py: assert_never (typing has it from 3.11)
+]
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "mypy==2.4.0"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "tiago_mpc"
+module-root = ""               # flat layout: tiago_mpc/ at the checkout's root
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]  # grid-rbd ships Linux wheels only
+
+# A local GATO checkout instead of PyPI, on a branch or worktree only (README.md, "A local
+# GATO fork"): uncomment, point path at the checkout, then `uv lock` and `uv sync`.
+# [tool.uv.sources]
+# gato-mpc = { path = "../GATO", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 # mypy over the core: python -m mypy (tests/test_types.py runs it). The experiments stay untyped.
 [tool.mypy]
 files = ["tiago_mpc", "tests/test_types.py"]

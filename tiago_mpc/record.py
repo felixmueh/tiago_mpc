@@ -1,8 +1,8 @@
 """Record: a callback that buffers each command tick in memory; save() writes the run.
 
-- summary.json: commit and source status, status, parameters, plant model, task,
-  and what the experiment adds to record.summary;
-- trajectory.npz: per command tick its execution time (time_s), the state's time
+- summary.json: commit and source status, the installed GATO (gato_source), status,
+  parameters, plant model, task, and what the experiment adds to record.summary;
+- trajectory.npz: per command tick its time (time_s), the state's time
   (state_time_s), state and command (NaN: none sent); per plan (plan_*) its start
   time, knots and solve stats; plus record.arrays. Times count from the first state's.
 """
@@ -15,7 +15,9 @@ import importlib.metadata
 import json
 from pathlib import Path
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+import urllib.parse
+import urllib.request
 
 import numpy as np
 
@@ -28,6 +30,22 @@ if TYPE_CHECKING:
 
 def _git(*args, cwd=ROOT):
     return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+
+
+def gato_source() -> dict[str, Any]:
+    """The GATO this environment runs: its installed version, the distribution's
+    direct_url.json (None for a PyPI wheel; the path or URL of a local or git install) and
+    gato.__file__; for an editable install also its checkout's commit and source status."""
+    import gato
+
+    dist = importlib.metadata.distribution("gato-mpc")
+    text = dist.read_text("direct_url.json")
+    direct_url = json.loads(text) if text else None
+    source: dict[str, Any] = dict(version=dist.version, direct_url=direct_url, file=gato.__file__)
+    if direct_url and direct_url.get("dir_info", {}).get("editable"):
+        checkout = urllib.request.url2pathname(urllib.parse.urlparse(direct_url["url"]).path)
+        source.update(commit=_git("rev-parse", "HEAD", cwd=checkout), status=_git("status", "--short", cwd=checkout))
+    return source
 
 
 class Record:
@@ -43,7 +61,7 @@ class Record:
         self.summary = dict(
             status="running", repository_commit=_git("rev-parse", "HEAD"),
             repository_status=_git("status", "--short"),
-            gato_commit=_git("rev-parse", "HEAD", cwd=ROOT / "external/gato"),
+            gato=gato_source(),
             versions={k: importlib.metadata.version(k) for k in ("gato-mpc", "grid-rbd", "pin", "numpy")},
             params=asdict(params), task=dict(type=type(task).__name__, **asdict(task)))
 

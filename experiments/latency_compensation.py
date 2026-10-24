@@ -1,14 +1,15 @@
 """Latency compensation in simulation: solve from the state predicted for the moment the
 plan takes effect, and date the plan from then (Findeisen and Allgöwer; Mastalli et al.).
 
-run_simulation(..., latency=Fixed(L)) solves from the state measured at tick t, dates the
+run_stepped(..., solve_latency=L) solves from the state measured at tick t, dates the
 plan t and lets it take effect at t + L, so sample_knot enters it at knot floor(L / dt).
 Once L reaches one knot interval, knot 0, where each new solve's correction sits, never
 runs, and the reach diverges (docs/robot.md, Latency). run_compensated predicts the state
 at t + L under the commands the loop sends until then, solves from it and dates the plan
-t + L, so every plan starts at its knot 0. It is its own loop, not run: run requests from
-the measured state, and its late-plan check, plan.index(t - plan.t0), raises for a plan
-dated in the future. It has run's calling convention; bind its own arguments:
+t + L, so every plan starts at its knot 0. It is its own loop, not run_stepped: run_stepped
+requests from the measured state, and its late-plan check, plan.index(t - plan.t0), raises
+for a plan dated in the future. It has run_stepped's calling convention, without
+solve_latency; bind its own arguments:
 
     reach(SimPlant(substep=.003), Mpc.compile(replace(TIAGO, max_sqp_time_s=None)),
           run=partial(run_compensated, latency_s=.02))
@@ -16,7 +17,7 @@ dated in the future. It has run's calling convention; bind its own arguments:
 The other remedy needs only a control law (plan_feedback.py); latency_study.py compares
 both, alone and together, with stock sample_knot. The main runs one compensated reach.
 
-Run from the checkout's root: python -m experiments.latency_compensation --latency .02
+Run from the checkout's root: python -m experiments.latency_compensation --solve-latency .02
 """
 from __future__ import annotations
 
@@ -95,36 +96,34 @@ def implicit_step(friction):
 
 def run_compensated(plant, mpc, task, law=tm.sample_knot, callbacks=(), *, command_period, update_period,
                     duration, latency_s, compensate=True, prediction_substep_s=None, predictor="implicit"):
-    """run_simulation(..., latency=Fixed(latency_s)), but each request is made from the
+    """run_stepped(..., solve_latency=latency_s), but each request is made from the
     state predicted (predict) at the tick its plan takes effect, and dated then.
-    compensate=False requests from the measured state, dated now: run_simulation's timing.
+    compensate=False requests from the measured state, dated now: run_stepped's timing.
     prediction_substep_s: the longest prediction step (None: one step per command tick);
     predictor: "implicit" (implicit_step, the default) or "gpu" (gpu_step).
-    Simulation clock only; compensating needs the in-process Mpc (its solver and signs).
+    Stepped time only (it starts the plant with Stepped(), which RosPlant refuses);
+    compensating needs the in-process Mpc (its solver and signs). Returns an Outcome.
 
-    As in run: the warm-up before the first tick, one outstanding solve, the next request
+    As in run_stepped: the warm-up before the first tick, one outstanding solve, the next request
     at the first control-update slot at or after its plan took effect, each plan checked
     on arrival and each command guarded, the last tick without a command, plant.stop()
-    first on exit. Left out: the garbage-collection pause and the execution time of a
-    blocking solve (both matter on the wall clock only), the per-tick result() that
-    notices a dead MpcProcess, and the late-plan warning. A Record among the callbacks
+    first on exit. Left out: the garbage-collection pause, the overrun count, and the
+    late-plan warning. A Record among the callbacks
     gets the loop's settings and, per plan, the requested state (predicted or measured)
     and the plant's state at the tick the plan took effect.
     """
-    if plant.clock.kind != "simulation":
-        raise ValueError("run_compensated models the latency on a simulation clock; the robot keeps run_robot")
     ahead = math.ceil(latency_s / command_period - _TOLERANCE)  # a plan takes effect at the first tick at or after t + L
     substeps = 1 if prediction_substep_s is None else math.ceil(command_period / prediction_substep_s - _TOLERANCE)
     step = None
     if compensate:
         step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction)
-    due, plan, pending, start, taken = tm.Schedule(update_period), None, None, None, []
-    plant.start()
+    clock, due, plan, pending, start, taken = tm.Stepped(), tm.Schedule(update_period), None, None, None, []
+    plant.start(clock)
     try:
         mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])  # the arm is still held
         deadline = None
         while True:
-            s, t = plant.state(), plant.now()
+            s, t = plant.state(), clock.now()
             start = s.t if start is None else start
             done = task.done(s, t - start)
             end = done or t - start >= duration - _TOLERANCE
@@ -137,7 +136,7 @@ def run_compensated(plant, mpc, task, law=tm.sample_knot, callbacks=(), *, comma
                     at += command_period
                 x = predict(plan, law, s, at, command_period, step, substeps) if compensate else s
                 mpc.request(x, *task.at(x.t - start, mpc.N, mpc.dt))
-                pending = (at, x, tm.checked(mpc.result(block=True)))  # blocks: the solve takes no simulated time
+                pending = (at, x, tm.checked(mpc.result(block=True)))  # blocks: the solve takes no stepped time
                 if ahead == 0:  # zero latency: this tick
                     new, plan, pending = pending, pending[2], None
             if new is not None:
@@ -149,7 +148,7 @@ def run_compensated(plant, mpc, task, law=tm.sample_knot, callbacks=(), *, comma
             for callback in callbacks:
                 callback(tm.Tick(t, s, command, plan, new is not None))
             if end:
-                return done
+                return tm.Outcome(done)
             deadline = t if deadline is None else deadline
             deadline += command_period
             plant.advance(deadline)
@@ -176,12 +175,12 @@ def note(record, taken, start, settings):
 
 
 def main(argv=None):
-    """One compensated reach on SimPlant, --latency seconds (fixed)."""
+    """One compensated reach on SimPlant, --solve-latency seconds (declared)."""
     args = arguments(__doc__, argv)
-    if args.plant != "sim" or not isinstance(args.latency, tm.Fixed):
-        raise SystemExit("latency_compensation.py: simulation with a fixed --latency only")
+    if args.plant != "sim" or args.solve_latency == "measured":
+        raise SystemExit("latency_compensation.py: simulation with a declared --solve-latency only")
     mpc = tm.Mpc.compile(replace(tm.TIAGO, max_sqp_time_s=None))  # in this process: predict uses its solver
-    record = reach(tm.SimPlant(substep=.003), mpc, run=partial(run_compensated, latency_s=args.latency.s),
+    record = reach(tm.SimPlant(substep=.003), mpc, run=partial(run_compensated, latency_s=args.solve_latency),
                    out=args.output, command_period=args.command_period, update_period=args.update_period,
                    duration=args.duration)
     print(json.dumps({k: v for k, v in record.summary.items() if k not in ("params", "versions")},

@@ -11,6 +11,7 @@ params and close().
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import importlib.metadata
 import json
 import math
 import multiprocessing as mp
@@ -48,6 +49,11 @@ class MpcParams:
     dt_s: float = .01
     solver: SolverParams = SolverParams(
         max_sqp_iters=5, max_pcg_iters=120, pcg_tol=1e-3, mu=10., rho=.01,
+        # ======================================================================
+        # TODO(cost menu): GATO 0.1.5's cost menu (gato.cost_menu) will replace these cost fields
+        # (docs/decisions.md, 2026-10-24). Then q_cost/N_cost are frame_pos weights (running, knot N-1),
+        # qd_cost the state term's velocity weight, u_cost the input weight; *_lim_cost stays here.
+        # ======================================================================
         q_cost=4., qd_cost=.05, u_cost=1e-4, N_cost=8.,
         q_lim_cost=0., vel_lim_cost=0., ctrl_lim_cost=0.)
     ee_frame: str = GRASP_FRAME
@@ -61,7 +67,8 @@ class MpcParams:
     effort_fraction: float = .85
     friction: Friction | None = None  # predictor friction; None is loss-free
     # Wall time for a solve's SQP iterations (MPCController.step's budget_s), within
-    # solver.max_sqp_iters; None: no time limit. Wall clock only: simulations set None.
+    # solver.max_sqp_iters; None: no time limit. launch sets None for a declared solve_latency
+    # and keeps it for "measured", the rehearsal and the robot.
     max_sqp_time_s: float | None = .01
     warmup: bool = True  # Mpc.warmup runs GATO's warm-up solve before the first plan
 
@@ -109,14 +116,17 @@ def set_bounds(solver, model, signs, params):
 
 # GATO compiles one CUDA module per registered plant name and N (minutes). A fixed name
 # per variant would let two variants overwrite each other in a shared cache, so the
-# name hashes everything compiled into the module. The hash is a cache key, not provenance.
+# name hashes everything compiled into the module, and GATO's version: each version's
+# registration (its manifest entry) then has its own name. The hash is a cache key, not provenance.
 def plant_name(gpu_urdf_path: Path, ee_frame: str, friction: Friction | None = None) -> str:
-    """tiago_right_<hash> over the GPU URDF bytes, end-effector frame and predictor
-    friction as passed to registration (coefficients and Tanh width)."""
+    """tiago_right_<hash> over the installed GATO version, the GPU URDF bytes,
+    end-effector frame and predictor friction as passed to registration (coefficients
+    and Tanh width)."""
     config = json.dumps(friction and dict(
         coulomb_nm=friction.coulomb_nm, viscous_nm_s_per_rad=friction.viscous_nm_s_per_rad,
         width_rad_s=cast(Tanh, friction.law).width_rad_s), sort_keys=True).encode()
-    return "tiago_right_" + digest(Path(gpu_urdf_path).read_bytes(), ee_frame.encode(), config)
+    return "tiago_right_" + digest(importlib.metadata.version("gato-mpc").encode(),
+                                   Path(gpu_urdf_path).read_bytes(), ee_frame.encode(), config)
 
 
 def _plant(params: MpcParams):
@@ -142,9 +152,11 @@ def _register(params: MpcParams, gpu_path: Path, plant: str) -> None:
     import gato
 
     friction = params.friction
+    # With joint_dynamics, GRiD generates the GPU URDF's damping and tanh Coulomb friction
+    # into the dynamics and derivatives, with the width compiled in.
     gato.register_robot(plant, gpu_path, N=[params.N], ee_frame=params.ee_frame,
                         **({} if friction is None
-                           else dict(joint_friction_smoothing=cast(Tanh, friction.law).width_rad_s)))
+                           else dict(joint_dynamics=True, friction_width=cast(Tanh, friction.law).width_rad_s)))
 
 
 def find_binary(params: MpcParams) -> Path | None:
@@ -209,11 +221,9 @@ def load_controller(params: MpcParams, binary: Path | None):
     found = _cache.resolve(plant)
     if found is None or not all((found[1] / plant / f).exists() for f in ("grid.cuh", "limits.cuh")):
         _register(params, gpu_path, plant)
-    friction = params.friction
-    # Explicit friction widths: BSQP then never looks up the registration that built the module.
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,
-                       params=params.solver, joint_friction_smoothing=friction and cast(Tanh, friction.law).width_rad_s)
-    check_model(solver, model, model.createData(), params.ee_frame, signs, friction)
+                       params=params.solver)
+    check_model(solver, model, model.createData(), params.ee_frame, signs, params.friction)
     controller = gato.MPCController(
         solver, limits="admm", linsys="pcg", warm_start=params.warm_start,
         reset_rho_each_step=params.reset_rho_each_step, admm_linsys=params.admm_linsys,
@@ -254,6 +264,12 @@ def check_model(solver, model, data, ee_frame, signs, friction=None):
 # Named solver changes, applied before a solve by Mpc (also in MpcProcess). Each persists
 # in the solver until changed again. Add a name when an experiment needs it.
 UPDATES = {
+    # ======================================================================
+    # TODO(cost menu): GATO 0.1.5's cost menu (gato.cost_menu) will replace the three cost updates
+    # below (docs/decisions.md, 2026-10-24); their setters raise while a menu is applied. Then each
+    # rewrites the menu's frame_pos/state/input weights or state target and re-applies the menu.
+    # external_force is dynamics and stays.
+    # ======================================================================
     # dict of scalar weights: q_cost, qd_cost, u_cost, N_cost, *_lim_cost
     "cost_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights(**weights),
     # (N, 3) [ee, qd, u] weights per knot; None returns to the scalar weights
@@ -314,6 +330,10 @@ class Mpc:
         if self.params.warmup:
             x = self._x(state)
             self.controller.reset(x)
+            # ======================================================================
+            # TODO(cost menu): under GATO 0.1.5's cost menu (docs/decisions.md, 2026-10-24) the
+            # solve ignores this reference: write it into frame_pos.target and apply the menu first.
+            # ======================================================================
             self.controller.warmup(x, reference)
             self._reset = True
 
@@ -347,6 +367,11 @@ class Mpc:
         # GATO uses dt_elapsed only to score hypotheses (none here).
         dt_elapsed = None if self._previous_t is None else state.t - self._previous_t
         self._previous_t = state.t
+        # ======================================================================
+        # TODO(cost menu): under GATO 0.1.5's cost menu (docs/decisions.md, 2026-10-24) the
+        # solve ignores this reference: before every solve, write the request's (N, 3) window
+        # into frame_pos.target and re-apply the menu (a copy at unchanged shapes).
+        # ======================================================================
         self.step = step = self.controller.step(x, reference, dt_elapsed=dt_elapsed,
                                                 budget_s=self.params.max_sqp_time_s)
         xu = np.asarray(step.xu_best, dtype=float).reshape(-1)

@@ -1,14 +1,16 @@
 """The experiment tasks, and reach and figure8 end to end on a fake MPC (CPU only)."""
 from dataclasses import replace
-from functools import partial
+import importlib.metadata
 import json
+from types import SimpleNamespace as NS
 
 import numpy as np
 import pinocchio as pin
 import pytest
 
 from experiments import common, figure8 as f8, reach as rc
-from tiago_mpc.loops import Fixed, run_simulation
+from tiago_mpc.loops import run_stepped
+from tiago_mpc import record as rec
 from tiago_mpc.mpc import MpcParams
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.sim import SimPlant
@@ -73,11 +75,11 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05)
         record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task=task, out=tmp_path / name,
-                          run=partial(run_simulation, latency=Fixed(.01)), command_period=.01)
+                          run=run_stepped, solve_latency=.01, command_period=.01)
     else:
         task = f8.Figure8(period_s=.05)
         record = f8.figure8(SimPlant(friction=urdf_friction()), Mpc(replace(f8.FIGURE8, N=4)),
-                            task=task, out=tmp_path / name, command_period=.01)
+                            task=task, out=tmp_path / name, command_period=.01, solve_latency=0.)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     assert summary["status"] == ("timeout" if name == "reach" else "completed")
     assert summary["params"]["N"] == 4 and summary["task"]["type"] == type(task).__name__
@@ -87,10 +89,13 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
         assert summary["plant"]["friction"]["law"] == dict(name="stick_slip")
         assert summary["params"]["friction"]["law"] == dict(width_rad_s=.03, name="tanh")  # predictor stays smooth
     assert summary["ticks"] == 6 and summary["plans"] == 5
+    assert summary["timing"] == dict(loop="run_stepped", command_period_s=.01, update_period_s=.01,
+                                     solve_latency=.01 if name == "reach" else 0., late_ticks=0, overruns=0)
+    assert summary["plant"]["time"] == "stepped"
     with np.load(tmp_path / name / "trajectory.npz") as saved:
         np.testing.assert_allclose(saved["time_s"], np.arange(6) * .01, atol=1e-12)
-        np.testing.assert_array_equal(saved["state_time_s"], saved["time_s"])  # simulation clock
-        # Fixed(10 ms) latency: the first plan takes effect at the second tick.
+        np.testing.assert_array_equal(saved["state_time_s"], saved["time_s"])  # stepped time
+        # The reach's 10 ms latency: the first plan takes effect at the second tick.
         assert np.isnan(saved["command"][-1]).all()
         assert np.isnan(saved["command"][0]).all() == (name == "reach")
         assert saved["plan_states"].shape[1:] == (4, 14) and saved["plan_sqp"].sum() == summary["plans"]
@@ -100,6 +105,20 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
         assert metadata["time_basis"] == "simulation"
         assert MpcParams.from_dict(metadata["provenance"]["params"]) == record.params
     assert record.out == tmp_path / name
+    assert summary["gato"] == rec.gato_source()
+
+
+def test_gato_source_names_the_installed_gato_and_an_editable_checkouts_commit(monkeypatch):
+    import gato
+
+    source = rec.gato_source()
+    assert source["version"] == importlib.metadata.version("gato-mpc") and source["file"] == gato.__file__
+    assert "commit" not in source  # a PyPI wheel has no direct_url.json; uv.lock pins it
+    url = json.dumps(dict(url=rec.ROOT.as_uri(), dir_info=dict(editable=True)))  # this checkout as the fork
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: NS(version="9.9", read_text=lambda f: url))
+    source = rec.gato_source()
+    assert source["version"] == "9.9" and source["commit"] == rec._git("rev-parse", "HEAD")
+    assert source["status"] == rec._git("status", "--short")
 
 
 def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
@@ -112,7 +131,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
 
     mpc = Counting(replace(rc.tm.TIAGO, N=8))  # 10 ms knots, 70 ms plans
     rc.reach(SimPlant(substep=.002), mpc, task=rc.Reach(timeout_s=.06), out=tmp_path / "r",
-             command_period=.002, update_period=.006)
+             command_period=.002, update_period=.006, solve_latency=0.)
     with np.load(tmp_path / "r" / "trajectory.npz") as saved:
         np.testing.assert_allclose(saved["time_s"], np.arange(31) * .002, atol=1e-12)
         assert np.isfinite(saved["command"][:-1]).all()  # a command at every tick but the last
@@ -122,7 +141,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
 def test_duration_caps_the_tasks_own(tmp_path):
     assert common.arguments("", ["--duration", ".02"]).duration == .02
     record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task=rc.Reach(timeout_s=.06),
-                      out=tmp_path / "r", duration=.02)
+                      out=tmp_path / "r", duration=.02, solve_latency=0.)
     assert record.summary["status"] == "timeout" and record.summary["duration_cap_s"] == .02
     assert len(record.ticks) == 11  # 0, 2, ..., 20 ms: the default command period
 
@@ -130,8 +149,9 @@ def test_duration_caps_the_tasks_own(tmp_path):
 def test_a_run_without_solves_reports_zero_work(tmp_path):
     """The goal met at the start, or a zero duration: one tick, no solve."""
     params = replace(rc.tm.TIAGO, N=4)
-    done = rc.reach(SimPlant(substep=.003), Mpc(params), task=rc.Reach(tuple(fk(Q_START))), out=tmp_path / "d")
-    zero = rc.reach(SimPlant(substep=.003), Mpc(params), out=tmp_path / "z", duration=0.)
+    done = rc.reach(SimPlant(substep=.003), Mpc(params), task=rc.Reach(tuple(fk(Q_START))), out=tmp_path / "d",
+                    solve_latency=0.)
+    zero = rc.reach(SimPlant(substep=.003), Mpc(params), out=tmp_path / "z", duration=0., solve_latency=0.)
     for record, status in ((done, "arrived"), (zero, "timeout")):
         summary = json.loads((record.out / "summary.json").read_text())
         assert summary["status"] == status and summary["ticks"] == 1 and summary["solve_calls"] == 0
@@ -146,3 +166,56 @@ def test_an_interrupted_run_is_saved_as_interrupted(tmp_path):
     with pytest.raises(KeyboardInterrupt):
         rc.reach(SimPlant(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), run=interrupted, out=tmp_path / "r")
     assert json.loads((tmp_path / "r" / "summary.json").read_text())["status"] == "interrupted"
+
+
+def test_update_period_0_stays_back_to_back(tmp_path):
+    requests = []
+
+    class Counting(Mpc):
+        def request(self, state, reference, updates=None):
+            requests.append(state.t)
+            super().request(state, reference, updates)
+
+    record = rc.reach(SimPlant(substep=.002), Counting(replace(rc.tm.TIAGO, N=8)), task=rc.Reach(timeout_s=.01),
+                      out=tmp_path / "r", command_period=.002, update_period=0., solve_latency=0.)
+    assert record.summary["timing"]["update_period_s"] == 0.
+    np.testing.assert_allclose(requests, np.arange(5) * .002, atol=1e-12)  # a request at every tick
+
+
+@pytest.mark.parametrize("argv, plant, latency", [([], "sim", 0.), (["--solve-latency", "measured"], "sim", "measured"),
+                                                  (["--solve-latency", ".005"], "sim", .005),
+                                                  (["--plant", "rehearsal"], "rehearsal", None)])
+def test_the_command_line_sets_the_timing(argv, plant, latency):
+    args = common.arguments("", argv)
+    assert args.plant == plant and args.solve_latency == latency
+
+
+@pytest.mark.parametrize("argv", [["--plant", "robot", "--solve-latency", "0"], ["--plant", "rehearsal", "--solve-latency", ".01"],
+                                  ["--solve-latency", "-1"], ["--solve-latency", "nan"], ["--solve-latency", "real"]])
+def test_the_command_line_refuses_a_latency_on_wall_time_or_an_invalid_one(argv):
+    with pytest.raises(SystemExit):
+        common.arguments("", argv)
+
+
+@pytest.mark.parametrize("plant, latency, solver, budget", [("sim", 0., "Mpc", None), ("sim", .005, "Mpc", None),
+                                                            ("sim", "measured", "Mpc", .01),
+                                                            ("rehearsal", None, "MpcProcess", .01)])
+def test_launch_picks_the_loop_the_mpc_and_the_budget(monkeypatch, plant, latency, solver, budget):
+    from types import SimpleNamespace as NS
+    seen = {}
+
+    def compile(name):
+        return lambda params: NS(params=params, close=lambda: None, kind=name)
+
+    monkeypatch.setattr(rc.tm, "Mpc", NS(compile=compile("Mpc")))
+    monkeypatch.setattr(rc.tm, "MpcProcess", NS(compile=compile("MpcProcess")))
+
+    def experiment(plant, mpc, run, solve_latency, **kw):
+        seen.update(plant=plant, mpc=mpc, run=run, solve_latency=solve_latency)
+        return NS(summary={}, out=None)
+
+    argv = ["--plant", plant] + ([] if latency in (None, 0.) else ["--solve-latency", str(latency)])
+    common.launch(common.arguments("", argv), experiment, lambda: NS(close=lambda: None), rc.tm.TIAGO)
+    assert seen["mpc"].kind == solver and seen["mpc"].params.max_sqp_time_s == budget
+    assert seen["run"] is (rc.tm.run_stepped if plant == "sim" else rc.tm.run_real_time)
+    assert seen["solve_latency"] == latency

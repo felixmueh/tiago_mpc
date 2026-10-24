@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
-from functools import partial
 import json
 from pathlib import Path
 import signal
@@ -40,25 +39,35 @@ def solve_summary(trajectory):
 
 
 def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None, update_period=None,
-                   out=None, done_status="done", evaluate=None):
-    """Run task with mpc on plant for at most duration seconds, save the Record in out
+                   solve_latency=None, out=None, done_status="done", evaluate=None):
+    """Run task with mpc on plant for at most duration seconds with the loop run
+    (tm.run_stepped, tm.run_real_time or an experiment's own), save the Record in out
     (default: _expr_data/<task>/<UTC time>/) and export its replay; returns the Record.
     The command period defaults to 2 ms (500 Hz), the update period to the knot
-    interval mpc.dt.
+    interval mpc.dt (0: back to back). solve_latency goes to run unless None (the
+    loop then needs none, as run_real_time).
 
-    The status is done_status when the task is done, "timeout" when the duration ends
-    first, "interrupted" (Ctrl-C, SIGTERM) or "error" (both raise again). A run that
-    ends gets the raw-limit excess, the largest torque and the solve work, then
-    evaluate(record) adds the experiment's metrics. The caller closes plant and mpc.
+    The summary records the loop's timing (timing: the loop, its periods,
+    solve_latency, and its Outcome's late ticks and overruns). The status is
+    done_status when the task is done, "timeout" when the duration ends first,
+    "interrupted" (Ctrl-C, SIGTERM) or "error" (both raise again). A run that ends gets
+    the raw-limit excess, the largest torque and the solve work, then evaluate(record)
+    adds the experiment's metrics. The caller closes plant and mpc.
     """
+    command_period = command_period or .002
+    update_period = mpc.dt if update_period is None else update_period
+    latency = {} if solve_latency is None else dict(solve_latency=solve_latency)
     record = tm.Record(out, task=task, params=mpc.params, plant=plant)
+    record.summary["timing"] = dict(loop=getattr(run, "func", run).__name__, command_period_s=command_period,
+                                    update_period_s=update_period, **latency)
     try:
-        done = run(plant, mpc, task, law, callbacks=[record], command_period=command_period or .002,
-                   update_period=update_period or mpc.dt, duration=duration)
+        outcome = run(plant, mpc, task, law, callbacks=[record], command_period=command_period,
+                      update_period=update_period, duration=duration, **latency)
+        record.summary["timing"].update(late_ticks=outcome.late_ticks, overruns=outcome.overruns)
         trajectory = record.trajectory
         excess = limit_excess(trajectory)
         record.summary.update(
-            status=done_status if done else "timeout", max_limit_excess=excess,
+            status=done_status if outcome.done else "timeout", max_limit_excess=excess,
             limits_pass=max(excess.values()) <= 1e-5,
             max_abs_torque_nm=float(np.nanmax(np.abs(trajectory["command"]), initial=0.)),
             **solve_summary(trajectory))
@@ -74,23 +83,27 @@ def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None,
     return record
 
 
-def latency(text):
-    """'measured', or fixed seconds."""
-    return tm.Measured() if text == "measured" else tm.Fixed(float(text))
+def parse_solve_latency(text):
+    """'measured', or declared seconds."""
+    return text if text == "measured" else float(text)
 
 
 def arguments(description, argv):
     """The options of the experiments' mains."""
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--plant", choices=("sim", "robot"), default="sim")
+    parser.add_argument("--plant", choices=("sim", "rehearsal", "robot"), default="sim",
+                        help="sim: run_stepped with Mpc; rehearsal: SimPlant on run_real_time "
+                             "with MpcProcess; robot: RosPlant on run_real_time (default: sim)")
     parser.add_argument("--execute", action="store_true",
                         help="robot: effort control after typed confirmation (default: checks only)")
     parser.add_argument("--sea-absolute", action="store_true", help="robot: SEA absolute-position feedback")
     parser.add_argument("--target", nargs=3, type=float, metavar=("X_M", "Y_M", "Z_M"),
                         help="reach target or figure-eight start, metres in torso_lift_link (required with --execute)")
-    parser.add_argument("--latency", type=latency, default=tm.Fixed(), help="sim: seconds per solve, or 'measured'")
+    parser.add_argument("--solve-latency", type=parse_solve_latency, metavar="SECONDS|measured",
+                        help="sim: seconds from a request to its plan, or 'measured' (default: 0)")
     parser.add_argument("--command-period", type=float, help="seconds (default: 0.002, 500 Hz)")
-    parser.add_argument("--update-period", type=float, help="seconds between control updates (default: the knot interval)")
+    parser.add_argument("--update-period", type=float,
+                        help="seconds between control updates (default: the knot interval; 0: back to back)")
     parser.add_argument("--duration", type=float, help="seconds: cap the task's own duration")
     parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/<task>/)")
     args = parser.parse_args(argv)
@@ -98,6 +111,12 @@ def arguments(description, argv):
         parser.error("--target must be finite")
     if args.execute and (args.plant != "robot" or args.target is None):
         parser.error("--execute needs --plant robot and an explicit --target")
+    if args.plant != "sim" and args.solve_latency is not None:
+        parser.error("--solve-latency is for --plant sim; on wall time a solve takes as long as it takes")
+    if args.plant == "sim" and args.solve_latency is None:
+        args.solve_latency = 0.
+    if isinstance(args.solve_latency, float) and not (np.isfinite(args.solve_latency) and args.solve_latency >= 0):
+        parser.error("--solve-latency must be finite and nonnegative, or 'measured'")
     return args
 
 
@@ -107,12 +126,20 @@ def _interrupt(signum, frame):
 
 def launch(args, experiment, sim_plant, params):
     """experiment(plant, mpc, run=..., out=..., command_period=..., update_period=...,
-    duration=...) from args, on args.plant with MpcProcess.compile(params); launch closes
-    both and prints the summary. The robot only runs the startup checks (plant.start() and
-    plant.stop()) unless --execute is confirmed; returns the Record or None."""
+    duration=..., solve_latency=...) from args, on args.plant, and closes both; prints the
+    summary. sim: run_stepped with an in-process Mpc.compile(params), without the solver's
+    wall-time budget for a declared --solve-latency (max_sqp_time_s=None), with it for
+    'measured'. rehearsal and robot: run_real_time with
+    MpcProcess.compile(params) and the budget. The robot only runs the startup checks
+    (plant.start(Wall()) and plant.stop()) unless --execute is confirmed; returns the
+    Record or None."""
+    latency = args.solve_latency  # None on wall time
     if args.plant == "sim":
-        plant, run = sim_plant(), partial(tm.run_simulation, latency=args.latency)
-        params = replace(params, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
+        plant, run, solver = sim_plant(), tm.run_stepped, tm.Mpc  # in this process
+        if latency != "measured":
+            params = replace(params, max_sqp_time_s=None)  # a declared latency: the solve's wall time is irrelevant
+    elif args.plant == "rehearsal":
+        plant, run, solver = sim_plant(), tm.run_real_time, tm.MpcProcess  # concurrent, as on the robot
     else:
         if args.execute:
             print("Needs a stationary base and grippers and the arm at rest at comfortable_high_clearance;\n"
@@ -121,20 +148,21 @@ def launch(args, experiment, sim_plant, params):
                 print("Cancelled before creating the ROS client.")
                 raise SystemExit(2)
         signal.signal(signal.SIGTERM, _interrupt)  # stop and hand back as on Ctrl-C
-        plant, run = tm.RosPlant(execute=args.execute, sea_absolute=args.sea_absolute), tm.run_robot
+        plant = tm.RosPlant(execute=args.execute, sea_absolute=args.sea_absolute)
+        run, solver = tm.run_real_time, tm.MpcProcess
         if not args.execute:
             try:
-                plant.start()
+                plant.start(tm.Wall())
                 plant.stop()
             finally:
                 plant.close()
             print(json.dumps(dict(status="checked", plant=plant.settings), indent=2, default=str))
             return None
     try:
-        mpc = tm.MpcProcess.compile(params)  # compiles GATO's module once per variant (minutes)
+        mpc = solver.compile(params)  # compiles GATO's module once per variant (minutes)
         try:
             record = experiment(plant, mpc, run=run, out=args.output, command_period=args.command_period,
-                                update_period=args.update_period, duration=args.duration)
+                                update_period=args.update_period, duration=args.duration, solve_latency=latency)
         finally:
             mpc.close()
     finally:

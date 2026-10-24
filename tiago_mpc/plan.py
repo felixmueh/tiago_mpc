@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import numpy as np
 
-from .clock import Clock
+from .clock import Stepped, Wall
 
 if TYPE_CHECKING:
     from .mpc import MpcParams
@@ -33,7 +33,7 @@ class PlanEnded(RuntimeError):
 
 @dataclass(frozen=True)
 class State:
-    """t: the time the state was measured, in seconds in the plant clock's domain (robot:
+    """t: the time the state was measured, in seconds on the run's time (robot:
     monotonic receipt time); arm q and qd in native coordinates.
 
     The robot path adds the full body's named joint values for the safety check."""
@@ -72,7 +72,7 @@ class Plan:
 
 @dataclass(frozen=True)
 class Tick:
-    """What callbacks see once per command tick: its execution time t and the latest
+    """What callbacks see once per command tick: its time t and the latest
     state (state.t may be older and repeat); command is None before the first plan
     and on the last tick; new marks the tick at which the plan took effect."""
     t: float
@@ -83,15 +83,14 @@ class Tick:
 
 
 class PlantInterface(Protocol):
-    """SimPlant (sim.py) and RosPlant (robot.py). run starts it, then per command tick
-    reads its state and execution time (now), applies a command, which it holds, and
-    advances to the next tick; stop comes first on exit (zero torque, handback).
-    settings: what Record saves about it."""
-    clock: Clock
+    """SimPlant (sim.py) and RosPlant (robot.py). A loop starts it on the loop's time
+    (start(clock): Stepped or Wall, which RosPlant needs), then per command tick reads
+    its state, applies a command, which it holds, and advances to the next tick (the
+    plant integrates to it, the clock reaches it); stop comes first on exit (zero
+    torque, handback). settings: what Record saves about it."""
     settings: dict[str, Any]
 
-    def start(self) -> None: ...
-    def now(self) -> float: ...
+    def start(self, clock: Stepped | Wall) -> None: ...
     def state(self) -> State: ...
     def apply(self, command: np.ndarray) -> None: ...
     def advance(self, t: float) -> None: ...

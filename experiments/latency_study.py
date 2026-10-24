@@ -1,4 +1,4 @@
-"""The two remedies for solve latency against stock sample_knot, on the simulation clock:
+"""The two remedies for solve latency against stock sample_knot, on stepped time:
 latency compensation (latency_compensation.py), feedback around the plan (plan_feedback.py)
 and both together, over fixed latencies and four tasks. Each run once, serially (one GPU job).
 
@@ -43,24 +43,25 @@ CASES = {"stock": (False, tm.sample_knot), "compensated": (True, tm.sample_knot)
 
 def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="implicit", *, task_specs=None):
     """Each task x latency x case with a fresh in-process Mpc; the uncompensated cases run on
-    run_simulation itself. Returns the table rows."""
+    run_stepped itself, with the latency declared. Returns the table rows."""
     rows = []
     for name in tasks:
         experiment, task, params, plant = (TASKS if task_specs is None else task_specs)[name]
-        params = replace(params, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
+        params = replace(params, max_sqp_time_s=None)  # declared latencies: no wall-time budget
         binary = tm.compile_binary(params)
         for ms in latencies_ms:
             for case in cases:
                 compensate, law = CASES[case]
-                run = (partial(run_compensated, latency_s=ms / 1e3, prediction_substep_s=prediction_substep_s,
-                               predictor=predictor)
-                       if compensate
-                       else partial(tm.run_simulation, latency=tm.Fixed(ms / 1e3)))
+                if compensate:  # its own loop, with its own latency argument
+                    run, latency = partial(run_compensated, latency_s=ms / 1e3,
+                                           prediction_substep_s=prediction_substep_s, predictor=predictor), None
+                else:
+                    run, latency = tm.run_stepped, ms / 1e3
                 case_out = out / name / f"{name}_{case}_{ms:g}ms"
                 mpc = tm.Mpc(params, binary)
                 try:
                     experiment(plant(), mpc, run=run, law=law, out=case_out, command_period=COMMAND_PERIOD,
-                               **({} if task is None else dict(task=task)))
+                               solve_latency=latency, **({} if task is None else dict(task=task)))
                 except Exception as exc:  # a fault is a result: run_experiment saved it as "error"
                     print(f"{case_out.name}: {type(exc).__name__}: {exc}", flush=True)
                 finally:

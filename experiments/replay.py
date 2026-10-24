@@ -19,11 +19,12 @@ import numpy as np
 from tiago_mpc.tiago import FLANGE_FRAME, FULL_URDF, GRASP_FRAME, RIGHT_ARM_JOINTS, ROOT_FRAME
 
 FORMAT = "tiago-replay"
+TIME_BASIS = {"stepped": "simulation", "wall": "wall"}  # the plant's kind of time: the format's strings
 VERSION = 1
 
 
 def export_replay(record):
-    """Write <record.out>/replay.npz on execution time: the state and command at each
+    """Write <record.out>/replay.npz on the run's time: the state and command at each
     tick, the task's reference, every plan and the MpcParams (provenance.params);
     nothing for fewer than two ticks."""
     trajectory = record.trajectory
@@ -37,7 +38,7 @@ def export_replay(record):
              for t0, states, torques in zip(trajectory["plan_t0_s"], trajectory["plan_states"],
                                             trajectory["plan_torques"])]
     return save_replay(record.out / "replay.npz", time_s=time_s, q=state[:, :7], qd_rad_s=state[:, 7:],
-                       joint_names=RIGHT_ARM_JOINTS, time_basis=record.plant.settings["clock"],
+                       joint_names=RIGHT_ARM_JOINTS, time_basis=TIME_BASIS[record.plant.settings["time"]],
                        torque_nm=command[sent] if sent.any() else None,
                        torque_time_s=time_s[sent] if sent.any() else None,
                        reference_xyz_m=np.array([record.task.at(t, 2, dt)[0][0, :3] for t in time_s]),

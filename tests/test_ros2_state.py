@@ -188,7 +188,7 @@ def test_importing_the_package_loads_no_ros_and_no_compiled_gato():
         'import tiago_mpc, tiago_mpc.sim, tiago_mpc.robot, experiments.replay\n'
         'assert "rclpy" not in sys.modules\n'
         'compiled = [m for m, v in list(sys.modules.items())\n'
-        '            if str(getattr(v, "__file__", "")).endswith(".so") and "gato" in str(v.__file__).lower()]\n'
+        '            if str(getattr(v, "__file__", "")).endswith(".so") and m.split(".")[0] == "gato"]\n'
         'assert not compiled, compiled'],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

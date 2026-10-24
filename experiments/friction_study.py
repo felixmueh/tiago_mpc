@@ -3,7 +3,7 @@
     python -m experiments.friction_study --dry-run
     python -m experiments.friction_study --output _expr_data/controller-friction/<fresh-name>
 
-Each cell runs once on the simulation clock, serially. The plant uses the URDF's
+Each cell runs once on stepped time (run_stepped), serially. The plant uses the URDF's
 Coulomb and viscous coefficients scaled together by .5, 1 or 1.5, with 1 ms
 semi-implicit steps. Predictors and feedback gains stay unchanged: reaching
 predicts no friction; figure-eight tracking predicts nominal tanh friction.
@@ -45,7 +45,7 @@ def describe(scales, latencies, tasks, cases):
                 time_basis="simulation", predictor="implicit", prediction_substep_s=None,
                 repository_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT, text=True).strip(),
                 source_status=subprocess.check_output(["git", "status", "--short"], cwd=tm.ROOT, text=True),
-                gato_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tm.ROOT / "external/gato", text=True).strip(),
+                gato=tm.gato_source(),
                 urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
                 laws={name: asdict(law) if hasattr(law, "__dataclass_fields__") else law.__name__
                       for name, (_, law) in CASES.items() if name in cases},

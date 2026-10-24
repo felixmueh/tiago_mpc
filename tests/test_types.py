@@ -29,6 +29,6 @@ if TYPE_CHECKING:  # read by mypy only
 
 def test_mypy():
     if importlib.util.find_spec("mypy") is None:
-        pytest.skip("mypy is not installed: pip install -r requirements-dev.txt")
+        pytest.skip("mypy is not installed: uv sync (the dev group)")
     result = subprocess.run([sys.executable, "-m", "mypy"], cwd=ROOT, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr

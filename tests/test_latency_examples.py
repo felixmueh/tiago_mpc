@@ -12,13 +12,13 @@ from experiments.plan_feedback import PlanFeedback, inertia_gains
 from test_loops import Mpc, Plant, Task, commanded, go
 from tiago_mpc.dynamics import Tanh
 from tiago_mpc.laws import sample_knot
-from tiago_mpc.loops import Fixed, run_simulation
+from tiago_mpc.loops import run_stepped
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.plan import Plan, State
 from tiago_mpc.record import Record
 from tiago_mpc.tiago import Q_START, arm_urdf, urdf_friction
 
-pytestmark = pytest.mark.filterwarnings("ignore:a plan took effect")  # run_simulation's late plans
+pytestmark = pytest.mark.filterwarnings("ignore:a plan took effect")  # run_stepped's late plans
 
 
 @pytest.mark.parametrize("compensated", [False, True])
@@ -52,10 +52,10 @@ def test_plan_feedback_follows_the_plans_constant_acceleration_between_knots():
 
 
 @pytest.mark.parametrize("latency", [0., .02, .025])
-def test_uncompensated_it_times_requests_and_plans_as_run_simulation(latency):
-    """The same request times and commands as run_simulation(latency=Fixed(latency))."""
+def test_uncompensated_it_times_requests_and_plans_as_run_stepped(latency):
+    """The same request times and commands as run_stepped(solve_latency=latency)."""
     stock, mine = Mpc(), Mpc()
-    _, a, _ = go(stock, latency=Fixed(latency), duration=.12)
+    _, a, _ = go(stock, solve_latency=latency, duration=.12)
     _, b, _ = go(mine, loop=partial(run_compensated, latency_s=latency, compensate=False), duration=.12)
     assert stock.requests == mine.requests and commanded(a) == commanded(b)
     assert [(k.t, k.new) for k in a] == [(k.t, k.new) for k in b]
@@ -68,7 +68,7 @@ class Moving(Plant):
         self.x, self.u = np.zeros(14), None
 
     def state(self):
-        return State(self.t, self.x[:7].copy(), self.x[7:].copy())
+        return State(self.clock.now(), self.x[:7].copy(), self.x[7:].copy())
 
     def apply(self, command):
         super().apply(command)
@@ -76,8 +76,8 @@ class Moving(Plant):
 
     def advance(self, t):
         if self.u is not None:
-            self.x = step(self.x, self.u, t - self.t)
-        self.t = t
+            self.x = step(self.x, self.u, t - self.clock.now())
+        super().advance(t)
 
 
 class Predicting(Mpc):
@@ -108,9 +108,9 @@ def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp
     assert record.arrays["effect_state"][-1, 7] > 0  # the arm moved: the prediction was not trivial
 
 
-def test_compensation_refuses_a_wall_clock():
-    with pytest.raises(ValueError, match="simulation clock"):
-        go(Mpc(), loop=partial(run_compensated, latency_s=.01), plant=Plant(kind="wall"))
+def test_compensation_runs_on_stepped_time_and_returns_an_outcome():
+    plant, _, outcome = go(Mpc(), loop=partial(run_compensated, latency_s=.01, compensate=False), duration=.03)
+    assert type(plant.clock).__name__ == "Stepped" and not outcome.done and outcome.late_ticks == 0
 
 
 def test_the_implicit_step_is_aba_without_friction_and_stable_with_it():

@@ -42,10 +42,12 @@ the guide documents partial patches, version checks and completion status.
   module (only the MPC process); `test_importing_the_package_loads_no_ros_and_no_compiled_gato` checks this.
 - Experiments use `import tiago_mpc as tm` (Felix, 2026-10-23); package modules import
   each other directly (`from .plan import State`), never through the root.
-- Run experiments as modules from the checkout's root, `python -m experiments.reach` (Felix,
-  2026-10-23): `-m` puts the current directory first, so each worktree imports its own
-  `tiago_mpc` and `experiments`. Never install `tiago_mpc` into a venv; `venv-host` is shared
-  across worktrees.
+- Run experiments as modules, `python -m experiments.reach` (Felix, 2026-10-23), with the
+  checkout's own environment: `uv run python -m …` or `.venv/bin/python -m …`. Each checkout
+  and worktree has its own uv environment with `tiago_mpc` installed editable (Felix,
+  2026-10-24), which also makes `experiments` importable, so this works from any directory.
+  Never run one checkout's code with another checkout's environment; `-m` puts the current
+  directory first, so do not run from another checkout's root either.
 - Docs describe the current code only; git keeps the history.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)
@@ -125,19 +127,25 @@ without ROS.
 
 ## Working here
 
+- **One uv environment per checkout** (Felix, 2026-10-24): `uv sync` creates it
+  from the committed `uv.lock`, `.venv` on the host and `.venv-container` in the
+  container (`UV_PROJECT_ENVIRONMENT`, README), with `tiago_mpc` installed
+  editable. Host and container keep their own environments; do not touch the
+  other side's. GATO is `gato-mpc` from PyPI; a local GATO checkout goes through
+  `[tool.uv.sources]` on a branch or worktree (README), never `uv pip install -e`
+  (the next `uv run` reverts it) and never on main.
 - **One shared GATO cache** (Felix, 2026-10-23): the main checkout's
   `.cache/gato` (`/home/felix/_Uni/MasterThesis/impl/tiago_mpc/.cache/gato`)
-  serves the main checkout and every worktree, on the host (`venv-host`) and in
-  the container (`.venv`) alike; `cache_root()` finds it through git, so leave
-  `GATO_CACHE_DIR` unset (it remains an override). Derived files and GATO's
-  modules are named by their contents, the module key including the toolchain
-  and Python ABI, so host and container builds coexist and worktrees reuse
-  main's compiled modules. A worktree at another GATO commit also sets
-  `PYTHONPATH=<worktree>/external/gato/python`, because `venv-host` imports
-  main's GATO. Where git cannot resolve the main checkout (a host-created
-  worktree inside the container), the default falls back to the worktree's own
-  `.cache/gato`. Host and container keep their own environments (`venv-host`,
-  `.venv`); do not touch the other side's.
+  serves the main checkout and every worktree, on the host and in the container
+  alike; `cache_root()` finds it through git, so leave `GATO_CACHE_DIR` unset
+  (it remains an override). Derived files and GATO's modules are named by their
+  contents, the module key including GATO's native sources, the toolchain and
+  Python ABI, so host and container builds coexist, worktrees reuse main's
+  compiled modules, and a worktree at another GATO gets its own. Plant names
+  hash GATO's version, so the registrations of two GATO versions never
+  overwrite each other (Felix, 2026-10-24). Where git cannot resolve the main
+  checkout (a host-created worktree inside the container), the default falls
+  back to the worktree's own `.cache/gato`.
 - **GPU:** one job at a time; check `nvidia-smi` first.
 - **Agents:** use them for bounded tasks; the root agent coordinates
   interpretation, shared edits and GPU use.
@@ -147,6 +155,6 @@ without ROS.
   checkout's. For all others, propose the exact worktrees and branches to
   remove at the end of a session and where useful work is kept; never remove
   them automatically.
-- **Remotes:** this repository is `felixmueh/gato_tiago`; the GATO submodule is
-  the fork `felixmueh/GATO`. Do not push or update the historical `felix-devel`
-  branch.
+- **Remotes:** this repository is `felixmueh/gato_tiago`. The GATO fork
+  `felixmueh/GATO` stays on GitHub: historical records name its commits (for
+  example `fa58597`). Do not push or update the historical `felix-devel` branch.

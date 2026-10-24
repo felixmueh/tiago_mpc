@@ -2,8 +2,9 @@
 
 `RosPlant` (`tiago_mpc/robot.py`) is the plant for the TIAGo right arm on the
 robot or in Gazebo; `TiagoRightArmClient` (`tiago_mpc/ros2.py`) does the ROS 2
-I/O. The robot runs the same experiments and the same loop as simulation,
-through `run_robot` on the wall clock. **Status:** tested on the CPU with fake
+I/O. The robot runs the same experiments as simulation, through
+`run_real_time` on wall time (the rehearsal, `--plant rehearsal`, runs a
+`SimPlant` on the same loop). **Status:** tested on the CPU with fake
 clients (`tests/test_robot.py`), never run against ROS, Gazebo or the robot.
 
 ## Running
@@ -15,13 +16,13 @@ loads ROS itself; constructing the client raises a `RuntimeError` if the ROS
 packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
 - **Check-only (default):** `python -m experiments.reach --plant robot` creates
-  `RosPlant(execute=False)`, runs `start()` and `stop()`, and prints the checked
+  `RosPlant(execute=False)`, runs `start(Wall())` and `stop()`, and prints the checked
   settings. It reads the controller inventory but loads no controller, switches
   nothing, publishes nothing and builds no MPC. Nothing is saved.
 - **Execution:** `--execute --target X_M Y_M Z_M` (target required). You type
   `EXECUTE` before the ROS client exists. Then `launch` (`experiments/common.py`)
   compiles GATO's module unless it is cached and builds the `MpcProcess`
-  (`MpcProcess.compile`), and `run_robot` calls `plant.start()`, so the startup
+  (`MpcProcess.compile`), and `run_real_time` calls `plant.start(Wall())`, so the startup
   checks see a state read after the build, then `mpc.warmup` from a state read
   after them (GATO's warm-up solve); meanwhile the arm stays under PAL's
   position controller. SIGTERM ends the run like Ctrl-C. `launch` closes the
@@ -51,9 +52,9 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 | `RosPlant(...)` | refuses a disabled safety worker or one monitoring other joints than the right arm |
 | `RosPlant.start()` | first state within 180 s; safety worker started with it; PAL's `arm_right_controller` active (existing effort control is not adopted; mixed or unknown arm owners are rejected); with `execute`, the effort controller loaded and configured; then a newer state passes `state()`'s checks, lies within 0.05 rad of the comfortable pose at joint-speed L1 ≤ 1 rad/s, and the safety worker has checked it |
 | `RosPlant.state()` | receipt age ≤ 100 ms; finite stamp; seven finite q, qd within the URDF position and speed limits; sequence never reversed; a new sample has a later ROS stamp (a clock reset faults); full named body state; every other body joint within 0.02 rad (torso 5 mm) of its start value; the state goes to the safety worker, whose faults latch |
-| loop (`run`) | `plant.start()` and `mpc.warmup` before the first tick; `task.done` before any command (a met goal never activates effort control); no command before the first plan; every knot of a plan within the raw effort limits when it arrives, before any of its knots is commanded (`checked`); `plant.stop()` first on exit |
+| loop (`run_real_time`) | `plant.start(Wall())` (any other clock raises before a ROS call) and `mpc.warmup` before the first tick; `task.done` before any command (a met goal never activates effort control); no command before the first plan; every knot of a plan within the raw effort limits when it arrives, before any of its knots is commanded (`checked`); `plant.stop()` first on exit |
 | `MpcProcess.result()` | every knot finite; expected shapes and knot interval; the plan answers the pending request; an error reply or a dead process raises, polled every tick |
-| `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; execution time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time |
+| `guard` (`loops.py`) | command finite and within the raw effort limits; never clipped; the tick's time before the lease end t₀ + min(100 ms, plan length), t₀ the plan's state time |
 
 The checks raise; nothing retries. Limits are the full URDF's; the
 tolerances are fields of `Checks` in `robot.py`.
@@ -83,34 +84,37 @@ tolerances are fields of `Checks` in `robot.py`.
 ## Latency
 
 A plan starts at its state's time t₀, and `sample_knot` commands the knot due
-at the execution time t. A plan that first takes effect at t − t₀ ≥ dt (one
+at the tick's time t. A plan that first takes effect at t − t₀ ≥ dt (one
 knot interval) never runs its knot 0. Consecutive plans differ mainly in that
 knot, so with every plan that late the loop loses the feedback and can
-diverge. `run` warns at the first such plan, once per run.
+diverge. Both loops warn at the first such plan, once per run.
 
-- On the wall clock a plan takes effect at the first command tick after it
-  arrives. With command ticks of one knot (10 ms), any solve delays it by a
+- On wall time (`run_real_time`) a plan takes effect at the first command tick
+  after it arrives. With command ticks of one knot (10 ms), any solve delays it by a
   full knot; 2 ms ticks (the default) keep a solve of a few milliseconds within
   knot 0.
 - A start outside the joint box makes every solve work at the ADMM iteration
   cap until a plan's knot 0 runs. With the former ADMM settings (cap 100,
-  eps_rel 1e-3) and PAL's comfortable pose, the solves took 42–49 ms, and on the
-  wall clock the lease ended the run. `Q_START` and the current ADMM settings (GATO's, except rho_u) keep
+  eps_rel 1e-3) and PAL's comfortable pose, the solves took 42–49 ms, and on
+  wall time the lease ended the run. `Q_START` and the current ADMM settings (GATO's, except rho_u) keep
   the solves short.
 - Evidence: `research/tiago-mpc-latency-analysis.md` in the thesis workspace
   (simulation, 2026-10-22).
 
-## Clock
+## Time
 
-`RosPlant` runs on `Clock.wall()`. `State.t` is the state's monotonic receipt
-time, in the same domain; it starts the plan and the reference phase. The loop
-reads the execution time `plant.now()` at every tick and samples the plan,
-checks the lease and schedules with it, so a repeated or stale state cannot
-extend a lease. The loop sets each tick's deadline one command period after the
-previous one (a late tick skips the missed ones); `advance()` waits until the
-clock reaches it. Freshness compares receipt times with `Clock.wall_time()`.
-**Open for Gazebo:** `Clock.external()` fed from `/clock`, with the ROS stamps
-as `State.t` (a comment in `RosPlant.__init__`); not implemented.
+`RosPlant` runs on wall time only: `start(clock)` refuses anything but the
+loop's `Wall`. `State.t` is the state's monotonic receipt time, on the same
+clock; it starts the plan and the reference phase. `run_real_time` reads the
+clock at every tick and samples the plan, checks the lease and schedules with
+it, so a repeated or stale state cannot extend a lease. The loop sets each
+tick's deadline one command period after the previous one; `advance()` waits
+until the clock reaches it. A tick that starts a command period or more late
+skips the missed ones, warns once (not the tick after the first command, which
+switches to effort control through blocking service calls) and is counted in
+the summary (`timing.late_ticks`). Freshness compares receipt times with
+`time.monotonic()`. **Open for Gazebo:** a third clock fed from `/clock`, with
+the ROS stamps as `State.t` (a comment in `RosPlant.__init__`); not implemented.
 
 ## ROS client
 
@@ -135,9 +139,9 @@ as `State.t` (a comment in `RosPlant.__init__`); not implemented.
 - Whether PAL's effort receiver expires commands when the publisher stops
   (TODO in `ros2.py`). SIGKILL or a host crash skips the handback; what the
   robot's onboard controllers then do is unknown.
-- On the wall clock the plan in use expires 100 ms after its state; if the
-  next plan arrives later, the run faults. With `SimPlant(clock=Clock.wall())`,
-  `run_robot` and `MpcProcess`, two runs each (2026-10-23, desktop GPU), the
+- On wall time the plan in use expires 100 ms after its state; if the
+  next plan arrives later, the run faults. With a `SimPlant` on wall time,
+  the robot's loop and `MpcProcess`, two runs each (2026-10-23, desktop GPU), the
   default reach and the latency analysis' 31.7 cm far reach arrived within the
   limits with 2 ms command ticks (0.11 s and 1.64–1.69 s; median solve 3 ms, at
   most 5 ms). With 10 ms command ticks every plan took effect a knot late: the

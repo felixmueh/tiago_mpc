@@ -14,13 +14,14 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import time
-from typing import Literal
+from typing import Any, Literal
+import warnings
 
 import numpy as np
 import pinocchio as pin
 from gato.common import rk4
 
-from .clock import Clock
+from .clock import Stepped, Wall
 from .dynamics import Friction, StickSlip, plant_euler, plant_rk4
 from .plan import State
 from .tiago import Q_START, arm_urdf
@@ -30,14 +31,17 @@ class SimPlant:
     """Starts at rest in q (default: the comfortable pose) when the run starts and stays
     there until the first command.
 
-    clock is Clock.simulation() by default; Clock.wall() runs in real time (for
-    run_robot). state() first integrates up to the clock's time, so State.t is when
-    the state is read. model and data are the Pinocchio handles.
+    The loop's clock comes at start: on stepped time state() and apply() find the plant
+    at the tick's time, on wall time they first integrate up to the clock's time, so
+    State.t is when the state is read. sync_real_time=True paces a stepped run for
+    watching: advance also waits until the wall clock, counted from the first tick
+    (after the warm-up), has caught up with the stepped time. It warns once when behind and never changes the results;
+    on wall time it raises. model and data are the Pinocchio handles.
     """
 
     def __init__(self, q: np.ndarray = Q_START, qd: np.ndarray | None = None, *, substep: float = .001,
                  friction: Friction | None = None,
-                 integrator: Literal["rk4", "euler"] | None = None, clock: Clock | None = None):
+                 integrator: Literal["rk4", "euler"] | None = None, sync_real_time: bool = False):
         if not np.isfinite(substep) or substep <= 0:
             raise ValueError("substep must be finite and positive")
         integrator = integrator or ("rk4" if friction is None else "euler")
@@ -48,18 +52,20 @@ class SimPlant:
         self.model = pin.buildModelFromUrdf(str(arm_urdf()))
         self.data = self.model.createData()
         self.friction, self.substep, self.integrator = friction, substep, integrator
-        self.clock = Clock.simulation() if clock is None else clock
-        self.settings = dict(friction=friction and asdict(friction), substep_s=substep, clock=self.clock.kind,
-                             integrator=integrator)
+        self.sync_real_time = sync_real_time
+        self.settings: dict[str, Any] = dict(friction=friction and asdict(friction), substep_s=substep,
+                                             integrator=integrator, sync_real_time=sync_real_time)
         self.q = np.array(q, dtype=float)
         self.qd = np.zeros(7) if qd is None else np.array(qd, dtype=float)
         self.command: np.ndarray | None = None
 
-    def start(self) -> None:
-        self.t = self.clock.now()
-
-    def now(self) -> float:
-        return self.clock.now()
+    def start(self, clock: Stepped | Wall) -> None:
+        if self.sync_real_time and isinstance(clock, Wall):
+            raise ValueError("sync_real_time paces stepped time; on wall time the plant is in real time already")
+        self.clock, self.t = clock, clock.now()
+        self.settings["time"] = "wall" if isinstance(clock, Wall) else "stepped"
+        self._paced_from: tuple[float, float] | None = None  # pacing: wall and stepped time at the first tick
+        self._behind = False
 
     def state(self) -> State:
         self._integrate(self.clock.now())
@@ -71,17 +77,25 @@ class SimPlant:
         self.command = np.array(command, dtype=float)
 
     def advance(self, t: float) -> None:
-        """Integrate to t with the held command, then advance the simulation clock to t
-        or wait until the wall clock reaches t (late: return at once)."""
+        """Integrate to t with the held command, then let the clock reach t: stepped time
+        moves to t, wall time is waited for (late: at once). Paced, then also wait for the
+        wall clock."""
+        if self.sync_real_time and self._paced_from is None:  # from the first tick, after the warm-up
+            self._paced_from = (time.monotonic(), self.t)
         self._integrate(t)
-        if self.clock.kind == "simulation":
-            self.clock.advance(t - self.clock.now())
-        else:
-            time.sleep(max(0., t - self.clock.now()))
+        self.clock.reach(t)
+        if self._paced_from is not None:
+            wall, start = self._paced_from
+            wait = wall + (t - start) - time.monotonic()
+            if wait < 0 and not self._behind:
+                self._behind = True
+                warnings.warn(f"sync_real_time: the run fell {-1e3 * wait:.1f} ms behind the wall clock "
+                              "(warned once per run; the results are unaffected)")
+            time.sleep(max(0., wait))
 
     def _integrate(self, t):
         """Integrate the held command from self.t to t in substeps; nothing unless t is later
-        (state and apply on the simulation clock, or a deadline passed on the wall clock)."""
+        (state and apply on stepped time, or a deadline passed on wall time)."""
         if t - self.t <= 1e-12:
             return
         # No command yet: the state stays while time moves on, as the robot's onboard position

@@ -1,8 +1,0 @@
-# GATO's exact source commit is recorded by the external/gato gitlink.
--e ./external/gato
-pin==3.9.0
-# Pinocchio 3.9 wheels link urdfdom 4 / tinyxml2 10; unconstrained latest breaks import.
-cmeel-urdfdom==4.0.1
-cmeel-tinyxml2==10.0.0
-matplotlib==3.10.9
-cmake==3.31.10

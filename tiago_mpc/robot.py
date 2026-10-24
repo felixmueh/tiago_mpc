@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from .clock import Clock
+from .clock import Stepped, Wall
 from .loops import LEASE_S
 from .plan import State
 from .ros2 import ArmState, TiagoRightArmClient
@@ -64,10 +64,11 @@ class RosPlant:
         if not safety.enabled or tuple(safety.controlled_joint_names) != RIGHT_ARM_JOINTS:
             raise ValueError("the robot needs the safety worker on the controlled right-arm joints")
         self.execute, self.checks, self.safety = execute, checks, safety
-        # Gazebo would use Clock.external() fed from /clock, with the ROS stamps as State.t.
-        self.clock = Clock.wall()
+        # The loop's wall clock, from start. Gazebo would need a third clock fed from
+        # /clock, with the ROS stamps as State.t.
+        self.clock: Wall
         self.settings: dict[str, Any] = dict(
-            clock=self.clock.kind, execute=execute, sea_absolute=sea_absolute, checks=asdict(checks),
+            time="wall", execute=execute, sea_absolute=sea_absolute, checks=asdict(checks),
             safety=asdict(safety), ros_distro=os.environ.get("ROS_DISTRO"),
             activated=False, restored=None, cleanup_errors=[])
         self.monitor: AsyncSafetyMonitor | None = None
@@ -77,11 +78,14 @@ class RosPlant:
         self._activated = self._uncertain = False
         self.client = TiagoRightArmClient(sea_absolute=sea_absolute)
 
-    def start(self) -> None:
+    def start(self, clock: Stepped | Wall) -> None:
         """Startup checks on a fresh state: the safety worker's initial check, PAL's
         position controller in charge, the arm at rest at the comfortable pose.
-        execute=True also loads and configures the effort controller (no switch)."""
-        c, client = self.checks, self.client
+        execute=True also loads and configures the effort controller (no switch).
+        The robot runs on wall time only (run_real_time); any other clock raises first."""
+        if not isinstance(clock, Wall):
+            raise ValueError("the robot runs on wall time only: use run_real_time")
+        self.clock, c, client = clock, self.checks, self.client
         first = client.read_state(timeout_sec=c.first_state_s, max_age_sec=c.state_age_s)
         self.monitor = AsyncSafetyMonitor(settings=self.safety, initial_state=safety_state(first))
         if client.active_arm_controller(timeout_sec=c.service_s) != "arm_right_controller":
@@ -93,9 +97,6 @@ class RosPlant:
                                           max_age_sec=c.state_age_s)
         self._ready(self._check(self._initial))
         self._last = self._initial
-
-    def now(self) -> float:
-        return self.clock.now()
 
     def state(self) -> State:
         """The checked state, t its monotonic receipt time."""
@@ -110,7 +111,7 @@ class RosPlant:
 
     def advance(self, t: float) -> None:
         """Wait until the clock reaches t; late: return at once."""
-        time.sleep(max(0., t - self.clock.now()))
+        self.clock.reach(t)
 
     def stop(self) -> None:
         """Zero torque and handback to PAL's position controller; nothing before activation.
@@ -157,7 +158,7 @@ class RosPlant:
         """Fresh, finite, within the limits, in order, and the rest of the body still."""
         if s is None:
             raise RuntimeError("joint state unavailable")
-        age = self.clock.wall_time() - s.received_monotonic_sec
+        age = time.monotonic() - s.received_monotonic_sec
         if not math.isfinite(age) or age < 0 or age > self.checks.state_age_s:
             raise RuntimeError("joint state stale or invalid receipt time")
         if not math.isfinite(s.stamp_sec):
@@ -215,7 +216,7 @@ class RosPlant:
 
         def progress():
             self._fresh()
-            if self.clock.now() >= hold_until:
+            if time.monotonic() >= hold_until:
                 raise RuntimeError("effort activation outlasted the command lease")
             self.client.publish_effort(command)
 

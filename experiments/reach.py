@@ -39,10 +39,10 @@ class Reach:
                     and np.abs(state.qd).sum() <= self.speed_l1_tol_rad_s)
 
 
-def reach(plant, mpc, run=tm.run_simulation, task=Reach(), law=tm.sample_knot, out=None,
-          command_period=None, update_period=None, duration=None):
-    """Reach task with mpc on plant (common.run_experiment); duration (seconds) caps
-    the task's timeout."""
+def reach(plant, mpc, run=tm.run_stepped, task=Reach(), law=tm.sample_knot, out=None,
+          command_period=None, update_period=None, duration=None, solve_latency=None):
+    """Reach task with mpc on plant with the loop run (common.run_experiment; run_stepped
+    needs solve_latency); duration (seconds) caps the task's timeout."""
     if mpc.params.ee_frame != tm.GRASP_FRAME:
         raise ValueError(f"the reach task measures the grasp frame {tm.GRASP_FRAME}; "
                          f"the MPC tracks {mpc.params.ee_frame}")
@@ -58,7 +58,7 @@ def reach(plant, mpc, run=tm.run_simulation, task=Reach(), law=tm.sample_knot, o
             final_speed_l1_rad_s=float(np.abs(trajectory["state"][-1, 7:]).sum()))
 
     return run_experiment(plant, mpc, task, law, run, command_period=command_period,
-                          update_period=update_period,
+                          update_period=update_period, solve_latency=solve_latency,
                           duration=task.timeout_s if duration is None else min(task.timeout_s, duration),
                           out=out, done_status="arrived", evaluate=evaluate)
 

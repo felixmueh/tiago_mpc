@@ -9,7 +9,8 @@ from experiments import common, figure8 as f8, reach as rc
 from test_loops import Mpc, Task
 import tiago_mpc as tm
 from tiago_mpc import clock as clock_module, robot
-from tiago_mpc.loops import run_robot
+from tiago_mpc.clock import Stepped, Wall
+from tiago_mpc.loops import run_real_time, run_stepped
 from tiago_mpc.ros2 import ArmState
 from tiago_mpc.safety import CollisionSafetySettings
 from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS
@@ -108,7 +109,7 @@ def rig(monkeypatch):
     clock = Clock()
     arm = Arm(clock)
     monkeypatch.setattr(robot, "time", clock)
-    monkeypatch.setattr(clock_module, "time", clock)  # the plant's Clock.wall()
+    monkeypatch.setattr(clock_module, "time", clock)  # Wall
     monkeypatch.setattr(robot, "TiagoRightArmClient", lambda **kwargs: arm)
     monkeypatch.setattr(robot, "AsyncSafetyMonitor", Monitor)
     return NS(clock=clock, arm=arm)
@@ -116,7 +117,7 @@ def rig(monkeypatch):
 
 def test_check_only_never_loads_a_controller_switches_or_publishes(rig):
     plant = robot.RosPlant()
-    plant.start()
+    plant.start(Wall())
     plant.state()
     with pytest.raises(RuntimeError, match="check-only"):
         plant.apply(np.ones(7))
@@ -129,7 +130,7 @@ def test_check_only_never_loads_a_controller_switches_or_publishes(rig):
 
 def test_the_first_apply_activates_and_stop_hands_back(rig):
     plant = robot.RosPlant(execute=True)
-    plant.start()
+    plant.start(Wall())
     assert rig.arm.calls == ["list", "configure"]
     plant.state()
     plant.apply(np.ones(7))
@@ -146,7 +147,7 @@ def test_the_first_apply_activates_and_stop_hands_back(rig):
 
 def test_stop_before_activation_publishes_nothing_and_keeps_the_controller(rig):
     plant = robot.RosPlant(execute=True)
-    plant.start()
+    plant.start(Wall())
     plant.stop()
     assert "handback" not in rig.arm.calls and not rig.arm.published
 
@@ -165,7 +166,7 @@ def test_stop_before_activation_publishes_nothing_and_keeps_the_controller(rig):
 ])
 def test_each_state_check_faults(rig, change, text):
     plant = robot.RosPlant()
-    plant.start()
+    plant.start(Wall())
     plant.state()
     rig.arm.change = change
     with pytest.raises(RuntimeError, match=text):
@@ -174,7 +175,7 @@ def test_each_state_check_faults(rig, change, text):
 
 def test_unobserved_wheels_and_small_drift_pass(rig):
     plant = robot.RosPlant()
-    plant.start()
+    plant.start(Wall())
     rig.arm.change = lambda s: replace(s, joint_positions={**s.joint_positions, "torso_lift_joint": .204})
     assert plant.state().t == rig.clock.now
 
@@ -186,14 +187,14 @@ def test_unobserved_wheels_and_small_drift_pass(rig):
 def test_start_needs_the_comfortable_pose_at_rest(rig, change, text):
     rig.arm.change = change
     with pytest.raises(RuntimeError, match=text):
-        robot.RosPlant(execute=True).start()
+        robot.RosPlant(execute=True).start(Wall())
     assert "configure" in rig.arm.calls and "switch" not in rig.arm.calls
 
 
 def test_existing_effort_control_is_not_adopted(rig):
     rig.arm.owner = "effort"
     with pytest.raises(RuntimeError, match="existing effort"):
-        robot.RosPlant(execute=True).start()
+        robot.RosPlant(execute=True).start(Wall())
     assert rig.arm.calls == ["list"]
 
 
@@ -206,7 +207,7 @@ def test_safety_cannot_be_disabled_or_monitor_another_arm(rig):
 
 def test_a_safety_fault_ends_state(rig):
     plant = robot.RosPlant()
-    plant.start()
+    plant.start(Wall())
     plant.monitor.fault = True
     with pytest.raises(RuntimeError, match="collision"):
         plant.state()
@@ -216,7 +217,7 @@ def test_a_safety_fault_ends_state(rig):
 def test_a_failed_activation_hands_back_but_never_claims_restoration(rig, fault, text):
     setattr(rig.arm, fault, True)
     plant = robot.RosPlant(execute=True)
-    plant.start()
+    plant.start(Wall())
     plant.state()
     with pytest.raises(RuntimeError, match=text):
         plant.apply(np.ones(7))
@@ -229,7 +230,7 @@ def test_a_failed_activation_hands_back_but_never_claims_restoration(rig, fault,
 def test_a_failed_handback_is_reported(rig):
     rig.arm.reject_handback = True
     plant = robot.RosPlant(execute=True)
-    plant.start()
+    plant.start(Wall())
     plant.state()
     plant.apply(np.ones(7))
     with pytest.raises(RuntimeError, match="handback rejected"):
@@ -239,29 +240,41 @@ def test_a_failed_handback_is_reported(rig):
 
 def test_advance_waits_until_its_clock_reaches_the_deadline(rig):
     plant = robot.RosPlant()
-    plant.start()
-    deadline = plant.now() + .01
+    plant.start(Wall())
+    deadline = rig.clock.now + .01
     plant.advance(deadline)
-    assert plant.now() == pytest.approx(deadline, abs=1e-12)
+    assert rig.clock.now == pytest.approx(deadline, abs=1e-12)
     rig.clock.now += .02  # late: at once
     plant.advance(deadline + .01)
-    assert plant.now() == pytest.approx(deadline + .02, abs=1e-12)
+    assert rig.clock.now == pytest.approx(deadline + .02, abs=1e-12)
 
 
-def test_run_robot_activates_once_and_hands_back(rig):
+def test_the_robot_refuses_stepped_time_before_any_ros_call(rig):
     plant = robot.RosPlant(execute=True)
-    assert not run_robot(plant, Mpc(N=32), Task(), command_period=.01, update_period=.01, duration=.1)
+    with pytest.raises(ValueError, match="wall time only"):
+        plant.start(Stepped())
+    with pytest.raises(ValueError, match="wall time only"):
+        run_stepped(plant, Mpc(), Task(), command_period=.01, update_period=.01, duration=.1, solve_latency=0.)
+    assert not rig.arm.calls and plant.monitor is None and not rig.arm.published
+
+
+@pytest.mark.filterwarnings("ignore:a plan took effect")  # 10 ms ticks: each plan from the tick after its state
+def test_run_real_time_activates_once_and_hands_back(rig):
+    plant = robot.RosPlant(execute=True)
+    outcome = run_real_time(plant, Mpc(N=32), Task(), command_period=.01, update_period=.01, duration=.1)
+    assert not outcome.done and outcome.late_ticks == 0  # the 15 ms switch: behind, within the period
     assert rig.arm.calls.count("switch") == 1 and rig.arm.calls[-1] == "handback"
     assert plant.settings["restored"] is True and not rig.arm.published[-1].any()
     assert sum(u.any() for u in rig.arm.published) >= 10
 
 
-def test_run_robot_never_activates_for_a_goal_already_met(rig):
+def test_run_real_time_never_activates_for_a_goal_already_met(rig):
     plant = robot.RosPlant(execute=True)
-    assert run_robot(plant, Mpc(), Task(done_at=0.), command_period=.01, update_period=.01, duration=1.)
+    assert run_real_time(plant, Mpc(), Task(done_at=0.), command_period=.01, update_period=.01, duration=1.).done
     assert "switch" not in rig.arm.calls and not rig.arm.published
 
 
+@pytest.mark.filterwarnings("ignore:a plan took effect")  # 10 ms ticks: each plan from the tick after its state
 def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
     mpc, plant = Mpc(N=32), robot.RosPlant(execute=True)
 
@@ -269,7 +282,7 @@ def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
         mpc.dead = tick.command is not None
 
     with pytest.raises(RuntimeError, match="exited"):
-        run_robot(plant, mpc, Task(), callbacks=[die], command_period=.01, update_period=.01, duration=1.)
+        run_real_time(plant, mpc, Task(), callbacks=[die], command_period=.01, update_period=.01, duration=1.)
     assert rig.arm.calls[-1] == "handback" and not rig.arm.published[-1].any()
 
 
@@ -315,7 +328,7 @@ def test_confirmed_execution_runs_the_experiment_on_the_robot_and_closes_both(ri
     monkeypatch.setattr(module, name, experiment)
     assert module.main(["--plant", "robot", "--execute", "--target", ".5", ".1", ".2"]) == 0
     (plant, mpc, run, task), = runs
-    assert type(plant) is robot.RosPlant and plant.execute and run is run_robot
+    assert type(plant) is robot.RosPlant and plant.execute and run is run_real_time
     assert mpc.params is (rc.tm.TIAGO if module is rc else f8.FIGURE8)
     assert (task.target_m if module is rc else task.start_m) == (.5, .1, .2)
     assert closed == ["mpc"] and rig.arm.closed

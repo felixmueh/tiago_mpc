@@ -9,11 +9,10 @@ a joint-space PD on the plan's own knot states, at the command rate:
 
 so the arm is pulled back onto the trajectory the plan expects, whenever the plan took
 effect. OCS2 feeds back with Riccati gains here; GATO returns none, hence a PD.
-A law needs no loop of its own: it plugs into run_simulation, run_robot and the
+A law needs no loop of its own: it plugs into run_stepped, run_real_time and the
 experiments (latency compensation, the other remedy, does: latency_compensation.py).
 
-    reach(SimPlant(substep=.003), mpc, run=partial(run_simulation, latency=Fixed(.02)),
-          law=PlanFeedback())
+    reach(SimPlant(substep=.003), mpc, run=run_stepped, solve_latency=.02, law=PlanFeedback())
 
 The main runs one reach in simulation as experiments/reach.py does, with this law.
 

@@ -65,9 +65,8 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     name = "gato." + binary.stem
 
     class Solver:
-        def __init__(self, urdf, *, batch_size, N, dt, plant_type, params, joint_friction_smoothing):
-            seen.update(N=N, dt=dt, solver=params.asdict(), module=sys.modules[name].__file__,
-                        width=joint_friction_smoothing)
+        def __init__(self, urdf, *, batch_size, N, dt, plant_type, params):
+            seen.update(N=N, dt=dt, solver=params.asdict(), module=sys.modules[name].__file__)
 
         def set_row_group_bounds(self, group, lo, hi):
             seen.setdefault("bounds", []).append(group)
@@ -84,9 +83,10 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     assert (seen["N"], seen["dt"], seen["solver"]) == (params.N, params.dt_s, params.solver.asdict())
     assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
     assert seen["module"] == str(binary)
-    # Smooth predictor friction is registered and passed only when the params have one.
-    width = params.friction and params.friction.law.width_rad_s
-    assert seen["register"].get("joint_friction_smoothing") == width == seen["width"]
+    # Smooth predictor friction is registered, with its width, only when the params have one.
+    friction = {} if params.friction is None else dict(joint_dynamics=True,
+                                                         friction_width=params.friction.law.width_rad_s)
+    assert seen["register"] == dict(N=[params.N], ee_frame=params.ee_frame, **friction)
 
 
 def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no_compile, tmp_path):
@@ -183,6 +183,13 @@ def test_changed_plant_identity_changes_name(tmp_path):
         mpc.plant_name(tmp_path / "arm.urdf", "ee", replace(LOSSES, viscous_nm_s_per_rad=[.6] * 7)),
     }
     assert base not in names and len(names) == 6
+
+
+def test_another_gato_version_changes_name(monkeypatch, tmp_path):
+    (tmp_path / "arm.urdf").write_text("<robot/>")
+    base = mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES)
+    monkeypatch.setattr(mpc.importlib.metadata, "version", lambda name: "0.0.0")
+    assert mpc.plant_name(tmp_path / "arm.urdf", "ee", LOSSES) != base
 
 
 def test_smooth_model_check_uses_requested_flange_frame():

@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 from experiments.reach import Reach, reach
 import tiago_mpc as tm
 
-PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # no wall-time limit on the simulation clock
+PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # a declared latency (0): no wall-time budget
 
 
 def aggregate(out, rows, expected):
@@ -107,7 +107,7 @@ def main():
         plant, mpc = tm.SimPlant(x0[:7], x0[7:], substep=.003), None
         try:
             mpc = tm.MpcProcess(PARAMS, binary)
-            reach(plant, mpc, task=Reach(target), out=case)
+            reach(plant, mpc, task=Reach(target), out=case, solve_latency=0.)  # run_stepped
         except Exception:
             traceback.print_exc()
         finally:

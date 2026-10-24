@@ -28,7 +28,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   reference and the named solver updates for a request at t (`None` when it
   changes nothing); it replaced `reference` and the optional `updates`.
   Additional experiment-setting metadata belongs to another project; safety
-  internals and the unfinished ROS2 SEA path remain outside this review.
+  internals and the unfinished ROS2 SEA path remain outside this review. The
+  clock part (`Clock`, `plant.now()`) is superseded by the 2026-10-24 entry
+  (two loops, `Stepped` and `Wall`).
 - **2026-10-23: the effort check belongs to the execution side.** `Mpc` and
   `MpcProcess` return what they planned (`result()` checks only that the plan is
   well formed and finite); `run` checks every knot of a plan when it arrives and
@@ -66,7 +68,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   an explicit `__all__`; modules inside the package import each other directly, never
   through the root. `experiments/replay.py` keeps importing
   `tiago_mpc.tiago` directly: it needs only NumPy-level facts. Same day: experiments run as `python -m experiments.<name>`
-  from the checkout's root and no longer insert `sys.path`; `tiago_mpc` is never installed.
+  from the checkout's root and no longer insert `sys.path`; `tiago_mpc` is never installed
+  (superseded 2026-10-24: each checkout's uv environment installs it editable; see Friction and GATO).
 
 ## Model and coefficients
 
@@ -108,7 +111,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - **2026-10-21: the joint-6 conversion stays.** The pinned GATO fixed-arm adapter
   needs joint 6's axis and limits normalized in a generated GPU URDF and the
   q, qd, u signs mapped at the GPU boundary; everything else is native. The
-  upstream native-axes PR is not in the pin.
+  upstream native-axes PR was not in the pin. 2026-10-24: GATO 0.1.5 contains
+  it (PR #21); the conversion stays until its removal is evaluated separately.
 - **2026-10-21: grasp-center frame.** Tasks track `arm_right_grasp_joint`, a
   massless frame 0.139 m along the flange's +z: the nominal midpoint of the
   finger pads at zero gripper posture, not a calibrated TCP. Summaries and
@@ -122,8 +126,40 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Friction and GATO
 
+- **2026-10-24: GATO 0.1.5 from PyPI, and a uv project** (Felix; plan in the
+  thesis workspace, `research/tiago-mpc-gato-0.1.5-and-uv-plan.md`). This
+  supersedes the fork entry of 2026-10-21 below.
+  - **GATO:** `gato-mpc==0.1.5`, which pins `grid-rbd==0.5.5`, replaces the
+    submodule `external/gato`. `requirements*.txt` and `scripts/setup.sh` are
+    removed; README holds the setup commands. The GitHub fork `felixmueh/GATO`
+    stays, because historical records name its commits.
+  - **Environments:** one uv environment per checkout, `.venv` on the host and
+    `.venv-container` in the container (`UV_PROJECT_ENVIRONMENT`, with
+    `UV_PYTHON_PREFERENCE=only-system`), `requires-python ==3.10.*`, a
+    `.python-version` of 3.10, and a committed `uv.lock`. `tiago_mpc` is
+    installed editable into each; this supersedes "never installed" (2026-10-23)
+    and the worktree `PYTHONPATH` rule. `experiments` stays an undeclared
+    package and runs as `python -m experiments.<name>`.
+  - **Costs:** GATO's existing tracking objective stays for this migration.
+    A complete move to GATO's cost menu follows later, as a separate step.
+  - **Predictor friction:** upstream's `register_robot(..., joint_dynamics=True,
+    friction_width=w)`: GRiD generates the GPU URDF's damping and tanh Coulomb
+    friction into the dynamics and derivatives, the width compiled in. `BSQP`
+    takes no friction argument. This implements the compile-time width of
+    2026-10-22.
+  - **A local GATO fork:** a `[tool.uv.sources]` editable path on a branch or
+    worktree (README), never on main.
+  - **Provenance:** records store `gato` (the installed version,
+    `direct_url.json`, `gato.__file__`, and an editable checkout's commit and
+    source status) instead of the submodule's commit.
+  - **Plant names hash GATO's version,** so fork and 0.1.5 registrations never
+    overwrite each other in the shared cache.
+  - **Per-iteration trajectory capture** (the fork's) is absent in 0.1.5. The
+    migration goes without it; the visualizer reports it as unsupported. How to
+    restore it is open (below).
 - **2026-10-21: GATO 0.1.2 plus opt-in smooth joint friction** and opt-in SQP
-  trajectory capture, from the fork `felixmueh/GATO`, with `grid-rbd` 0.5.3.
+  trajectory capture, from the fork `felixmueh/GATO`, with `grid-rbd` 0.5.3
+  (superseded 2026-10-24, above).
   GRiD still evaluates the barrier terms of zero-weight soft limits; there is no
   public switch.
 - **2026-10-22: reaching is loss-free by default; friction is opt-in**
@@ -160,8 +196,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   `StickSlip` stays Euler-only, and `passive_torque` refuses it. The plant names
   still hash the coefficients and the width alone, so they did not change.
 - **2026-10-22: the smoothing width becomes compile-time only**, to diverge less
-  from upstream GATO. Not done: the pinned fork still has the runtime-width
-  commits; the friction work follows the refactor.
+  from upstream GATO. Done 2026-10-24 with GATO 0.1.5 (`friction_width` at
+  registration).
 
 - **2026-10-24: breakaway follow-up handoff** (Felix). Document the next plant
   refinement with separate static/breakaway and sliding Coulomb values; keep
@@ -200,7 +236,39 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   plant on a simulation clock; each refuses the other kind) charges each solve
   a latency (`Fixed` or `Measured`), makes no new request while a plan is pending, and applies a
   plan from the first tick at or after its charged time. Results at nonzero
-  latency changed with this. Past a plan's end, both loops fault.
+  latency changed with this. Past a plan's end, both loops fault. Superseded by
+  the 2026-10-24 entry below (two loops, `Stepped` and `Wall`).
+- **2026-10-24: two loops, named after their time** (Felix). The timing model of
+  `agent-reading/tiago-mpc-design/timing-model-fable.md` in the thesis workspace
+  (sections 2–4), except one loop: Felix chose two. `run_real_time` runs on wall
+  time: the robot and the rehearsal (a `SimPlant` on the robot's architecture,
+  `--plant rehearsal`, Felix's name); plans are used from the first tick after
+  they arrive, with no latency parameter. `run_stepped` runs controlled experiments on stepped time,
+  which the loop keeps: `solve_latency`, required with no default, is declared
+  seconds or `"measured"` (the solve's own `plan.stats["wall_s"]`, then used as
+  the declared duration); the loop waits for each solve and places its plan at the
+  request plus the latency. Both: a request at the first tick of each update slot
+  while no solve is outstanding, and `update_period=0` back to back (a request at
+  the tick the previous plan takes effect); a plan takes effect at the first tick
+  at or after it is available; one outstanding solve. `Clock` became two classes,
+  `Stepped(t)` (`reach(t)` finite, never backward) and `Wall` (`reach(t)` sleeps,
+  at once when late); a loop starts the plant with its clock, `plant.start(clock)`,
+  and `now()` left the plant protocol. `RosPlant` refuses anything but `Wall`.
+  `SimPlant(sync_real_time=True)` paces a stepped run to the wall clock for
+  watching (warns once when behind, never changes results; refused on wall time);
+  it replaced `SimPlant`'s clock argument. `Fixed`, `Measured` and the old `run`
+  went. Budget rule: `max_sqp_time_s=None` for a declared latency, the TIAGO
+  budget for `"measured"`, the rehearsal and the robot (this replaces "simulations
+  set None" below). Simulation (`--plant sim`) uses the in-process `Mpc`; the
+  robot and the rehearsal keep `MpcProcess`, random100 its `MpcProcess` per case
+  (Felix, same day). Warnings and counts: a late tick on wall time (once per run,
+  not the tick after the first command, the robot's activation; all counted), a
+  declared latency > 0 that a solve exceeded (once; overruns counted). The
+  loops return an `Outcome` (done, late ticks, overruns), and the summary records
+  the timing (`timing`: the loop, `command_period_s`, `update_period_s`,
+  `solve_latency` for stepped runs, the counts); the plant's `settings` record
+  `time` (`"stepped"` or `"wall"`; the replay's `time_basis` keeps
+  `"simulation"` and `"wall"`).
 - **2026-10-22: one `Mpc` per run.** `run` calls `mpc.warmup(state, reference)`
   once before the first tick (arm still held); it resets the controller and, with
   `MpcParams.warmup` (default on), runs GATO's warm-up solve (its limits cannot be
@@ -254,7 +322,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - **2026-10-22: `State.t` is the measurement time;** on the robot the monotonic
   receipt time, in the domain of `RosPlant`'s wall clock. Gazebo would use
   `Clock.external()` fed from `/clock`, with ROS stamps as `State.t`; open
-  (`docs/robot.md`).
+  (`docs/robot.md`). `Clock` is superseded (2026-10-24): Gazebo would need a
+  third clock beside `Stepped` and `Wall`.
 - **2026-10-22: safety is the robot plant's job.** `RosPlant` owns the safety
   worker (it needs the ROS sequence numbers, and activation waits for it), so a
   robot run cannot happen without it. There is no loop-level safety hook.
@@ -281,9 +350,13 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - The ROS container, and with it the Gazebo check.
 - Migrating the visualizer off `tiago_mpc_vis_baseline`.
 - Armature in the simulator.
-- The compile-time friction width.
+- Moving the costs completely to GATO's cost menu (2026-10-24: a separate step
+  after the GATO 0.1.5 migration).
 
 ## Open with Felix
 
 - How garbage collection runs between ticks or runs.
-- Gazebo's clock: `Clock.external()` from `/clock` with ROS stamps as `State.t` (not implemented).
+- Per-iteration trajectory capture on GATO 0.1.5 (under discussion, 2026-10-24):
+  a port proposed upstream, a capture-only local fork, or reconstruction by
+  truncated re-solves.
+- Gazebo's clock: a third clock read from `/clock`, with ROS stamps as `State.t` (not implemented).

@@ -45,6 +45,11 @@ class Figure8:
         return t >= self.period_s - 1e-9  # absorbs the rounding of summed command periods
 
 
+# ======================================================================
+# TODO(cost menu): GATO 0.1.5's cost menu (gato.cost_menu) will replace these cost overrides
+# (docs/decisions.md, 2026-10-24): qd_cost and u_cost become the menu's state and input
+# weights; mu, rho_u and the predictor friction are not costs and stay.
+# ======================================================================
 FIGURE8 = replace(tm.TIAGO, dt_s=.01, solver=tm.TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
                   admm=replace(tm.TIAGO.admm, rho_u=1e-5),  # GATO's value, for the control cost 1e-6
                   friction=tm.urdf_friction(tm.Tanh(.03)))
@@ -55,10 +60,10 @@ def metrics(error):
                 p95_m=float(np.percentile(error, 95)), max_m=float(np.max(error)))
 
 
-def figure8(plant, mpc, run=tm.run_simulation, task=Figure8(), law=tm.sample_knot, out=None,
-            command_period=None, update_period=None, duration=None):
-    """Track task with mpc on plant (common.run_experiment); duration (seconds) caps
-    the task's period."""
+def figure8(plant, mpc, run=tm.run_stepped, task=Figure8(), law=tm.sample_knot, out=None,
+            command_period=None, update_period=None, duration=None, solve_latency=None):
+    """Track task with mpc on plant with the loop run (common.run_experiment; run_stepped
+    needs solve_latency); duration (seconds) caps the task's period."""
     def evaluate(record):
         trajectory = record.trajectory
         t = trajectory["state_time_s"]  # when each position was measured
@@ -70,7 +75,7 @@ def figure8(plant, mpc, run=tm.run_simulation, task=Figure8(), law=tm.sample_kno
             metrics_after_initial_1s=metrics(error[t >= 1.]) if np.any(t >= 1.) else None)
 
     return run_experiment(plant, mpc, task, law, run, command_period=command_period,
-                          update_period=update_period,
+                          update_period=update_period, solve_latency=solve_latency,
                           duration=task.period_s if duration is None else min(task.period_s, duration),
                           out=out, done_status="completed", evaluate=evaluate)
 

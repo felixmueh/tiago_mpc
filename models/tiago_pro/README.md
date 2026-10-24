@@ -20,7 +20,7 @@ written them into the source file, so they are not PAL's.
 | 7 | 0.945 | 1.79 | 0.56 | 2.95 | 26 |
 
 The supplied armature (kg m², joints 1 to 7) is not in the URDF, because its
-loaders (Pinocchio, GRiD 0.5.3) do not read it: left 0.511, 1.19, 0.472, 0.296,
+loaders (Pinocchio, GRiD 0.5.5) do not read it: left 0.511, 1.19, 0.472, 0.296,
 0.424, 0.151, 0.14; right 0.746, 0.882, 0.211, 0.648, 0.326, 0.343, 0.27.
 
 **The values are questionable:** supplied on 2026-10-21, not identified. The
