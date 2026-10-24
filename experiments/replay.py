@@ -19,7 +19,7 @@ import numpy as np
 from tiago_mpc.tiago import FLANGE_FRAME, FULL_URDF, GRASP_FRAME, RIGHT_ARM_JOINTS, ROOT_FRAME
 
 FORMAT = "tiago-replay"
-TIME_BASIS = {"stepped": "simulation", "wall": "wall"}  # the plant's kind of time: the format's strings
+TIME_BASIS = {"virtual": "simulation", "wall": "wall"}  # the plant's kind of time: the format's strings
 VERSION = 1
 
 
@@ -125,11 +125,27 @@ def _joint_limits(limits):
         raise ValueError("joint_limits.source must be a nonempty string")
 
 
-def save_replay(path, *, time_s, q, joint_names, model_urdf=FULL_URDF, time_basis,
-                label=None, fixed_joints=None, reference_xyz_m=None,
-                reference_time_s=None, reference_frame=None, plans=None, provenance=None,
-                qd_rad_s=None, torque_nm=None, torque_time_s=None, joint_limits=None,
-                end_effector_frame=FLANGE_FRAME):
+def save_replay(
+    path,
+    *,
+    time_s,
+    q,
+    joint_names,
+    model_urdf=FULL_URDF,
+    time_basis,
+    label=None,
+    fixed_joints=None,
+    reference_xyz_m=None,
+    reference_time_s=None,
+    reference_frame=None,
+    plans=None,
+    provenance=None,
+    qd_rad_s=None,
+    torque_nm=None,
+    torque_time_s=None,
+    joint_limits=None,
+    end_effector_frame=FLANGE_FRAME,
+):
     """Export one compressed v1 file using a temporary file and atomic rename.
 
     Each optional plan is a dict containing origin_time_s, time_s and q;

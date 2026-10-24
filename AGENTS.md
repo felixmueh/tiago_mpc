@@ -33,21 +33,30 @@ the guide documents partial patches, version checks and completion status.
   `tiago_mpc/mpc.py`, the task dataclasses), overridden with `dataclasses.replace`.
   No JSON configurations.
 - Types (Felix, 2026-10-22): mypy checks the core, `tiago_mpc/` without
-  `safety.py` (`python -m mypy`, configured in `pyproject.toml`, also run by
-  `tests/test_types.py`). Annotate public functions and methods; the interfaces
-  are the structural protocols in `tiago_mpc/plan.py` (no inheritance, no
-  run-time checks). Experiments stay untyped.
+  `safety.py`, and `experiments/common.py` (`python -m mypy`, configured in
+  `pyproject.toml`, also run by `tests/test_types.py`). Annotate public functions and
+  methods; the interfaces are the structural protocols in `tiago_mpc/plan.py` (no
+  inheritance, no run-time checks). The other experiments are not type-checked, but are
+  annotated where it helps the editor complete them, e.g. `record: tm.Record`
+  (Felix, 2026-10-24).
+- Signatures (Felix, 2026-10-24): a function signature that does not fit on one line (110
+  columns) is written one parameter per line, with a trailing comma, a bare `*` on its own
+  line where the keyword-only parameters start, and the closing `) -> ReturnType:` on its
+  own line at the `def`'s indentation. Short signatures stay on one line.
 - The root uses plain re-exports (Felix, 2026-10-24). Importing `tiago_mpc` may load Pinocchio and
   GATO's Python package, but never ROS (only creating a `RosPlant` does) and never GATO's compiled
   module (only the MPC process); `test_importing_the_package_loads_no_ros_and_no_compiled_gato` checks this.
-- Experiments use `import tiago_mpc as tm` (Felix, 2026-10-23); package modules import
-  each other directly (`from .plan import State`), never through the root.
+- Experiments use `import tiago_mpc as tm` (Felix, 2026-10-23); package modules import each other with absolute imports (`from tiago_mpc.plan import State`,
+  Felix, 2026-10-24), never through the root.
 - Run experiments as modules, `python -m experiments.reach` (Felix, 2026-10-23), with the
   checkout's own environment: `uv run python -m …` or `.venv/bin/python -m …`. Each checkout
   and worktree has its own uv environment with `tiago_mpc` installed editable (Felix,
   2026-10-24), which also makes `experiments` importable, so this works from any directory.
   Never run one checkout's code with another checkout's environment; `-m` puts the current
   directory first, so do not run from another checkout's root either.
+- No exceptions for control flow (Felix, 2026-10-24): expected outcomes (a fault, a
+  timeout, a stop request) end a loop normally and are returned; exceptions are only for
+  real errors.
 - Docs describe the current code only; git keeps the history.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)

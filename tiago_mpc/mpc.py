@@ -24,10 +24,10 @@ from typing import Any, cast
 from gato import SolverParams
 import numpy as np
 
-from .dynamics import LAWS, Friction, Tanh, passive_torque
-from .plan import Plan, State
-from .tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
-from .util import cache_root, digest
+from tiago_mpc.dynamics import LAWS, Friction, Tanh, passive_torque
+from tiago_mpc.plan import Plan, State
+from tiago_mpc.tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
+from tiago_mpc.util import cache_root, digest
 
 
 @dataclass(frozen=True)

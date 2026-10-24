@@ -5,7 +5,7 @@ import numpy as np
 import pinocchio as pin
 import pytest
 
-from tiago_mpc.clock import Stepped
+from tiago_mpc.clock import VirtualClock
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh, plant_euler
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import Q_START, urdf_friction
@@ -20,7 +20,7 @@ def test_subthreshold_load_holds_exactly_with_stick_slip_but_moves_with_sign(sca
         plant = SimPlant(friction=replace(f, law=law))
         assert plant.substep == .001
         gravity = pin.computeGeneralizedGravity(plant.model, plant.data, plant.q).copy()
-        plant.start(Stepped())
+        plant.start(VirtualClock())
         plant.apply(gravity + .5*np.array(f.coulomb_nm))
         plant.advance(.2)
         if law == StickSlip():

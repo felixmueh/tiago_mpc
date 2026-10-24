@@ -68,8 +68,15 @@ def passive_torque(velocity: np.ndarray, friction: Friction | None) -> np.ndarra
     return np.asarray(friction.viscous_nm_s_per_rad)*v + np.asarray(friction.coulomb_nm)*coulomb
 
 
-def plant_euler(model: Any, data: Any, q: np.ndarray, velocity: np.ndarray, actuator_torque: np.ndarray,
-                dt: float, friction: Friction | None) -> tuple[np.ndarray, np.ndarray]:
+def plant_euler(
+    model: Any,
+    data: Any,
+    q: np.ndarray,
+    velocity: np.ndarray,
+    actuator_torque: np.ndarray,
+    dt: float,
+    friction: Friction | None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Native-coordinate Euler with implicit viscous damping; inertia and bias at (q, v).
 
     A = M(q) + dt*diag(b), r = M(q)*v + dt*(torque - bias(q, v)).
@@ -103,8 +110,15 @@ def plant_euler(model: Any, data: Any, q: np.ndarray, velocity: np.ndarray, actu
     return pin.integrate(model, q, dt*new), new
 
 
-def plant_rk4(model: Any, data: Any, q: np.ndarray, velocity: np.ndarray, actuator_torque: np.ndarray,
-              dt: float, friction: Friction) -> tuple[np.ndarray, np.ndarray]:
+def plant_rk4(
+    model: Any,
+    data: Any,
+    q: np.ndarray,
+    velocity: np.ndarray,
+    actuator_torque: np.ndarray,
+    dt: float,
+    friction: Friction,
+) -> tuple[np.ndarray, np.ndarray]:
     """Native-coordinate RK4 with the passive torque recomputed at every stage (Tanh or Sign)."""
     import pinocchio as pin
 

@@ -1,4 +1,4 @@
-"""The two remedies for solve latency against stock sample_knot, on stepped time:
+"""The two remedies for solve latency against stock sample_knot, on virtual time:
 latency compensation (latency_compensation.py), feedback around the plan (plan_feedback.py)
 and both together, over fixed latencies and four tasks. Each run once, serially (one GPU job).
 
@@ -43,7 +43,7 @@ CASES = {"stock": (False, tm.sample_knot), "compensated": (True, tm.sample_knot)
 
 def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="implicit", *, task_specs=None):
     """Each task x latency x case with a fresh in-process Mpc; the uncompensated cases run on
-    run_stepped itself, with the latency declared. Returns the table rows."""
+    run_virtual_time itself, with the latency declared. Returns the table rows."""
     rows = []
     for name in tasks:
         experiment, task, params, plant = (TASKS if task_specs is None else task_specs)[name]
@@ -56,7 +56,7 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
                     run, latency = partial(run_compensated, latency_s=ms / 1e3,
                                            prediction_substep_s=prediction_substep_s, predictor=predictor), None
                 else:
-                    run, latency = tm.run_stepped, ms / 1e3
+                    run, latency = tm.run_virtual_time, ms / 1e3
                 case_out = out / name / f"{name}_{case}_{ms:g}ms"
                 mpc = tm.Mpc(params, binary)
                 try:

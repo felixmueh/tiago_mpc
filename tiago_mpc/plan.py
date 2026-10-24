@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import numpy as np
 
-from .clock import Stepped, Wall
+from tiago_mpc.clock import VirtualClock, WallClock
 
 if TYPE_CHECKING:
-    from .mpc import MpcParams
+    from tiago_mpc.mpc import MpcParams
 
 # Knot boundaries computed as k * dt must select knot k despite rounding
 # (a fraction of one knot interval).
@@ -84,13 +84,13 @@ class Tick:
 
 class PlantInterface(Protocol):
     """SimPlant (sim.py) and RosPlant (robot.py). A loop starts it on the loop's time
-    (start(clock): Stepped or Wall, which RosPlant needs), then per command tick reads
+    (start(clock): VirtualClock or WallClock, which RosPlant needs), then per command tick reads
     its state, applies a command, which it holds, and advances to the next tick (the
     plant integrates to it, the clock reaches it); stop comes first on exit (zero
     torque, handback). settings: what Record saves about it."""
     settings: dict[str, Any]
 
-    def start(self, clock: Stepped | Wall) -> None: ...
+    def start(self, clock: VirtualClock | WallClock) -> None: ...
     def state(self) -> State: ...
     def apply(self, command: np.ndarray) -> None: ...
     def advance(self, t: float) -> None: ...

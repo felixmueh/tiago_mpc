@@ -15,11 +15,11 @@ There are two loops (`tiago_mpc/loops.py`), named after their time.
 `run_real_time` runs on wall time (`Wall`, `tiago_mpc/clock.py`): solves take as
 long as they take, and a plan is used at the first tick after it arrives. It
 drives the robot and the rehearsal, a `SimPlant` on the robot's architecture.
-`run_stepped` runs controlled experiments in simulation on stepped time
-(`Stepped`), which the loop keeps itself: the experiment declares how long a
+`run_virtual_time` runs controlled experiments in simulation on virtual time
+(`Virtual`), which the loop keeps itself: the experiment declares how long a
 solve lasts (`solve_latency`), and the loop waits for each solve and places its
 plan at the request plus that latency. Either loop takes any MPC; `launch`
-(`experiments/common.py`) gives `run_stepped` an in-process `Mpc` and
+(`experiments/common.py`) gives `run_virtual_time` an in-process `Mpc` and
 `run_real_time` an `MpcProcess`, which solves concurrently in its own process. Each loop starts the plant on its clock
 (`plant.start(clock)`) and samples plans, checks leases and schedules ticks and
 control updates on it. `State.t` is when the state was measured, on the same
@@ -34,7 +34,7 @@ tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what ex
               Mpc, MpcProcess),
               plan.py (State, Plan, Tick; the protocols PlantInterface, MpcInterface,
               TaskInterface; Law, Callback),
-              clock.py (Stepped, Wall), laws.py, loops.py (run_real_time, run_stepped, guard),
+              clock.py (Virtual, Wall), laws.py, loops.py (run_real_time, run_virtual_time, guard),
               sim.py (SimPlant), robot.py (RosPlant), ros2.py (ROS 2 client), safety.py,
               record.py (Record)
 experiments/  common.py (run_experiment, the mains' options), reach.py, figure8.py,
@@ -149,7 +149,7 @@ python -m experiments.reach --command-period .01   # command ticks at the knot i
 python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random100/README.md
 ```
 
-- **Timing.** `--plant sim` (the default) runs `run_stepped` with an in-process
+- **Timing.** `--plant sim` (the default) runs `run_virtual_time` with an in-process
   `Mpc`. `--solve-latency` says how long a solve lasts on the timeline: declared
   seconds (default 0, the explicit ideal) or `measured`, the solve's own wall time
   (`plan.stats["wall_s"]`). A plan takes effect at the first command tick at or
@@ -158,10 +158,10 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   longer and counts the overruns. `--plant rehearsal` runs the rehearsal:
   `SimPlant` on `run_real_time` with `MpcProcess`, as on the robot; a tick whose
   work ran past the next one is late, skips the missed ticks, warns once and is
-  counted. `SimPlant(sync_real_time=True)` paces a stepped run to the wall clock
+  counted. `SimPlant(sync_real_time=True)` paces a virtual-time run to the wall clock
   for watching, without changing its results. The summary's `timing` records the
   loop, the command and update periods, `solve_latency` and the counts; the
-  plant's `time` is `stepped` or `wall`. Until the first command, `SimPlant` holds
+  plant's `time` is `virtual` or `wall`. Until the first command, `SimPlant` holds
   its start state, as PAL's position controller holds the arm until effort
   control starts.
 - **Solve time and warm-up:** `MpcParams.max_sqp_time_s` (10 ms) stops a solve's
@@ -189,7 +189,7 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   `--duration S` ends a run after at most S seconds.
 - **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
-  5 cm at a joint-speed L1 norm of at most 1 rad/s, timeout 8 s.
+  5 cm with the grasp point slower than 2 cm/s, timeout 8 s.
 - **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, `StickSlip`
   Coulomb in the plant (1 ms substeps) and `Tanh(.03)` (width 0.03 rad/s) in the predictor.
 - **Exit status** 1 on a timeout or a raw-limit excess.
@@ -213,7 +213,7 @@ from experiments.reach import Reach, reach
 
 params = replace(tm.TIAGO, solver=tm.TIAGO.solver.replace(mu=1.), max_sqp_time_s=None)  # a declared latency
 mpc = tm.Mpc.compile(params)  # in this process; tm.MpcProcess: its own
-record = reach(tm.SimPlant(substep=.003), mpc, run=tm.run_stepped, solve_latency=.005,
+record = reach(tm.SimPlant(substep=.003), mpc, run=tm.run_virtual_time, solve_latency=.005,
                task=Reach(position_tol_m=.02), law=tm.hold_first)
 mpc.close()
 ```
@@ -249,7 +249,7 @@ mpc.close()
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
   the raw GATO `controller` and `step`, the latest solve's result), a loop and
   `Record` directly, without `run_experiment`; a loop of your own starts the plant
-  with `Stepped()` or `Wall()` and returns a `tm.Outcome` for `run_experiment`.
+  with `Virtual()` or `Wall()` and returns a `tm.Outcome` for `run_experiment`.
 - **Examples, two remedies for solve latency:** `experiments/plan_feedback.py`, a law
   (a PD around the plan), and `experiments/latency_compensation.py`, its own loop
   (solve from the predicted state); `experiments/latency_study.py` compares them.

@@ -24,8 +24,8 @@ their labels; never relabel them as grasp-frame results.
   `MpcProcess` on the GATO module compiled once at the start (`compile_binary`),
   writing to a fresh directory under `_expr_data/`. The runner takes the shared
   GPU locks.
-- **Outcomes:** arrival (position error at most 5 cm and joint-speed L1 at most
-  1 rad/s within 8 simulated seconds) and simulated physical-limit compliance
+- **Outcomes:** arrival (position error at most 5 cm and grasp-point speed at most
+  2 cm/s within 8 simulated seconds) and simulated physical-limit compliance
   are reported separately. A timeout, limit violation or numerical failure
   keeps its output and the other cases continue; a shared setup failure stops
   the run. There is no torque clipping or retry.

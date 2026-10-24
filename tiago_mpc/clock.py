@@ -1,7 +1,7 @@
 """The two kinds of time a loop runs on, given to the plant at start (loops.py).
 
-Stepped is time the loop keeps: nothing takes time unless the loop moves it on.
-Wall is the computer's monotonic clock: everything takes its real time. Neither
+VirtualClock is time the loop keeps: nothing takes time unless the loop moves it on.
+WallClock is the computer's monotonic clock: everything takes its real time. Neither
 moves backward.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ import math
 import time
 
 
-class Stepped:
+class VirtualClock:
     """now() is the last time reached; reach(t) moves it to t, finite and never backward."""
 
     def __init__(self, t: float = 0.):
@@ -22,11 +22,11 @@ class Stepped:
 
     def reach(self, t: float) -> None:
         if not math.isfinite(t) or t < self.t:
-            raise ValueError("stepped time must be finite and must not move backward")
+            raise ValueError("virtual time must be finite and must not move backward")
         self.t = t
 
 
-class Wall:
+class WallClock:
     """now() is time.monotonic(); reach(t) sleeps until t, and returns at once when late."""
 
     def now(self) -> float:

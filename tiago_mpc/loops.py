@@ -1,60 +1,8 @@
-"""The command loops: the execution controller, ticking at the command rate.
+"""Two command loops: one for the real robot running in sync with wall time,
+ and one for experiments, running in virtual time.
 
-MPC runs in a command loop, on the robot and in simulation. On the robot time is
-real: states arrive, solves take as long as they take, and plans are used when they
-arrive. run_real_time runs on that time (wall time): on the robot, and in the
-rehearsal of the robot's architecture with a simulated arm. In simulation we want
-controlled experiments: how long a plan takes to arrive and how often plans are
-requested are set by the experiment, so that runs are reproducible and comparable,
-and can be varied on purpose. run_stepped runs them on time the loop keeps itself
-(stepped time).
-
-The command tick is the unit that ties a run together. Three parts run at rates of
-their own, and they meet only at command ticks (defaults shown):
-
-  time (ms)       0    2    4    6    8    10   12   14   16   18   20
-  command ticks   |    |    |    |    |    |    |    |    |    |    |
-                  each tick: the newest state in, one command out (500 Hz)
-  control updates R0                       R1                       R2
-                  a request to the MPC on every 5th tick (100 Hz)
-  plant           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                  between ticks: holds the command; a SimPlant integrates
-                  in substeps of its own (at most 1 ms), the robot moves
-
-At each command tick (every command_period) a loop reads the plant's newest state,
-takes the MPC's plan if a new one has become available, requests a control update
-when one is due and no solve is outstanding, turns the newest plan into a command
-with the control law and sends it. Between ticks nothing reaches the plant. A plan
-holds knots dt apart (the knot interval); the knot interval, the update period and
-the command period may all differ. State.t is when a state was measured, a plan
-starts at its state's time (Plan.t0), and the lease, the schedules and the task's
-clock all run on the run's time.
-
-Control updates follow two rules, in both loops:
-  requests  one at the first tick of each update slot (every update_period from
-            the first tick) while no solve is outstanding; slots that pass during
-            a solve are skipped. update_period=0: a request at every tick without
-            an outstanding solve, so each update starts at the tick the previous
-            plan takes effect (back to back).
-  plans     a plan takes effect at the first tick at or after it becomes
-            available; until then the previous plan stays in effect.
-One solve is outstanding at a time.
-
-Typical settings (dt: the knot interval; P: a period), as experiments.common.launch
-builds them:
-  run_stepped
-    ideal                 SimPlant(), Mpc, solve_latency=0, update_period=dt
-    constant latency      SimPlant(), Mpc, solve_latency=.05, update_period=dt
-    as fast as possible   SimPlant(), Mpc, solve_latency="measured",
-                          update_period=0, with the solver's wall-time budget
-    constant control rate SimPlant(), Mpc, solve_latency=P, update_period=P
-    watch                 SimPlant(sync_real_time=True), any of the above
-  run_real_time, with MpcProcess and the solver's wall-time budget
-    rehearsal             SimPlant()
-    robot                 RosPlant(execute=True)
-
-Both loops return an Outcome: whether the task is done, and the count of what went
-wrong with the timing (late ticks, overruns), which run_experiment records.
+The timing of each loop, with diagrams, is explained in its docstring: run_real_time
+(the robot and the rehearsal) and run_virtual_time (experiments).
 """
 from __future__ import annotations
 
@@ -67,10 +15,10 @@ import warnings
 
 import numpy as np
 
-from .clock import Stepped, Wall
-from .laws import sample_knot
-from .plan import Callback, Law, MpcInterface, Plan, PlantInterface, TaskInterface, Tick
-from .tiago import limits
+from tiago_mpc.clock import VirtualClock, WallClock
+from tiago_mpc.laws import sample_knot
+from tiago_mpc.plan import Callback, Law, MpcInterface, Plan, PlantInterface, TaskInterface, Tick
+from tiago_mpc.tiago import limits
 
 LEASE_S = .1  # a plan may be commanded at most this long after its state's time
 _TOLERANCE = 1e-9  # absorbs the rounding of summed periods
@@ -87,7 +35,7 @@ _TOLERANCE = 1e-9  # absorbs the rounding of summed periods
 @dataclass(frozen=True)
 class Outcome:
     """What a loop returns: whether the task is done, the ticks of run_real_time that
-    started a command period or more late, and the solves of run_stepped that took
+    started a command period or more late, and the solves of run_virtual_time that took
     longer than their declared solve_latency."""
     done: bool
     late_ticks: int = 0
@@ -136,22 +84,30 @@ def guard(command: np.ndarray, plan: Plan, t: float) -> np.ndarray:
     return command
 
 
-def run_real_time(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law = sample_knot,
-                  callbacks: Sequence[Callback] = (), *, command_period: float, update_period: float,
-                  duration: float) -> Outcome:
+def run_real_time(
+    plant: PlantInterface,
+    mpc: MpcInterface,
+    task: TaskInterface,
+    law: Law = sample_knot,
+    callbacks: Sequence[Callback] = (),
+    *,
+    command_period: float,
+    update_period: float,
+    duration: float,
+) -> Outcome:
     """Run task on plant on wall time until task.done(state, t) or for duration seconds:
     the robot (RosPlant), or a rehearsal of it with a simulated arm (SimPlant).
 
-    Time is the computer's monotonic clock (Wall), and everything takes its real time:
+    Time is the computer's monotonic clock (WallClock), and everything takes its real time:
     the solve, the plant, the callbacks. MpcProcess solves concurrently while the loop
     keeps ticking, and a plan is used at the first tick after it arrives; on the robot
     a state's own age adds to the delay. update_period=.01:
 
       wall time (ms)  0    2    4    6    8    10   12   14   16   18
       command ticks   |    |    |    |    |    |    |    |    |    |
-      requests        R0                       R1
+      control updates R0                       R1
       MPC process     [solve  ]                [solve    ]
-      in effect       old=======P0============================P1=====
+      in effect       old=====P0============================P1=======
                                 ^ arrived at 3.5 ms, used at 4 ms
 
     Each tick sends its command before it requests a plan, so an in-process Mpc, which
@@ -176,7 +132,7 @@ def run_real_time(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface,
     sends no command but reaches the callbacks. Garbage collection pauses while it
     runs: a full collection over the buffered ticks takes several milliseconds.
     """
-    clock, due = Wall(), Schedule(update_period)
+    clock, due = WallClock(), Schedule(update_period)
     plan, solving, start, deadline = None, False, None, None
     sent, late_ticks, warned_tick, warned_plan = 0, 0, False, False
     plant.start(clock)  # startup checks on a fresh state; the robot accepts wall time only
@@ -230,10 +186,19 @@ def run_real_time(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface,
             gc.enable()
 
 
-def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, law: Law = sample_knot,
-                callbacks: Sequence[Callback] = (), *, command_period: float, update_period: float,
-                duration: float, solve_latency: float | Literal["measured"]) -> Outcome:
-    """Run task on plant on stepped time until task.done(state, t) or for duration
+def run_virtual_time(
+    plant: PlantInterface,
+    mpc: MpcInterface,
+    task: TaskInterface,
+    law: Law = sample_knot,
+    callbacks: Sequence[Callback] = (),
+    *,
+    command_period: float,
+    update_period: float,
+    duration: float,
+    solve_latency: float | Literal["measured"],
+) -> Outcome:
+    """Run task on plant on virtual time until task.done(state, t) or for duration
     seconds: a controlled experiment in simulation (SimPlant).
 
     Three effects set a simulated run's timing: how long a plan takes to arrive (its
@@ -241,7 +206,7 @@ def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, l
     fast the simulator computes. This loop sets the first two and keeps the third out
     of the results.
 
-    Stepped time. The loop keeps the time (Stepped) and moves it itself, tick by
+    Virtual time. The loop keeps the time (VirtualClock) and moves it itself, tick by
     tick. Nothing takes time unless the loop writes it in, and it writes in two
     things: the ticks, command_period apart, and the solves, at solve_latency. The
     simulator's own computing and the loop's work take none; they only make the run
@@ -253,8 +218,8 @@ def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, l
 
       computer        [tk][tk][tk][  solve 3.5 ms  ][tk][tk][tk]
       wall clock      0    2    4                   7.5  9.5  11.5
-      stepped time    0    2    4                   6    8    10
-                      the computing took no stepped time; on the timeline the
+      virtual time    0    2    4                   6    8    10
+                      the computing took no virtual time; on the timeline the
                       solve lasts solve_latency (its plan is placed at
                       4 + solve_latency), and the ticks at 6 and 8 run after it.
 
@@ -272,7 +237,7 @@ def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, l
 
       time (ms)       0    2    4    6    8    10   12   14   16   18   20
       command ticks   |    |    |    |    |    |    |    |    |    |    |
-      requests        R0                       R1                       R2
+      control updates R0                       R1                       R2
       available                   ^ R0+5                    ^ R1+5
       in effect       old============P0=======================P1==========
                                      ^ the first tick at or after 5 ms
@@ -282,7 +247,7 @@ def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, l
 
       time (ms)       0    2    4    6    8    10   12   14   16
       command ticks   |    |    |    |    |    |    |    |    |
-      requests        R0        R1             R2
+      control updates R0        R1             R2
       available                ^ 3.5      ^ 4+4.1
       in effect       old=======P0=============P1===============
                                 ^ R1 at the tick P0 takes effect
@@ -292,7 +257,7 @@ def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, l
 
       time (ms)       0    2    4    6    8    10   12   14   16   18   20
       command ticks   |    |    |    |    |    |    |    |    |    |    |
-      requests        R0                       R1                       R2
+      control updates R0                       R1                       R2
       in effect       old======================P0=======================P1
 
     Watching. SimPlant(sync_real_time=True) holds each tick until the wall clock has
@@ -308,7 +273,7 @@ def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, l
     if not (solve_latency == "measured"
             or isinstance(solve_latency, (int, float)) and math.isfinite(solve_latency) and solve_latency >= 0):
         raise ValueError(f"solve_latency must be seconds (finite, >= 0) or 'measured', not {solve_latency!r}")
-    clock, due = Stepped(), Schedule(update_period)
+    clock, due = VirtualClock(), Schedule(update_period)
     plan, pending, available, start = None, None, 0., None  # pending: the solved plan
     overruns, warned_plan = 0, False
     plant.start(clock)
@@ -326,7 +291,7 @@ def run_stepped(plant: PlantInterface, mpc: MpcInterface, task: TaskInterface, l
             # Between requests nothing is polled: a dead MpcProcess is noticed at the next request.
             if pending is None and not end and due(t):
                 mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
-                pending = checked(mpc.result(block=True))  # wait for it: no stepped time passes
+                pending = checked(mpc.result(block=True))  # wait for it: no virtual time passes
                 assert pending is not None
                 took = pending.stats["wall_s"]
                 latency = took if solve_latency == "measured" else solve_latency

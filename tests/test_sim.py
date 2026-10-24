@@ -1,4 +1,4 @@
-"""SimPlant: held commands on stepped and wall time, and pacing."""
+"""SimPlant: held commands on virtual and wall time, and pacing."""
 from dataclasses import asdict
 
 from gato.common import rk4
@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from tiago_mpc import clock as clock_module, sim
-from tiago_mpc.clock import Stepped, Wall
+from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.dynamics import Sign, StickSlip, Tanh, plant_euler, plant_rk4
 from tiago_mpc.sim import SimPlant
 from tiago_mpc.tiago import urdf_friction
@@ -24,7 +24,7 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, subste
     default = "rk4" if friction is None else "euler"
     plant = SimPlant(substep=substep, friction=friction, integrator=None if integrator == default else integrator)
     q, qd, t = plant.q.copy(), plant.qd.copy(), 0.
-    plant.start(Stepped())
+    plant.start(VirtualClock())
     plant.apply(U)
     plant.advance(.01)
     while t < .01 - 1e-12:  # e.g. 3, 3, 3 and 1 ms
@@ -34,12 +34,12 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, subste
                  else plant_rk4(plant.model, plant.data, q, qd, U, h, friction))
         t += h
     s = plant.state()
-    assert s.t == plant.clock.now() == .01 and plant.settings["time"] == "stepped"
+    assert s.t == plant.clock.now() == .01 and plant.settings["time"] == "virtual"
     assert plant.settings["friction"] == (None if friction is None else asdict(friction))
     assert plant.settings["integrator"] == integrator
     np.testing.assert_array_equal(s.q, q)
     np.testing.assert_array_equal(s.qd, qd)
-    plant.apply(-U)  # the state is at the stepped time: nothing to integrate
+    plant.apply(-U)  # the state is at the virtual time: nothing to integrate
     assert plant.state().t == .01
     np.testing.assert_array_equal(plant.q, q)
     plant.stop()
@@ -67,7 +67,7 @@ class FakeTime:
 
 @pytest.fixture
 def wall(monkeypatch):
-    """Wall's and the pacing's time; sleeping records the wait without moving time on."""
+    """WallClock's and the pacing's time; sleeping records the wait without moving time on."""
     fake = FakeTime()
     monkeypatch.setattr(clock_module, "time", fake)
     monkeypatch.setattr(sim, "time", fake)
@@ -76,7 +76,7 @@ def wall(monkeypatch):
 
 def test_on_wall_time_advance_integrates_then_waits_for_it(wall):
     plant = SimPlant(substep=.01)
-    plant.start(Wall())
+    plant.start(WallClock())
     assert plant.state().t == 100.
     wall.now += .004
     plant.advance(100.01)
@@ -94,7 +94,7 @@ def test_on_wall_time_the_start_state_holds_until_the_first_command(wall):
     has the clock's time; the command integrates from when it is applied."""
     plant = SimPlant(substep=.01)
     q0 = plant.q.copy()
-    plant.start(Wall())
+    plant.start(WallClock())
     plant.advance(100.01)
     wall.now = 100.05
     s = plant.state()
@@ -115,7 +115,7 @@ def test_on_wall_time_a_command_holds_from_when_it_is_applied(wall, monkeypatch)
     monkeypatch.setattr(sim, "rk4", lambda model, data, q, qd, u, h: (q + u * h, qd))
     plant = SimPlant(substep=.003)
     q0 = plant.q.copy()
-    plant.start(Wall())
+    plant.start(WallClock())
     plant.apply(np.ones(7))
     plant.advance(100.01)
     wall.now = 100.05
@@ -127,8 +127,8 @@ def test_on_wall_time_a_command_holds_from_when_it_is_applied(wall, monkeypatch)
 def test_sync_real_time_waits_for_the_wall_clock_warns_once_behind_and_keeps_the_results(wall):
     """Counted from the first tick, so the warm-up before it neither warns nor runs the start fast."""
     paced, plain = SimPlant(substep=.003, sync_real_time=True), SimPlant(substep=.003)
-    paced.start(Stepped(5.))
-    plain.start(Stepped(5.))
+    paced.start(VirtualClock(5.))
+    plain.start(VirtualClock(5.))
     for plant in (paced, plain):
         plant.apply(U)
     wall.now += .15  # the warm-up and the first tick's work
@@ -152,7 +152,7 @@ def test_sync_real_time_waits_for_the_wall_clock_warns_once_behind_and_keeps_the
 
 def test_sync_real_time_refuses_wall_time(wall):
     with pytest.raises(ValueError, match="sync_real_time"):
-        SimPlant(sync_real_time=True).start(Wall())
+        SimPlant(sync_real_time=True).start(WallClock())
 
 
 @pytest.mark.filterwarnings("ignore:a plan took effect")  # 10 ms ticks: each plan from the tick after its state

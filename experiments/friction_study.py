@@ -3,7 +3,7 @@
     python -m experiments.friction_study --dry-run
     python -m experiments.friction_study --output _expr_data/controller-friction/<fresh-name>
 
-Each cell runs once on stepped time (run_stepped), serially. The plant uses the URDF's
+Each cell runs once on virtual time (run_virtual_time), serially. The plant uses the URDF's
 Coulomb and viscous coefficients scaled together by .5, 1 or 1.5, with 1 ms
 semi-implicit steps. Predictors and feedback gains stay unchanged: reaching
 predicts no friction; figure-eight tracking predicts nominal tanh friction.

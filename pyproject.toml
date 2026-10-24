@@ -37,15 +37,22 @@ environments = ["sys_platform == 'linux'"]  # grid-rbd ships Linux wheels only
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-# mypy over the core: python -m mypy (tests/test_types.py runs it). The experiments stay untyped.
+# mypy over the core and experiments/common.py: python -m mypy (tests/test_types.py runs it).
+# The other experiments stay unchecked.
 [tool.mypy]
-files = ["tiago_mpc", "tests/test_types.py"]
+files = ["tiago_mpc", "experiments/common.py", "tests/test_types.py"]
 python_version = "3.10"
+explicit_package_bases = true  # experiments/ has no __init__.py; modules are named from the checkout root
+mypy_path = "tests"  # test_types.py imports the sibling test modules by their pytest names
 warn_unreachable = true  # also catches an attribute typed None by its first assignment
 
 [[tool.mypy.overrides]]  # not checked: the safety worker (a rewrite is pending) and the experiments
 module = ["tiago_mpc.safety", "experiments.*"]
 ignore_errors = true
+
+[[tool.mypy.overrides]]  # except the shared experiment code, which is checked (later sections win)
+module = ["experiments.common"]
+ignore_errors = false
 
 [[tool.mypy.overrides]]  # untyped: GATO, Pinocchio and ROS 2
 module = ["gato.*", "pinocchio.*", "rclpy.*", "builtin_interfaces.*", "rcl_interfaces.*",

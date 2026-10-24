@@ -56,3 +56,11 @@ def test_worktrees_share_the_main_checkouts_cache(tmp_path):
     assert util.main_checkout(worktree) == util.main_checkout(main) == main.resolve()
     (tmp_path / "plain").mkdir()  # without git: the directory itself
     assert util.main_checkout(tmp_path / "plain") == tmp_path / "plain"
+
+
+@pytest.mark.parametrize("q", [tiago.Q_START, tiago.Q_REACH])
+def test_ee_velocity_matches_finite_difference(q):
+    qd = np.linspace(.1, -.3, 7)
+    h = 1e-6
+    numeric = (tiago.ee_position(q + h * qd) - tiago.ee_position(q - h * qd)) / (2 * h)
+    assert tiago.ee_velocity(q, qd) == pytest.approx(numeric, abs=1e-6)

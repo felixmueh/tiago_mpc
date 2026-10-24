@@ -21,27 +21,34 @@ import numpy as np
 import pinocchio as pin
 from gato.common import rk4
 
-from .clock import Stepped, Wall
-from .dynamics import Friction, StickSlip, plant_euler, plant_rk4
-from .plan import State
-from .tiago import Q_START, arm_urdf
+from tiago_mpc.clock import VirtualClock, WallClock
+from tiago_mpc.dynamics import Friction, StickSlip, plant_euler, plant_rk4
+from tiago_mpc.plan import State
+from tiago_mpc.tiago import Q_START, arm_urdf
 
 
 class SimPlant:
     """Starts at rest in q (default: the comfortable pose) when the run starts and stays
     there until the first command.
 
-    The loop's clock comes at start: on stepped time state() and apply() find the plant
+    The loop's clock comes at start: on virtual time state() and apply() find the plant
     at the tick's time, on wall time they first integrate up to the clock's time, so
-    State.t is when the state is read. sync_real_time=True paces a stepped run for
+    State.t is when the state is read. sync_real_time=True paces a virtual-time run for
     watching: advance also waits until the wall clock, counted from the first tick
-    (after the warm-up), has caught up with the stepped time. It warns once when behind and never changes the results;
+    (after the warm-up), has caught up with the virtual time. It warns once when behind and never changes the results;
     on wall time it raises. model and data are the Pinocchio handles.
     """
 
-    def __init__(self, q: np.ndarray = Q_START, qd: np.ndarray | None = None, *, substep: float = .001,
-                 friction: Friction | None = None,
-                 integrator: Literal["rk4", "euler"] | None = None, sync_real_time: bool = False):
+    def __init__(
+        self,
+        q: np.ndarray = Q_START,
+        qd: np.ndarray | None = None,
+        *,
+        substep: float = .001,
+        friction: Friction | None = None,
+        integrator: Literal["rk4", "euler"] | None = None,
+        sync_real_time: bool = False,
+    ):
         if not np.isfinite(substep) or substep <= 0:
             raise ValueError("substep must be finite and positive")
         integrator = integrator or ("rk4" if friction is None else "euler")
@@ -59,12 +66,12 @@ class SimPlant:
         self.qd = np.zeros(7) if qd is None else np.array(qd, dtype=float)
         self.command: np.ndarray | None = None
 
-    def start(self, clock: Stepped | Wall) -> None:
-        if self.sync_real_time and isinstance(clock, Wall):
-            raise ValueError("sync_real_time paces stepped time; on wall time the plant is in real time already")
+    def start(self, clock: VirtualClock | WallClock) -> None:
+        if self.sync_real_time and isinstance(clock, WallClock):
+            raise ValueError("sync_real_time paces virtual time; on wall time the plant is in real time already")
         self.clock, self.t = clock, clock.now()
-        self.settings["time"] = "wall" if isinstance(clock, Wall) else "stepped"
-        self._paced_from: tuple[float, float] | None = None  # pacing: wall and stepped time at the first tick
+        self.settings["time"] = "wall" if isinstance(clock, WallClock) else "virtual"
+        self._paced_from: tuple[float, float] | None = None  # pacing: wall and virtual time at the first tick
         self._behind = False
 
     def state(self) -> State:
@@ -77,7 +84,7 @@ class SimPlant:
         self.command = np.array(command, dtype=float)
 
     def advance(self, t: float) -> None:
-        """Integrate to t with the held command, then let the clock reach t: stepped time
+        """Integrate to t with the held command, then let the clock reach t: virtual time
         moves to t, wall time is waited for (late: at once). Paced, then also wait for the
         wall clock."""
         if self.sync_real_time and self._paced_from is None:  # from the first tick, after the warm-up
@@ -95,7 +102,7 @@ class SimPlant:
 
     def _integrate(self, t):
         """Integrate the held command from self.t to t in substeps; nothing unless t is later
-        (state and apply on stepped time, or a deadline passed on wall time)."""
+        (state and apply on virtual time, or a deadline passed on wall time)."""
         if t - self.t <= 1e-12:
             return
         # No command yet: the state stays while time moves on, as the robot's onboard position

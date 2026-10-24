@@ -16,14 +16,14 @@ import tiago_mpc as tm
 
 @dataclass(frozen=True)
 class Reach:
-    """Reach the grasp-frame position target_m; done within the position and joint-speed
-    L1 tolerances.
+    """Reach the grasp-frame position target_m; done within the position tolerance
+    with the grasp point slower than the speed tolerance.
 
     The default target is the position at a nearby posture (not a posture goal).
     """
     target_m: tuple[float, float, float] = tuple(map(float, tm.ee_position(tm.Q_REACH)))
     position_tol_m: float = .05
-    speed_l1_tol_rad_s: float = 1.
+    speed_tol_m_s: float = .02
     timeout_s: float = 8.
 
     def at(self, t, n, dt):
@@ -36,14 +36,25 @@ class Reach:
 
     def done(self, state, t):
         return bool(self.distance(state.q) <= self.position_tol_m
-                    and np.abs(state.qd).sum() <= self.speed_l1_tol_rad_s)
+                    and np.linalg.norm(tm.ee_velocity(state.q, state.qd)) <= self.speed_tol_m_s)
 
 
-def reach(plant, mpc, run=tm.run_stepped, task=Reach(), law=tm.sample_knot, out=None,
-          command_period=None, update_period=None, duration=None, solve_latency=None):
-    """Reach task with mpc on plant with the loop run (common.run_experiment; run_stepped
+def reach(
+    plant,
+    mpc,
+    run=tm.run_virtual_time,
+    task=Reach(),
+    law=tm.sample_knot,
+    out=None,
+    command_period=None,
+    update_period=None,
+    duration=None,
+    solve_latency=None,
+):
+    """Reach task with mpc on plant with the loop run (common.run_experiment; run_virtual_time
     needs solve_latency); duration (seconds) caps the task's timeout."""
-    def evaluate(record):
+
+    def evaluate(record: tm.Record) -> None:
         trajectory = record.trajectory
         distance = np.array([task.distance(q) for q in trajectory["state"][:, :7]])
         record.arrays["distance_m"] = distance
@@ -51,7 +62,7 @@ def reach(plant, mpc, run=tm.run_stepped, task=Reach(), law=tm.sample_knot, out=
             reached=record.summary["status"] == "arrived", duration_cap_s=duration,
             simulated_time_s=float(trajectory["time_s"][-1]), initial_distance_m=distance[0],
             final_distance_m=distance[-1], max_distance_m=distance.max(),
-            final_speed_l1_rad_s=float(np.abs(trajectory["state"][-1, 7:]).sum()))
+            final_speed_m_s=float(np.linalg.norm(tm.ee_velocity(*np.split(trajectory["state"][-1], [7])))))
 
     return run_experiment(plant, mpc, task, law, run, command_period=command_period,
                           update_period=update_period, solve_latency=solve_latency,

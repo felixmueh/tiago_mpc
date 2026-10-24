@@ -16,12 +16,12 @@ from typing import Any
 
 import numpy as np
 
-from .clock import Stepped, Wall
-from .loops import LEASE_S
-from .plan import State
-from .ros2 import ArmState, TiagoRightArmClient
-from .safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState
-from .tiago import Q_START, RIGHT_ARM_JOINTS, limits
+from tiago_mpc.clock import VirtualClock, WallClock
+from tiago_mpc.loops import LEASE_S
+from tiago_mpc.plan import State
+from tiago_mpc.ros2 import ArmState, TiagoRightArmClient
+from tiago_mpc.safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState
+from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, limits
 
 
 @dataclass(frozen=True)
@@ -59,14 +59,20 @@ class RosPlant:
     ROS_DISTRO, and after stop() whether the arm was handed back (restored).
     """
 
-    def __init__(self, execute: bool = False, *, checks: Checks = Checks(),
-                 safety: CollisionSafetySettings = CollisionSafetySettings(), sea_absolute: bool = False):
+    def __init__(
+        self,
+        execute: bool = False,
+        *,
+        checks: Checks = Checks(),
+        safety: CollisionSafetySettings = CollisionSafetySettings(),
+        sea_absolute: bool = False,
+    ):
         if not safety.enabled or tuple(safety.controlled_joint_names) != RIGHT_ARM_JOINTS:
             raise ValueError("the robot needs the safety worker on the controlled right-arm joints")
         self.execute, self.checks, self.safety = execute, checks, safety
         # The loop's wall clock, from start. Gazebo would need a third clock fed from
         # /clock, with the ROS stamps as State.t.
-        self.clock: Wall
+        self.clock: WallClock
         self.settings: dict[str, Any] = dict(
             time="wall", execute=execute, sea_absolute=sea_absolute, checks=asdict(checks),
             safety=asdict(safety), ros_distro=os.environ.get("ROS_DISTRO"),
@@ -78,12 +84,12 @@ class RosPlant:
         self._activated = self._uncertain = False
         self.client = TiagoRightArmClient(sea_absolute=sea_absolute)
 
-    def start(self, clock: Stepped | Wall) -> None:
+    def start(self, clock: VirtualClock | WallClock) -> None:
         """Startup checks on a fresh state: the safety worker's initial check, PAL's
         position controller in charge, the arm at rest at the comfortable pose.
         execute=True also loads and configures the effort controller (no switch).
         The robot runs on wall time only (run_real_time); any other clock raises first."""
-        if not isinstance(clock, Wall):
+        if not isinstance(clock, WallClock):
             raise ValueError("the robot runs on wall time only: use run_real_time")
         self.clock, c, client = clock, self.checks, self.client
         first = client.read_state(timeout_sec=c.first_state_s, max_age_sec=c.state_age_s)

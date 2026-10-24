@@ -30,7 +30,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   Additional experiment-setting metadata belongs to another project; safety
   internals and the unfinished ROS2 SEA path remain outside this review. The
   clock part (`Clock`, `plant.now()`) is superseded by the 2026-10-24 entry
-  (two loops, `Stepped` and `Wall`).
+  (two loops, `VirtualClock` and `WallClock`).
 - **2026-10-23: the effort check belongs to the execution side.** `Mpc` and
   `MpcProcess` return what they planned (`result()` checks only that the plan is
   well formed and finite); `run` checks every knot of a plan when it arrives and
@@ -38,7 +38,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   be able to execute, clip or inspect an over-limit plan. Clipping stays a
   simulation setting: the robot path never clips a torque.
 - **2026-10-24: the root re-exports with plain imports.** Felix chose proposal A: ordinary
-  `from .module import Name` lines and an explicit `__all__`; a lazily loading root (PEP 562
+  `from tiago_mpc.module import Name` lines (absolute since the same day) and an explicit `__all__`; a lazily loading root (PEP 562
   `__getattr__`) was rejected. Importing `tiago_mpc` may load Pinocchio and GATO's Python
   package (about 45 MB and a few hundredths of a second, and every process that matters uses
   them anyway), but never ROS (only creating a `RosPlant` does) and never GATO's compiled
@@ -223,6 +223,10 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   of 0.28 m by 0.18 m, 2 cm ahead of its start.
 - **2026-10-22: tracking uses 10 ms knots** (2 ms before); checks at 2 ms do not
   qualify 10 ms.
+- **2026-10-24: a reach arrives by the hand's speed.** Within 5 cm with the
+  grasp point slower than 2 cm/s, replacing the joint-speed L1 norm of 1 rad/s,
+  which let the hand move at up to about 0.4 m/s. Runs before this change used
+  the old criterion, and the grasp-frame random100 protocol has no baseline yet.
 - **Orientation is unconstrained** in both tasks.
 - **Limits through ADMM are approximate:** returned plans can exceed the
   planning bounds, so the planning margins and the independent raw-limit checks
@@ -243,13 +247,13 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   a latency (`Fixed` or `Measured`), makes no new request while a plan is pending, and applies a
   plan from the first tick at or after its charged time. Results at nonzero
   latency changed with this. Past a plan's end, both loops fault. Superseded by
-  the 2026-10-24 entry below (two loops, `Stepped` and `Wall`).
+  the 2026-10-24 entry below (two loops, `VirtualClock` and `WallClock`).
 - **2026-10-24: two loops, named after their time** (Felix). The timing model of
   `agent-reading/tiago-mpc-design/timing-model-fable.md` in the thesis workspace
   (sections 2–4), except one loop: Felix chose two. `run_real_time` runs on wall
   time: the robot and the rehearsal (a `SimPlant` on the robot's architecture,
   `--plant rehearsal`, Felix's name); plans are used from the first tick after
-  they arrive, with no latency parameter. `run_stepped` runs controlled experiments on stepped time,
+  they arrive, with no latency parameter. `run_virtual_time` runs controlled experiments on virtual time,
   which the loop keeps: `solve_latency`, required with no default, is declared
   seconds or `"measured"` (the solve's own `plan.stats["wall_s"]`, then used as
   the declared duration); the loop waits for each solve and places its plan at the
@@ -257,10 +261,10 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   while no solve is outstanding, and `update_period=0` back to back (a request at
   the tick the previous plan takes effect); a plan takes effect at the first tick
   at or after it is available; one outstanding solve. `Clock` became two classes,
-  `Stepped(t)` (`reach(t)` finite, never backward) and `Wall` (`reach(t)` sleeps,
+  `VirtualClock(t)` (`reach(t)` finite, never backward) and `WallClock` (`reach(t)` sleeps,
   at once when late); a loop starts the plant with its clock, `plant.start(clock)`,
-  and `now()` left the plant protocol. `RosPlant` refuses anything but `Wall`.
-  `SimPlant(sync_real_time=True)` paces a stepped run to the wall clock for
+  and `now()` left the plant protocol. `RosPlant` refuses anything but `WallClock`.
+  `SimPlant(sync_real_time=True)` paces a virtual-time run to the wall clock for
   watching (warns once when behind, never changes results; refused on wall time);
   it replaced `SimPlant`'s clock argument. `Fixed`, `Measured` and the old `run`
   went. Budget rule: `max_sqp_time_s=None` for a declared latency, the TIAGO
@@ -272,9 +276,10 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   declared latency > 0 that a solve exceeded (once; overruns counted). The
   loops return an `Outcome` (done, late ticks, overruns), and the summary records
   the timing (`timing`: the loop, `command_period_s`, `update_period_s`,
-  `solve_latency` for stepped runs, the counts); the plant's `settings` record
-  `time` (`"stepped"` or `"wall"`; the replay's `time_basis` keeps
-  `"simulation"` and `"wall"`).
+  `solve_latency` for virtual-time runs, the counts); the plant's `settings` record
+  `time` (`"virtual"` or `"wall"`; the replay's `time_basis` keeps
+  `"simulation"` and `"wall"`). Renamed the same day (Felix): "stepped time" became "virtual time",
+  `run_stepped` → `run_virtual_time`, `Stepped` → `VirtualClock` (and `Wall` → `WallClock`), the plant's `time` `"stepped"` → `"virtual"`.
 - **2026-10-22: one `Mpc` per run.** `run` calls `mpc.warmup(state, reference)`
   once before the first tick (arm still held); it resets the controller and, with
   `MpcParams.warmup` (default on), runs GATO's warm-up solve (its limits cannot be
@@ -329,7 +334,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   receipt time, in the domain of `RosPlant`'s wall clock. Gazebo would use
   `Clock.external()` fed from `/clock`, with ROS stamps as `State.t`; open
   (`docs/robot.md`). `Clock` is superseded (2026-10-24): Gazebo would need a
-  third clock beside `Stepped` and `Wall`.
+  third clock beside `VirtualClock` and `WallClock`.
 - **2026-10-22: safety is the robot plant's job.** `RosPlant` owns the safety
   worker (it needs the ROS sequence numbers, and activation waits for it), so a
   robot run cannot happen without it. There is no loop-level safety hook.

@@ -18,7 +18,7 @@ from typing import Any, Callable, Sequence
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .tiago import RIGHT_ARM_JOINTS
+from tiago_mpc.tiago import RIGHT_ARM_JOINTS
 
 JOINT_STATES_TOPIC = "/joint_states"
 SEA_STATE_TOPIC = "/arm_right_sea_state_broadcaster_controller/sea_joint_states"
@@ -314,7 +314,10 @@ class TiagoRightArmClient:
         )
 
     def spin_once(
-        self, timeout_sec: float = 0.0, *, max_callbacks: int = 64,
+        self,
+        timeout_sec: float = 0.0,
+        *,
+        max_callbacks: int = 64,
         drain_budget_sec: float = 0.002,
     ) -> int:
         """Service a bounded burst of pending state callbacks; return their count.
@@ -337,7 +340,10 @@ class TiagoRightArmClient:
         return self._state_callback_count - start_count
 
     def read_state(
-        self, timeout_sec: float = 2.0, *, after_seq: int | None = None,
+        self,
+        timeout_sec: float = 2.0,
+        *,
+        after_seq: int | None = None,
         max_age_sec: float | None = None,
     ) -> ArmState:
         """Read cached state, or require a newer sequence and/or bounded age.

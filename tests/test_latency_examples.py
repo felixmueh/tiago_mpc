@@ -17,7 +17,7 @@ from tiago_mpc.plan import Plan, State
 from tiago_mpc.record import Record
 from tiago_mpc.tiago import Q_START, arm_urdf, urdf_friction
 
-pytestmark = pytest.mark.filterwarnings("ignore:a plan took effect")  # run_stepped's late plans
+pytestmark = pytest.mark.filterwarnings("ignore:a plan took effect")  # run_virtual_time's late plans
 
 
 @pytest.mark.parametrize("compensated", [False, True])
@@ -51,8 +51,8 @@ def test_plan_feedback_follows_the_plans_constant_acceleration_between_knots():
 
 
 @pytest.mark.parametrize("latency", [0., .02, .025])
-def test_uncompensated_it_times_requests_and_plans_as_run_stepped(latency):
-    """The same request times and commands as run_stepped(solve_latency=latency)."""
+def test_uncompensated_it_times_requests_and_plans_as_run_virtual_time(latency):
+    """The same request times and commands as run_virtual_time(solve_latency=latency)."""
     stock, mine = Mpc(), Mpc()
     _, a, _ = go(stock, solve_latency=latency, duration=.12)
     _, b, _ = go(mine, loop=partial(run_compensated, latency_s=latency, compensate=False), duration=.12)
@@ -107,9 +107,9 @@ def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp
     assert record.arrays["effect_state"][-1, 7] > 0  # the arm moved: the prediction was not trivial
 
 
-def test_compensation_runs_on_stepped_time_and_returns_an_outcome():
+def test_compensation_runs_on_virtual_time_and_returns_an_outcome():
     plant, _, outcome = go(Mpc(), loop=partial(run_compensated, latency_s=.01, compensate=False), duration=.03)
-    assert type(plant.clock).__name__ == "Stepped" and not outcome.done and outcome.late_ticks == 0
+    assert type(plant.clock).__name__ == "VirtualClock" and not outcome.done and outcome.late_ticks == 0
 
 
 def test_the_implicit_step_is_aba_without_friction_and_stable_with_it():

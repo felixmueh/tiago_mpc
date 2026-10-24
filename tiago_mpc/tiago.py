@@ -22,8 +22,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from .dynamics import CoulombLaw, Friction, StickSlip
-from .util import cache_meshes, cached
+from tiago_mpc.dynamics import CoulombLaw, Friction, StickSlip
+from tiago_mpc.util import cache_meshes, cached
 
 ROOT = Path(__file__).resolve().parents[1]  # the repository
 FULL_URDF = ROOT / "models/tiago_pro/tiago_pro.urdf"  # the whole robot
@@ -166,6 +166,15 @@ def fk(q: np.ndarray, frame: str = GRASP_FRAME) -> np.ndarray:
 def ee_position(q: np.ndarray) -> np.ndarray:
     """Position of the grasp frame (GRASP_FRAME) in ROOT_FRAME, metres."""
     return fk(q, GRASP_FRAME)
+
+
+def ee_velocity(q: np.ndarray, qd: np.ndarray) -> np.ndarray:
+    """Linear velocity of the grasp frame in ROOT_FRAME, m/s."""
+    model, data = _arm()
+    pin.computeJointJacobians(model, data, np.asarray(q, dtype=float))
+    jacobian = pin.getFrameJacobian(model, data, model.getFrameId(GRASP_FRAME),
+                                    pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
+    return jacobian[:3] @ np.asarray(qd, dtype=float)
 
 
 def runtime_urdf(friction=None):

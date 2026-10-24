@@ -35,7 +35,7 @@ def aggregate(out, rows, expected):
                   execution_errors=sum(r.get("status") not in ("arrived", "timeout") for r in rows))
     (out / "summary.json").write_text(json.dumps(dict(counts=counts, cases=rows), indent=2)+"\n")
     fields = ["task_id", "status", "reached", "limits_pass", "simulated_time_s",
-              "initial_distance_m", "final_distance_m", "final_speed_l1_rad_s", "wall_s", "output"]
+              "initial_distance_m", "final_distance_m", "final_speed_m_s", "wall_s", "output"]
     with (out / "cases.csv").open("w") as f:
         writer = csv.DictWriter(f, fields, extrasaction="ignore")
         writer.writeheader(); writer.writerows(rows)
@@ -107,7 +107,7 @@ def main():
         plant, mpc = tm.SimPlant(x0[:7], x0[7:], substep=.003), None
         try:
             mpc = tm.MpcProcess(PARAMS, binary)
-            reach(plant, mpc, task=Reach(target), out=case, solve_latency=0.)  # run_stepped
+            reach(plant, mpc, task=Reach(target), out=case, solve_latency=0.)  # run_virtual_time
         except Exception:
             traceback.print_exc()
         finally:

@@ -136,7 +136,7 @@ excesses and first violations are in `analysis.json`.
 ![Arrival curve and terminal errors](overview.png)
 
 Settings: {setting_line}
-Position tolerance 5 cm, joint-speed L1 <= 1 rad/s, zero dwell. Position-only;
+Position tolerance 5 cm, grasp-point speed <= 2 cm/s, zero dwell. Position-only;
 no final approach, collisions, clipping or physical hardware. Fixed simulation
 pacing leaves solve latency unpaid. ADMM uses its finite upstream budget;
 actual inner modes/work are retained. GATO `{json.dumps(first['gato'])}`, package

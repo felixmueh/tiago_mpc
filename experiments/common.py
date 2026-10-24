@@ -6,11 +6,14 @@ python -m experiments.<name> from the checkout's root."""
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 import json
 from pathlib import Path
 import signal
+from types import FrameType
 import traceback
+from typing import Any, Literal
 
 import numpy as np
 
@@ -18,7 +21,7 @@ from experiments.replay import export_replay
 import tiago_mpc as tm
 
 
-def limit_excess(trajectory):
+def limit_excess(trajectory: Mapping[str, np.ndarray]) -> dict[str, float]:
     """Largest excess of the recorded states and sent commands over the raw limits."""
     raw = tm.limits()
     q, qd = trajectory["state"][:, :7], trajectory["state"][:, 7:]
@@ -29,7 +32,7 @@ def limit_excess(trajectory):
                 torque_nm=float(max(0., np.max(np.abs(command) - raw.effort, initial=0.))))
 
 
-def solve_summary(trajectory):
+def solve_summary(trajectory: Mapping[str, np.ndarray]) -> dict[str, Any]:
     """A run without solves has no median and zero work."""
     times = trajectory.get("plan_solve_time_us")
     return dict(solve_calls=len(trajectory["plan_t0_s"]),
@@ -38,10 +41,23 @@ def solve_summary(trajectory):
                              for k in ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows")})
 
 
-def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None, update_period=None,
-                   solve_latency=None, out=None, done_status="done", evaluate=None):
+def run_experiment(
+    plant: tm.PlantInterface,
+    mpc: tm.MpcInterface,
+    task: tm.TaskInterface,
+    law: tm.Law,
+    run: Callable[..., tm.Outcome],
+    *,
+    duration: float,
+    command_period: float | None = None,
+    update_period: float | None = None,
+    solve_latency: float | Literal["measured"] | None = None,
+    out: str | Path | None = None,
+    done_status: str = "done",
+    evaluate: Callable[[tm.Record], object] | None = None,
+) -> tm.Record:
     """Run task with mpc on plant for at most duration seconds with the loop run
-    (tm.run_stepped, tm.run_real_time or an experiment's own), save the Record in out
+    (tm.run_virtual_time, tm.run_real_time or an experiment's own), save the Record in out
     (default: _expr_data/<task>/<UTC time>/) and export its replay; returns the Record.
     The command period defaults to 2 ms (500 Hz), the update period to the knot
     interval mpc.dt (0: back to back). solve_latency goes to run unless None (the
@@ -83,16 +99,16 @@ def run_experiment(plant, mpc, task, law, run, *, duration, command_period=None,
     return record
 
 
-def parse_solve_latency(text):
+def parse_solve_latency(text: str) -> float | Literal["measured"]:
     """'measured', or declared seconds."""
-    return text if text == "measured" else float(text)
+    return "measured" if text == "measured" else float(text)
 
 
-def arguments(description, argv):
+def arguments(description: str, argv: Sequence[str] | None) -> argparse.Namespace:
     """The options of the experiments' mains."""
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--plant", choices=("sim", "rehearsal", "robot"), default="sim",
-                        help="sim: run_stepped with Mpc; rehearsal: SimPlant on run_real_time "
+                        help="sim: run_virtual_time with Mpc; rehearsal: SimPlant on run_real_time "
                              "with MpcProcess; robot: RosPlant on run_real_time (default: sim)")
     parser.add_argument("--execute", action="store_true",
                         help="robot: effort control after typed confirmation (default: checks only)")
@@ -120,22 +136,30 @@ def arguments(description, argv):
     return args
 
 
-def _interrupt(signum, frame):
+def _interrupt(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt(f"signal {signum}")
 
 
-def launch(args, experiment, sim_plant, params):
+def launch(
+    args: argparse.Namespace,
+    experiment: Callable[..., tm.Record],
+    sim_plant: Callable[[], tm.SimPlant],
+    params: tm.MpcParams,
+) -> tm.Record | None:
     """experiment(plant, mpc, run=..., out=..., command_period=..., update_period=...,
     duration=..., solve_latency=...) from args, on args.plant, and closes both; prints the
-    summary. sim: run_stepped with an in-process Mpc.compile(params), without the solver's
+    summary. sim: run_virtual_time with an in-process Mpc.compile(params), without the solver's
     wall-time budget for a declared --solve-latency (max_sqp_time_s=None), with it for
     'measured'. rehearsal and robot: run_real_time with
     MpcProcess.compile(params) and the budget. The robot only runs the startup checks
-    (plant.start(Wall()) and plant.stop()) unless --execute is confirmed; returns the
+    (plant.start(WallClock()) and plant.stop()) unless --execute is confirmed; returns the
     Record or None."""
-    latency = args.solve_latency  # None on wall time
+    latency: float | Literal["measured"] | None = args.solve_latency  # None on wall time
+    plant: tm.SimPlant | tm.RosPlant
+    run: Callable[..., tm.Outcome]
+    solver: type[tm.Mpc] | type[tm.MpcProcess]
     if args.plant == "sim":
-        plant, run, solver = sim_plant(), tm.run_stepped, tm.Mpc  # in this process
+        plant, run, solver = sim_plant(), tm.run_virtual_time, tm.Mpc  # in this process
         if latency != "measured":
             params = replace(params, max_sqp_time_s=None)  # a declared latency: the solve's wall time is irrelevant
     elif args.plant == "rehearsal":
@@ -152,7 +176,7 @@ def launch(args, experiment, sim_plant, params):
         run, solver = tm.run_real_time, tm.MpcProcess
         if not args.execute:
             try:
-                plant.start(tm.Wall())
+                plant.start(tm.WallClock())
                 plant.stop()
             finally:
                 plant.close()

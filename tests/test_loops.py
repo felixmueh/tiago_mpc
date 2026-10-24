@@ -8,7 +8,7 @@ import pytest
 
 from tiago_mpc import clock as clock_module
 from tiago_mpc.laws import hold_first
-from tiago_mpc.loops import Schedule, guard, run_real_time, run_stepped
+from tiago_mpc.loops import Schedule, guard, run_real_time, run_virtual_time
 from tiago_mpc.plan import Plan, State
 
 # Many tests here delay plans by a knot or more on purpose; the warning has its own test.
@@ -111,8 +111,8 @@ class Task:
         return t >= self.done_at - 1e-9
 
 
-def go(mpc, task=Task(), loop=run_stepped, duration=.1, update_period=.01, plant=None, **kw):
-    """10 ms command ticks; run_stepped needs solve_latency in kw."""
+def go(mpc, task=Task(), loop=run_virtual_time, duration=.1, update_period=.01, plant=None, **kw):
+    """10 ms command ticks; run_virtual_time needs solve_latency in kw."""
     plant, ticks = plant or Plant(), []
     outcome = loop(plant, mpc, task, callbacks=[ticks.append], command_period=.01,
                    update_period=update_period, duration=duration, **kw)
@@ -124,7 +124,7 @@ def commanded(ticks):
     return [(round(k.t, 6), k.command[0]) for k in ticks if k.command is not None]
 
 
-# Stepped time (run_stepped)
+# Virtual time (run_virtual_time)
 
 def test_zero_latency_commands_each_plan_at_its_own_tick():
     mpc = Mpc()
@@ -219,7 +219,7 @@ def test_task_updates_reach_the_request_and_the_schedule_sets_the_control_rate()
 
 
 @pytest.mark.parametrize("solve_latency", [None, -.01, math.nan, math.inf, "real"])
-def test_run_stepped_needs_a_valid_solve_latency_before_it_starts_the_plant(solve_latency):
+def test_run_virtual_time_needs_a_valid_solve_latency_before_it_starts_the_plant(solve_latency):
     plant = Plant()
     with pytest.raises(ValueError, match="solve_latency"):
         go(Mpc(), plant=plant, solve_latency=solve_latency)
@@ -373,8 +373,8 @@ def test_schedule_skips_missed_slots_and_period_0_is_due_at_every_call():
     assert all(due(t) for t in (5., 5., 5.004))
 
 
-@pytest.mark.parametrize("loop, kw", [(run_stepped, dict(solve_latency=0.)),
-                                      (run_stepped, dict(solve_latency=.02)),
+@pytest.mark.parametrize("loop, kw", [(run_virtual_time, dict(solve_latency=0.)),
+                                      (run_virtual_time, dict(solve_latency=.02)),
                                       (run_real_time, {})])
 def test_a_plan_above_the_raw_effort_limit_raises_before_any_of_its_knots_is_commanded(wall, loop, kw):
     """Only plan 2's last knot is over the limit; the run stops on its arrival."""
@@ -404,7 +404,7 @@ def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
     from tiago_mpc.record import Record
 
     class Timed(Plant):
-        settings = dict(time="stepped")
+        settings = dict(time="virtual")
 
         def advance(self, t):
             stamps.append(time.perf_counter())
@@ -412,7 +412,7 @@ def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
 
     stamps, plant, task = [], Timed(), Reach(timeout_s=10.)
     record = Record(tmp_path / "r", task=task, params=TIAGO, plant=plant)
-    run_stepped(plant, Mpc(N=32, dt=.002), task, callbacks=[record], command_period=.002,
+    run_virtual_time(plant, Mpc(N=32, dt=.002), task, callbacks=[record], command_period=.002,
                 update_period=.002, duration=2., solve_latency=0.)
     body = np.diff(stamps) * 1e3
     print(f"tick body ms: median {np.median(body):.3f}, p99 {np.percentile(body, 99):.3f}, max {body.max():.3f}")

@@ -21,8 +21,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from .tiago import FULL_URDF, MESHES, RIGHT_ARM_JOINTS, ROOT as REPO_ROOT
-from .util import cache_meshes, cached
+from tiago_mpc.tiago import FULL_URDF, MESHES, RIGHT_ARM_JOINTS, ROOT as REPO_ROOT
+from tiago_mpc.util import cache_meshes, cached
 
 
 COLLISION_DIRECTORY = REPO_ROOT / "models" / "safety" / "collision_alpha_wrap_a3_o25_cap001"
@@ -516,7 +516,9 @@ def collision_urdf_tree() -> ET.Element:
 
 
 def _resolved_collision_urdf(
-    source: Path | None = None, *, package_dirs: Sequence[str | Path] | None = None,
+    source: Path | None = None,
+    *,
+    package_dirs: Sequence[str | Path] | None = None,
 ) -> Path:
     """source (None: collision_urdf_tree) in the cache, its meshes as cached copies
     (util.cache_meshes).

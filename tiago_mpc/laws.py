@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .plan import Plan, PlanEnded, State
+from tiago_mpc.plan import Plan, PlanEnded, State
 
 
 def sample_knot(plan: Plan, t: float, state: State) -> np.ndarray:

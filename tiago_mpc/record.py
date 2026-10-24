@@ -21,11 +21,11 @@ import urllib.request
 
 import numpy as np
 
-from .plan import PlantInterface, TaskInterface, Tick
-from .tiago import ROOT
+from tiago_mpc.plan import PlantInterface, TaskInterface, Tick
+from tiago_mpc.tiago import ROOT
 
 if TYPE_CHECKING:
-    from .mpc import MpcParams
+    from tiago_mpc.mpc import MpcParams
 
 
 def _git(*args, cwd=ROOT):

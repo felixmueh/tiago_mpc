@@ -9,7 +9,7 @@ import pinocchio as pin
 import pytest
 
 from experiments import common, figure8 as f8, reach as rc
-from tiago_mpc.loops import run_stepped
+from tiago_mpc.loops import run_virtual_time
 from tiago_mpc import record as rec
 from tiago_mpc.mpc import MpcParams
 from tiago_mpc.plan import Plan, State
@@ -39,8 +39,8 @@ def test_figure8_is_done_at_its_period_despite_summed_command_periods():
 
 def test_reach_is_done_within_both_tolerances():
     task = rc.Reach(tuple(fk(Q_START) + [.04, 0., 0.]))
-    assert task.done(State(0., Q_START, np.full(7, .1)), 0.)
-    assert not task.done(State(0., Q_START, np.full(7, .2)), 0.)
+    assert task.done(State(0., Q_START, np.full(7, .01)), 0.)
+    assert not task.done(State(0., Q_START, np.full(7, .5)), 0.)
     assert not replace(task, position_tol_m=.03).done(State(0., Q_START, np.zeros(7)), 0.)
 
 
@@ -75,7 +75,7 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05)
         record = rc.reach(SimPlant(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task=task, out=tmp_path / name,
-                          run=run_stepped, solve_latency=.01, command_period=.01)
+                          run=run_virtual_time, solve_latency=.01, command_period=.01)
     else:
         task = f8.Figure8(period_s=.05)
         record = f8.figure8(SimPlant(friction=urdf_friction()), Mpc(replace(f8.FIGURE8, N=4)),
@@ -89,12 +89,12 @@ def test_experiment_records_summary_trajectory_and_replay(tmp_path, name):
         assert summary["plant"]["friction"]["law"] == dict(name="stick_slip")
         assert summary["params"]["friction"]["law"] == dict(width_rad_s=.03, name="tanh")  # predictor stays smooth
     assert summary["ticks"] == 6 and summary["plans"] == 5
-    assert summary["timing"] == dict(loop="run_stepped", command_period_s=.01, update_period_s=.01,
+    assert summary["timing"] == dict(loop="run_virtual_time", command_period_s=.01, update_period_s=.01,
                                      solve_latency=.01 if name == "reach" else 0., late_ticks=0, overruns=0)
-    assert summary["plant"]["time"] == "stepped"
+    assert summary["plant"]["time"] == "virtual"
     with np.load(tmp_path / name / "trajectory.npz") as saved:
         np.testing.assert_allclose(saved["time_s"], np.arange(6) * .01, atol=1e-12)
-        np.testing.assert_array_equal(saved["state_time_s"], saved["time_s"])  # stepped time
+        np.testing.assert_array_equal(saved["state_time_s"], saved["time_s"])  # virtual time
         # The reach's 10 ms latency: the first plan takes effect at the second tick.
         assert np.isnan(saved["command"][-1]).all()
         assert np.isnan(saved["command"][0]).all() == (name == "reach")
@@ -217,5 +217,5 @@ def test_launch_picks_the_loop_the_mpc_and_the_budget(monkeypatch, plant, latenc
     argv = ["--plant", plant] + ([] if latency in (None, 0.) else ["--solve-latency", str(latency)])
     common.launch(common.arguments("", argv), experiment, lambda: NS(close=lambda: None), rc.tm.TIAGO)
     assert seen["mpc"].kind == solver and seen["mpc"].params.max_sqp_time_s == budget
-    assert seen["run"] is (rc.tm.run_stepped if plant == "sim" else rc.tm.run_real_time)
+    assert seen["run"] is (rc.tm.run_virtual_time if plant == "sim" else rc.tm.run_real_time)
     assert seen["solve_latency"] == latency

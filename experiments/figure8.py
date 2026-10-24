@@ -60,11 +60,21 @@ def metrics(error):
                 p95_m=float(np.percentile(error, 95)), max_m=float(np.max(error)))
 
 
-def figure8(plant, mpc, run=tm.run_stepped, task=Figure8(), law=tm.sample_knot, out=None,
-            command_period=None, update_period=None, duration=None, solve_latency=None):
-    """Track task with mpc on plant with the loop run (common.run_experiment; run_stepped
+def figure8(
+    plant,
+    mpc,
+    run=tm.run_virtual_time,
+    task=Figure8(),
+    law=tm.sample_knot,
+    out=None,
+    command_period=None,
+    update_period=None,
+    duration=None,
+    solve_latency=None,
+):
+    """Track task with mpc on plant with the loop run (common.run_experiment; run_virtual_time
     needs solve_latency); duration (seconds) caps the task's period."""
-    def evaluate(record):
+    def evaluate(record: tm.Record) -> None:
         trajectory = record.trajectory
         t = trajectory["state_time_s"]  # when each position was measured
         xyz = np.array([tm.ee_position(q) for q in trajectory["state"][:, :7]])
