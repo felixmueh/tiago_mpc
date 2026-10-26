@@ -71,16 +71,12 @@ def test_a_run_is_written_and_read_back(tmp_path):
     assert "speed" in again.ticks and again.metadata["results"] == dict(final_distance_m=.5, later=1.)
 
 
-def test_save_refuses_a_column_of_the_wrong_length_or_a_replaced_standard_one(tmp_path):
+def test_save_refuses_a_column_of_the_wrong_length(tmp_path):
     record = RunRecord(tmp_path / "r", task=Task())
     run_virtual_time(Plant(), Mpc(), Task(), callbacks=[record], command_period=.01, update_period=.01,
                      duration=.03, solve_latency=0.)
     record.ticks["short"] = np.zeros(2)
     with pytest.raises(ValueError, match="rows"):
-        record.save()
-    del record.ticks["short"]
-    record.ticks["q"] = record.ticks["q"] + 1.
-    with pytest.raises(ValueError, match="standard column"):
         record.save()
 
 

@@ -65,7 +65,7 @@ git clone https://github.com/felixmueh/gato_tiago.git tiago_mpc
 cd tiago_mpc
 git lfs install --local && git lfs pull   # the meshes
 uv sync                                   # .venv from uv.lock, tiago_mpc editable, pytest and mypy
-uv run python -m pytest -q                # CPU tests, no ROS needed, and mypy
+uv run python -m pytest -q                # CPU tests, no ROS needed, mypy and the doctests (conftest.py)
 uv run python -m mypy                     # the type check alone (pyproject.toml)
 ```
 

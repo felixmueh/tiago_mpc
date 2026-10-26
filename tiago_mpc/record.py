@@ -1,6 +1,50 @@
-"""The format of a run, the one module that writes and reads it: to_dict and from_dict
-for configurations, provenance(), the events (Event, Console), RunRecord, the writer,
-and load_run, the reader.
+"""Recording runs: every run, simulated or on the robot, is kept as a run directory, and
+this module is the one that writes and reads it. (Small single purpose serialization library.)
+
+- RunRecord records a run. Created before the run, it writes where the code came from
+  (provenance()), the run's configuration and timeseries data recorded every
+  command tick; save() writes the files.
+- load_run reads a saved run back with the same interface.
+- Console prints the first event of each kind as it happens.
+- to_dict and from_dict turn configurations (frozen dataclasses) into JSON and back;
+  they also work on their own, e.g. for a study's configuration.
+
+Usually experiments.common.run_experiment creates the record, runs the loop and saves,
+also after a fault or an error. By hand, given an mpc, a task (a Reach), a law, a
+timing, a plant_config and the run directory out (None: _expr_data/<task type>/<UTC
+time>/);
+
+>>> import numpy as np
+>>> import tiago_mpc as tm
+>>> from experiments.reach import Reach
+>>> record = tm.RunRecord(out, task=task, params=mpc.params, plant=plant_config, law=law,
+...                       timing=timing, duration=1.)  # every piece the loop gets
+>>> plant = plant_config.build()
+>>> try:
+...     outcome = timing.run(plant, mpc, task, law, [record, tm.Console()], duration=1.)
+...     record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t)
+... finally:
+...     plant.close()
+...     record.save()
+>>> record.ticks["distance_m"] = np.array([task.distance(q) for q in record.ticks["q"]])
+>>> record.metadata["results"]["final_distance_m"] = record.ticks["distance_m"][-1]
+>>> record.save()
+
+>>> run = tm.load_run(record.out, classes=[Reach])  # Reach: rebuild the task piece too
+>>> list(run.config)
+['task', 'params', 'plant', 'law', 'timing', 'duration']
+>>> run.config["timing"] == timing
+True
+>>> sorted(run.ticks)
+['command', 'distance_m', 'plan', 'q', 'qd', 'state_t', 't', 'update']
+>>> run.metadata["results"]
+{'final_distance_m': ...}
+
+>>> data = tm.to_dict(tm.VirtualTime.ideal())
+>>> data
+{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency': 0.0}
+>>> tm.from_dict(data) == tm.VirtualTime.ideal()
+True
 
 A run directory holds (FORMAT 1):
 - summary.json: format; provenance (provenance()); config, the named pieces given to
@@ -53,8 +97,6 @@ CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_d
     SolverParams, MpcParams, AdmmLimits, Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
     VirtualTime, RealTime, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
 )
-TICK_COLUMNS = ("t", "state_t", "q", "qd", "command", "plan", "update")
-PLAN_COLUMNS = ("t0", "update_t", "states", "torques")
 
 
 def to_dict(obj: Any) -> Any:
@@ -125,10 +167,12 @@ def provenance() -> dict[str, Any]:
 
 
 class Console:
-    """A callback that prints an event's message to stderr the first time its kind appears;
-    add_events takes events from outside a tick (a plant's after the loop)."""
+    """A callback that prints each event's message to stderr; only_first: only the first
+    event of each kind. add_events takes events from outside a tick (a plant's after the
+    loop)."""
 
-    def __init__(self) -> None:
+    def __init__(self, only_first: bool = True) -> None:
+        self.only_first = only_first
         self.seen: set[str] = set()
 
     def __call__(self, tick: Tick) -> None:
@@ -136,7 +180,9 @@ class Console:
 
     def add_events(self, events: Iterable[Event]) -> None:
         for event in events:
-            if event.kind not in self.seen:
+            if not self.only_first:
+                print(event.message, file=sys.stderr)
+            elif event.kind not in self.seen:
                 self.seen.add(event.kind)
                 print(f"{event.message} (further {event.kind} events are recorded only)", file=sys.stderr)
 
@@ -151,13 +197,10 @@ class RunRecord:
     objects), ticks and plans (columns, built from the buffered ticks on first read, after
     the loop), events (their times counted from the first state's) and metadata. An
     experiment adds columns to ticks and plans and results to metadata["results"], then
-    saves again; save() refuses a column of the wrong length or one that replaced a
-    standard column.
+    saves again; save() refuses a column of the wrong length.
 
     Not validated for long runs: every tick stays in memory until the run ends (about
-    2 KB per tick in simulation, 4 GB for an hour at 500 Hz), and the loops pause
-    garbage collection. The loops refuse runs over MAX_RUNTIME_MIN (tiago_mpc.loops);
-    a loop of your own is not checked.
+    2 KB per tick in simulation, 4 GB for an hour at 500 Hz).
     """
     out: Path
     provenance: dict[str, Any]
@@ -173,7 +216,6 @@ class RunRecord:
         self.provenance, self.config, self.events = provenance(), pieces, []
         self.metadata = dict(status="running", reason=None, end_t=None, results={}, error=None, plant={})
         self._ticks: list[Tick] = []
-        self._standard: dict[str, dict[str, np.ndarray]] = {}  # the columns that save() protects
         self._write_summary()
 
     def __call__(self, tick: Tick) -> None:
@@ -197,7 +239,6 @@ class RunRecord:
                                          for k in ticks]).reshape(-1, 7),
                        plan=np.cumsum([k.new for k in ticks], dtype=int) - 1,
                        update=np.where(updates, np.cumsum(updates) - 1, -1))
-        self._standard["ticks"] = dict(columns)
         return columns
 
     @cached_property
@@ -213,7 +254,6 @@ class RunRecord:
             values = [p.stats[key] for p in plans]
             if all(v is not None for v in values):
                 columns[key] = np.asarray(values)
-        self._standard["plans"] = dict(columns)
         return columns
 
     def save(self) -> None:
@@ -223,9 +263,6 @@ class RunRecord:
             for key, value in table.items():
                 if len(value) != len(table[rows]):
                     raise ValueError(f"{name}[{key!r}] has {len(value)} rows, not {len(table[rows])}")
-            for key, value in self._standard[name].items():
-                if table.get(key) is not value:
-                    raise ValueError(f"{name}[{key!r}] is a standard column; give the experiment's another name")
             np.savez_compressed(self.out / f"{name}.npz", **table)
         events = [dataclasses.asdict(event) for event in self.events]
         (self.out / "events.json").write_text(json.dumps(events, indent=1, default=_json) + "\n")
@@ -252,12 +289,11 @@ def load_run(path: str | Path, classes: Iterable[type] = ()) -> RunRecord:
         record.ticks, record.plans = dict(ticks), dict(plans)
     record.events = [Event(**event) for event in json.loads((out / "events.json").read_text())]
     record._ticks = []
-    record._standard = dict(ticks={k: record.ticks[k] for k in TICK_COLUMNS},
-                            plans={k: record.plans[k] for k in PLAN_COLUMNS})
     return record
 
 
 def _json(value: Any) -> Any:
+    # Replace with proper json encoder if this ever needs more.
     if isinstance(value, (np.ndarray, np.generic)):
         return value.tolist()
     if isinstance(value, Path):

@@ -35,7 +35,9 @@ environments = ["sys_platform == 'linux'"]  # grid-rbd ships Linux wheels only
 # gato-mpc = { path = "../GATO", editable = true }
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tiago_mpc/record.py"]  # record.py: its docstring's example (conftest.py)
+addopts = "--doctest-modules"
+doctest_optionflags = "ELLIPSIS"
 
 # mypy over the core and experiments/common.py: python -m mypy (tests/test_types.py runs it).
 # The other experiments stay unchecked.
