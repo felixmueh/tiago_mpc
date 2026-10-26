@@ -16,26 +16,27 @@ import sys
 
 import numpy as np
 
-from experiments.common import handle_stop_signals
-from experiments.figure8 import FIGURE8, figure8
+from experiments import figure8, reach
+from experiments.common import handle_stop_signals, run_experiment
 from experiments.latency_compensation import Compensated, first_tick_of_each_plan
 from experiments.plan_feedback import PlanFeedback
-from experiments.reach import Reach, reach
 import tiago_mpc as tm
 
-COMMAND_PERIOD = .002  # the experiments' default; the control-update period is the knot interval
+COMMAND_PERIOD = tm.hz_to_s(500)  # the experiments' default; the control-update period is the knot interval
 # "far" reaches the grasp-frame position at T01 goal 3's posture of the latency analysis,
 # Q_START plus this joint offset (T01 measured the flange, 31.7 cm away with Q_START's joint 4
 # at its former -2.35 rad).
 # "reach-friction" runs the loss-free predictor against a plant with the URDF's friction;
 # the figure eight predicts Tanh friction against a plant with StickSlip Coulomb friction.
 T01_GOAL3 = np.array([.36, 1.2, 0., .45, 0., .15, 0.])
-TASKS = {  # name: (experiment, task or None for its default, params, plant)
-    "reach": (reach, Reach(), tm.TIAGO, tm.SimConfig(substep=.003)),
-    "far": (reach, Reach(tuple(map(float, tm.ee_position(tm.Q_START + T01_GOAL3)))), tm.TIAGO,
+TASKS = {  # name: (the experiment's evaluate, task, params, plant)
+    "reach": (reach.evaluate, reach.Reach(), tm.TIAGO, tm.SimConfig(substep=.003)),
+    "far": (reach.evaluate, reach.Reach(tuple(map(float, tm.ee_position(tm.Q_START + T01_GOAL3)))), tm.TIAGO,
             tm.SimConfig(substep=.003)),
-    "reach-friction": (reach, Reach(), tm.TIAGO, tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")),
-    "figure8": (figure8, None, FIGURE8, tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")),
+    "reach-friction": (reach.evaluate, reach.Reach(), tm.TIAGO,
+                       tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")),
+    "figure8": (figure8.evaluate, figure8.Figure8(), figure8.FIGURE8,
+                tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")),
 }
 CASES = {"stock": (False, tm.SampleKnot()), "compensated": (True, tm.SampleKnot()),  # name: (compensate, law)
          "feedback": (False, PlanFeedback()), "compensated+feedback": (True, PlanFeedback())}
@@ -47,20 +48,19 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
     after an interrupted run (Ctrl-C)."""
     rows = []
     for name in tasks:
-        experiment, task, params, plant = (TASKS if task_specs is None else task_specs)[name]
+        evaluate, task, params, plant = (TASKS if task_specs is None else task_specs)[name]
         params = replace(params, max_sqp_time_s=None)  # declared latencies: no wall-time budget
         binary = tm.compile_binary(params)
         for ms in latencies_ms:
             for case in cases:
                 compensate, law = CASES[case]
-                timing = (Compensated(latency_s=ms / 1e3, command_period=COMMAND_PERIOD,
+                timing = (Compensated(solve_latency_s=ms / 1e3, command_period=COMMAND_PERIOD,
                                       prediction_substep_s=prediction_substep_s, predictor=predictor) if compensate
                           else tm.VirtualTime.constant_latency(ms / 1e3, command_period=COMMAND_PERIOD))
                 case_out = out / name / f"{name}_{case}_{ms:g}ms"
                 mpc = tm.Mpc(params, binary)
                 try:
-                    experiment(plant, mpc, timing=timing, law=law, out=case_out,
-                               **({} if task is None else dict(task=task)))
+                    evaluate(run_experiment(plant, mpc, task, law, timing, out=case_out))
                 except Exception as exc:  # an error is a result: run_experiment saved it as "error"
                     print(f"{case_out.name}: {type(exc).__name__}: {exc}", flush=True)
                 finally:

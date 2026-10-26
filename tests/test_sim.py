@@ -181,7 +181,7 @@ def test_run_real_time_on_a_simplant():
 
     plant, ticks = SimConfig(substep=.003).build(), []
     q0, start = plant.q.copy(), time.monotonic()
-    outcome = run_real_time(plant, Mpc(replace(TIAGO, N=8)), Task(), callbacks=[ticks.append],
+    outcome = run_real_time(plant, Mpc(replace(TIAGO, N=8)), Task(), tick_callbacks=[ticks.append],
                             command_period=.01, update_period=.01, duration=.2)
     assert outcome.status == "timeout" and time.monotonic() - start >= .2 and len(ticks) == 21
     # Each plan is used from the tick after its request, which makes the next request.

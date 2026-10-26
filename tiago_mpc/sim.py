@@ -22,7 +22,7 @@ from gato.common import rk4
 
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.dynamics import Friction, StickSlip, plant_euler, plant_rk4
-from tiago_mpc.plan import Event, State
+from tiago_mpc.interfaces import Event, State
 from tiago_mpc.tiago import Q_START, arm_urdf
 
 

@@ -1,6 +1,6 @@
 """mypy over tiago_mpc/ and this file (pyproject.toml): the core's annotations agree, and
 the plants, MPCs, tasks, laws and timings below, the test fakes among them, satisfy the
-protocols in tiago_mpc/plan.py."""
+protocols in tiago_mpc/interfaces.py."""
 from __future__ import annotations
 
 import importlib.util
@@ -22,14 +22,14 @@ if TYPE_CHECKING:  # read by mypy only
     from tiago_mpc.laws import HoldFirst, SampleKnot
     from tiago_mpc.loops import RealTime, VirtualTime
     from tiago_mpc.mpc import Mpc, MpcProcess
-    from tiago_mpc.plan import Law, MpcInterface, PlantInterface, TaskInterface, Timing
+    from tiago_mpc.interfaces import ControlLaw, MpcInterface, PlantInterface, TaskInterface, Timing
     from tiago_mpc.robot import RosPlant
     from tiago_mpc.sim import SimPlant
 
     plants: list[type[PlantInterface]] = [SimPlant, RosPlant, test_loops.Plant]
     mpcs: list[type[MpcInterface]] = [Mpc, MpcProcess, test_loops.Mpc, test_experiments.Mpc]
     tasks: list[type[TaskInterface]] = [Reach, Figure8, test_loops.Task]
-    laws: list[Law] = [SampleKnot(), HoldFirst(), PlanFeedback()]
+    laws: list[ControlLaw] = [SampleKnot(), HoldFirst(), PlanFeedback()]
     timings: list[Timing] = [VirtualTime.ideal(), RealTime(), Compensated()]
 
 

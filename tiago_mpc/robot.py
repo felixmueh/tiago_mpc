@@ -19,7 +19,7 @@ import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.loops import LEASE_S
-from tiago_mpc.plan import Event, State
+from tiago_mpc.interfaces import Event, State
 from tiago_mpc.ros2 import ArmState, TiagoRightArmClient
 from tiago_mpc.safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState
 from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, limits
@@ -241,7 +241,7 @@ class RosPlant:
         self.client.publish_effort(command)  # prime the inactive receiver
         self._activated = self.run_state["activated"] = True  # a failed switch may still activate
         # Until the state's time + LEASE_S, not the plan's lease end (62 ms for 2 ms knots):
-        # the plant cannot see the plan. Left as is for Felix's safety review.
+        # TODO @SAFETY:
         hold_until = s.received_monotonic_sec + LEASE_S
 
         def progress():

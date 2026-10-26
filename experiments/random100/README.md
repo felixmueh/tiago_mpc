@@ -24,7 +24,8 @@ their labels; never relabel them as grasp-frame results.
   (the ids, the sha256 of `manifest.json`, which pins the inputs, and those pieces)
   and one `Case` per input pair (its name, start state and grasp-frame target),
   written with the provenance to `study.json` once, before the first run.
-  Each case runs once, in order: `reach` from `experiments/reach.py` with its own
+  Each case runs once, in order: `run_experiment` with `Reach` and `SampleKnot`, then
+  `evaluate` from `experiments/reach.py`, with its own
   `MpcProcess` on the GATO module compiled once at the start (`compile_binary`);
   its run record is `runs/<name>/` (`case` in its config) in a fresh directory
   under `_expr_data/`. Ctrl-C ends the running case as `interrupted` and stops the

@@ -1,4 +1,5 @@
-"""The experiment tasks, and reach and figure8 end to end on a fake MPC (CPU only)."""
+"""The experiment tasks, run_experiment with reach's and figure8's evaluate end to end on a
+fake MPC, and the mains' command line (CPU only)."""
 from dataclasses import dataclass, replace
 import importlib.metadata
 import json
@@ -10,9 +11,11 @@ import pinocchio as pin
 import pytest
 
 from experiments import common, figure8 as f8, reach as rc
+from experiments.latency_compensation import Compensated
 from tiago_mpc import record as rec
+from tiago_mpc.laws import SampleKnot
 from tiago_mpc.loops import STOP, RealTime, VirtualTime
-from tiago_mpc.plan import Plan, State
+from tiago_mpc.interfaces import Plan, State
 from tiago_mpc.record import from_dict, load_run
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, arm_urdf, fk, urdf_friction
@@ -76,22 +79,25 @@ class Mpc:
 def test_experiment_records_its_run_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05)
-        record = rc.reach(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task=task, out=tmp_path / name,
-                          timing=VirtualTime(.01, .01, .01))
+        record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task, SampleKnot(),
+                                       VirtualTime(.01, .01, .01), out=tmp_path / name)
+        rc.evaluate(record)
     else:
         task = f8.Figure8(period_s=.05)
-        record = f8.figure8(SimConfig(friction=urdf_friction(), integrator="euler"), Mpc(replace(f8.FIGURE8, N=4)),
-                            task=task, out=tmp_path / name, timing=VirtualTime(.01, .01, 0.))
+        record = common.run_experiment(SimConfig(friction=urdf_friction(), integrator="euler"),
+                                       Mpc(replace(f8.FIGURE8, N=4)), task, SampleKnot(), VirtualTime(.01, .01, 0.),
+                                       out=tmp_path / name)
+        f8.evaluate(record)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     config, metadata, results = summary["config"], summary["metadata"], summary["metadata"]["results"]
-    assert summary["format"] == 1 and set(summary) == {"format", "provenance", "config", "metadata"}
+    assert summary["format"] == 2 and set(summary) == {"format", "provenance", "config", "metadata"}
     assert metadata["status"] == ("timeout" if name == "reach" else "done") and metadata["reason"] is None
     assert metadata["end_t"] == pytest.approx(.05) and metadata["error"] is None and metadata["plant"] == {}
     assert set(config) == {"task", "params", "plant", "law", "timing", "duration"}
     assert config["params"]["N"] == 4 and config["task"]["type"] == type(task).__name__
     assert config["plant"]["type"] == "SimConfig" and config["law"] == dict(type="SampleKnot")
     assert config["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.01,
-                                    solve_latency=.01 if name == "reach" else 0.)
+                                    solve_latency_s=.01 if name == "reach" else 0.)
     assert config["duration"] == .05 and results["limits_pass"]
     if name == "figure8":
         assert config["plant"]["substep"] == .001 and config["plant"]["integrator"] == "euler"
@@ -147,8 +153,8 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
             super().request(state, reference, updates)
 
     mpc = Counting(replace(rc.tm.TIAGO, N=8))  # 10 ms knots, 70 ms plans
-    record = rc.reach(SimConfig(substep=.002), mpc, task=rc.Reach(timeout_s=.06), out=tmp_path / "r",
-                      timing=VirtualTime(.002, .006, 0.))
+    record = common.run_experiment(SimConfig(substep=.002), mpc, rc.Reach(timeout_s=.06), SampleKnot(),
+                                   VirtualTime(.002, .006, 0.), out=tmp_path / "r")
     run = load_run(record.out)
     np.testing.assert_allclose(run.ticks["t"], np.arange(31) * .002, atol=1e-12)
     assert np.isfinite(run.ticks["command"][:-1]).all()  # a command at every tick but the last
@@ -157,18 +163,25 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
 
 def test_duration_caps_the_tasks_own(tmp_path):
     assert common.arguments("", ["--duration", ".02"]).duration == .02
-    record = rc.reach(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task=rc.Reach(timeout_s=.06),
-                      out=tmp_path / "r", duration=.02)
+    task, mpc, timing = rc.Reach(timeout_s=.06), Mpc(replace(rc.tm.TIAGO, N=4)), VirtualTime.ideal()
+    record = common.run_experiment(SimConfig(substep=.003), mpc, task, SampleKnot(), timing, out=tmp_path / "r",
+                                   duration=.02)
     assert record.metadata["status"] == "timeout" and record.config["duration"] == .02
     assert len(record.ticks["t"]) == 11  # 0, 2, ..., 20 ms: the default command period
+    record = common.run_experiment(SimConfig(substep=.003), mpc, task, SampleKnot(), timing, out=tmp_path / "own")
+    assert record.config["duration"] == task.duration_s == .06 and len(record.ticks["t"]) == 31  # the task's own
+    assert f8.Figure8(period_s=4.).duration_s == 4.
 
 
 def test_a_run_without_solves_reports_zero_work(tmp_path):
     """The goal met at the start, or a zero duration: one tick, no solve."""
-    params = replace(rc.tm.TIAGO, N=4)
-    done = rc.reach(SimConfig(substep=.003), Mpc(params), task=rc.Reach(tuple(fk(Q_START))), out=tmp_path / "d")
-    zero = rc.reach(SimConfig(substep=.003), Mpc(params), out=tmp_path / "z", duration=0.)
+    params, timing = replace(rc.tm.TIAGO, N=4), VirtualTime.ideal()
+    done = common.run_experiment(SimConfig(substep=.003), Mpc(params), rc.Reach(tuple(fk(Q_START))), SampleKnot(),
+                                 timing, out=tmp_path / "d")
+    zero = common.run_experiment(SimConfig(substep=.003), Mpc(params), rc.Reach(), SampleKnot(), timing,
+                                 out=tmp_path / "z", duration=0.)
     for record, status in ((done, "arrived"), (zero, "timeout")):
+        rc.evaluate(record)
         metadata = json.loads((record.out / "summary.json").read_text())["metadata"]
         results = metadata["results"]
         assert metadata["status"] == status and results["ticks"] == 1 and results["solve_calls"] == 0
@@ -178,8 +191,8 @@ def test_a_run_without_solves_reports_zero_work(tmp_path):
 
 def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
     """The first plan's last knot exceeds joint 7's raw effort limit (26 Nm)."""
-    record = rc.reach(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4), extra=30.), out=tmp_path / "r",
-                      timing=VirtualTime(.01, .03, 0.))
+    record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4), extra=30.), rc.Reach(),
+                                   SampleKnot(), VirtualTime(.01, .03, 0.), out=tmp_path / "r")
     run = load_run(record.out)
     assert run.metadata["status"] == "fault" and run.metadata["reason"] == "effort_limit"
     assert run.metadata["end_t"] == 0. and run.metadata["error"] is None
@@ -187,8 +200,8 @@ def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
     # The faulting plan is saved, the last row, though no tick's plan index points at it.
     np.testing.assert_array_equal(run.ticks["plan"], [-1])
     assert len(run.plans["t0"]) == 1 and run.plans["update_t"][0] == 0. and run.plans["torques"][0, -1, 6] > 26.
-    record = rc.reach(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), out=tmp_path / "late",
-                      timing=VirtualTime(.01, .01, .05))  # the lease of a 30 ms plan, 50 ms late
+    record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), rc.Reach(), SampleKnot(),
+                                   VirtualTime(.01, .01, .05), out=tmp_path / "late")  # a 30 ms plan, 50 ms late
     assert record.metadata["status"] == "fault" and record.metadata["reason"] == "lease_expired"
     assert (record.out / "replay.npz").exists() and len(record.ticks["t"]) == 6
 
@@ -199,21 +212,40 @@ def test_an_interrupted_run_is_saved_as_interrupted(tmp_path):
         def run(self, *args, **kw):
             raise KeyboardInterrupt
 
+    mpc = Mpc(replace(rc.tm.TIAGO, N=4))
     with pytest.raises(KeyboardInterrupt):
-        rc.reach(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), timing=Abort(), out=tmp_path / "r")
+        common.run_experiment(SimConfig(substep=.003), mpc, rc.Reach(), SampleKnot(), Abort(), out=tmp_path / "r")
     metadata = json.loads((tmp_path / "r" / "summary.json").read_text())["metadata"]
     assert metadata["status"] == "interrupted" and "KeyboardInterrupt" in metadata["error"]
     STOP.set()  # the first Ctrl-C: the run ends at its first tick, saved and returned
-    record = rc.reach(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), out=tmp_path / "stopped")
+    record = common.run_experiment(SimConfig(substep=.003), mpc, rc.Reach(), SampleKnot(), VirtualTime.ideal(),
+                                   out=tmp_path / "stopped")
     assert record.metadata["status"] == "interrupted" and record.metadata["reason"] == "stop_requested"
     assert load_run(record.out).metadata == record.metadata and len(record.ticks["t"]) == 1
 
 
-def test_a_failed_build_is_a_saved_error(tmp_path):
-    with pytest.raises(ValueError, match="StickSlip"):  # a plant with friction names its integrator
-        rc.reach(SimConfig(friction=urdf_friction()), Mpc(replace(rc.tm.TIAGO, N=4)), out=tmp_path / "r")
-    metadata = json.loads((tmp_path / "r" / "summary.json").read_text())["metadata"]
-    assert metadata["status"] == "error" and "Euler-only" in metadata["error"]
+def test_a_failed_build_or_compile_is_a_saved_error_closing_an_mpc_built_there(monkeypatch, tmp_path):
+    closed = []
+    mpc = Mpc(replace(rc.tm.TIAGO, N=4))
+    mpc.close = lambda: closed.append("mpc")
+    monkeypatch.setattr(rc.tm, "Mpc", NS(compile=lambda params: mpc))
+    for name, given in (("passed", mpc), ("built", rc.tm.TIAGO)):
+        with pytest.raises(ValueError, match="StickSlip"):  # a plant with friction names its integrator
+            common.run_experiment(SimConfig(friction=urdf_friction()), given, rc.Reach(), SampleKnot(),
+                                  VirtualTime.ideal(), out=tmp_path / name)
+        metadata = json.loads((tmp_path / name / "summary.json").read_text())["metadata"]
+        assert metadata["status"] == "error" and "Euler-only" in metadata["error"]
+        assert closed == ([] if name == "passed" else ["mpc"])  # a passed MPC is the caller's
+
+    def fail(params):
+        raise RuntimeError("the compile failed")
+
+    monkeypatch.setattr(rc.tm, "Mpc", NS(compile=fail))
+    with pytest.raises(RuntimeError, match="compile"):
+        common.run_experiment(SimConfig(substep=.003), rc.tm.TIAGO, rc.Reach(), SampleKnot(), VirtualTime.ideal(),
+                              out=tmp_path / "compile")
+    metadata = load_run(tmp_path / "compile").metadata
+    assert metadata["status"] == "error" and "the compile failed" in metadata["error"]
 
 
 def test_update_period_0_stays_back_to_back(tmp_path):
@@ -224,8 +256,8 @@ def test_update_period_0_stays_back_to_back(tmp_path):
             requests.append(state.t)
             super().request(state, reference, updates)
 
-    record = rc.reach(SimConfig(substep=.002), Counting(replace(rc.tm.TIAGO, N=8)), task=rc.Reach(timeout_s=.01),
-                      out=tmp_path / "r", timing=VirtualTime(.002, 0., 0.))
+    record = common.run_experiment(SimConfig(substep=.002), Counting(replace(rc.tm.TIAGO, N=8)),
+                                   rc.Reach(timeout_s=.01), SampleKnot(), VirtualTime(.002, 0., 0.), out=tmp_path / "r")
     assert record.config["timing"].update_period == 0.
     np.testing.assert_allclose(requests, np.arange(5) * .002, atol=1e-12)  # a request at every tick
 
@@ -245,31 +277,58 @@ def test_the_command_line_refuses_a_latency_on_wall_time_or_an_invalid_one(argv)
         common.arguments("", argv)
 
 
+def test_the_command_line_refuses_a_plant_the_experiment_does_not_support():
+    assert common.arguments("", [], plants=("sim",)).plant == "sim"
+    with pytest.raises(SystemExit):
+        common.arguments("", ["--plant", "rehearsal"], plants=("sim",))
+
+
+@pytest.mark.parametrize("argv, timing", [
+    ([], VirtualTime(.002, .02, 0.)),
+    (["--update-period", ".01"], VirtualTime(.002, .01, 0.)),
+    (["--solve-latency", ".005", "--command-period", ".01"], VirtualTime(.01, .02, .005)),
+    (["--solve-latency", "measured"], VirtualTime(.002, .02, "measured")),
+    (["--plant", "rehearsal", "--update-period", "0"], RealTime(.002, 0.)),
+    (["--plant", "rehearsal"], RealTime())])
+def test_setup_replaces_only_the_given_options(argv, timing):
+    """In the main's timing (here 20 ms updates) or, for the rehearsal, in RealTime()."""
+    plant = SimConfig(substep=.003)
+    assert common.setup(common.arguments("", argv), plant, VirtualTime(.002, .02, 0.)) == (plant, timing)
+
+
+def test_setup_replaces_the_options_in_an_experiments_own_timing():
+    plant = SimConfig(substep=.003)
+    args = common.arguments("", ["--solve-latency", ".03", "--command-period", ".004"])
+    assert common.setup(args, plant, Compensated()) == (plant, Compensated(.03, .004))
+
+
 @pytest.mark.parametrize("argv, solver, timing, budget", [
-    ([], "Mpc", VirtualTime(.002, .01, 0.), None),
-    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTime(.01, .02, .005), None),
-    (["--solve-latency", "measured"], "Mpc", VirtualTime(.002, .02, "measured"), .01),
+    ([], "Mpc", VirtualTime.ideal(), None),
+    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTime(.01, .01, .005), None),
+    (["--solve-latency", "measured"], "Mpc", VirtualTime(.002, .01, "measured"), .01),
     (["--plant", "rehearsal", "--update-period", "0"], "MpcProcess", RealTime(.002, 0.), .01)])
-def test_launch_picks_the_timing_the_mpc_and_the_budget(monkeypatch, argv, solver, timing, budget):
-    """Only the given options change the main's timing (here 20 ms updates) or RealTime()."""
-    seen = {}
+def test_the_main_runs_on_the_mpc_run_experiment_builds(monkeypatch, tmp_path, argv, solver, timing, budget):
+    """reach's main end to end on a fake MPC: run_experiment builds it for the timing, with
+    the wall-time budget only where the solve's wall time is the latency, and closes it."""
+    built = []
 
     def compile(name):
-        return lambda params: NS(params=params, close=lambda: None, kind=name)
+        def build(params):
+            mpc = Mpc(params)
+            mpc.kind, mpc.close = name, lambda: built.append("closed")
+            built.append(mpc)
+            return mpc
+        return NS(compile=build)
 
-    monkeypatch.setattr(rc.tm, "Mpc", NS(compile=compile("Mpc")))
-    monkeypatch.setattr(rc.tm, "MpcProcess", NS(compile=compile("MpcProcess")))
-
-    def experiment(plant, mpc, *, timing, **kw):
-        seen.update(plant=plant, mpc=mpc, timing=timing)
-        return NS(metadata={}, out=None)
-
-    if argv == []:  # the main's timing, its update period replaced
-        argv = ["--update-period", ".01"]
-    common.launch(common.arguments("", argv), experiment, SimConfig(substep=.003), rc.tm.TIAGO,
-                  VirtualTime(.002, .02, 0.))
-    assert seen["mpc"].kind == solver and seen["mpc"].params.max_sqp_time_s == budget
-    assert seen["timing"] == timing and seen["plant"] == SimConfig(substep=.003)
+    monkeypatch.setattr(rc.tm, "Mpc", compile("Mpc"))
+    monkeypatch.setattr(rc.tm, "MpcProcess", compile("MpcProcess"))
+    monkeypatch.setattr(common.signal, "signal", lambda *args: None)  # the main's stop signals
+    assert rc.main([*argv, "--duration", ".02", "--output", str(tmp_path / "r")]) == 1  # the capped reach times out
+    run = load_run(tmp_path / "r", classes=[rc.Reach])
+    assert built[0].kind == solver and built[1:] == ["closed"]
+    assert run.config["params"] == built[0].params == replace(rc.tm.TIAGO, max_sqp_time_s=budget)
+    assert run.config["timing"] == timing and run.config["plant"] == SimConfig(substep=.003)
+    assert run.config["duration"] == .02 and "distance_m" in run.ticks
 
 
 def test_stop_signals_set_the_flag_and_a_second_one_aborts():
@@ -297,9 +356,10 @@ def test_the_random100_study_round_trips_and_load_reads_its_runs(tmp_path):
     (tmp_path / "study.json").write_text(json.dumps(dict(provenance={}, study=rec.to_dict(study))))
     case = study.cases[0]
     assert case.name == "pair_03546" and len(case.initial_state) == 14
-    record = rc.reach(replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:]),
-                      Mpc(replace(config.params, N=4)), task=rc.Reach(case.target_m, timeout_s=.01),
-                      timing=config.timing, out=tmp_path / "runs" / case.name, case=case.name)
+    record = common.run_experiment(replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:]),
+                                   Mpc(replace(config.params, N=4)), rc.Reach(case.target_m, timeout_s=.01),
+                                   SampleKnot(), config.timing, out=tmp_path / "runs" / case.name, case=case.name)
+    rc.evaluate(record)
     loaded, records = random100.load(tmp_path)
     assert loaded == study and [r.config["case"] for r in records] == [case.name]  # the second case did not run
     assert records[0].config["task"] == rc.Reach(case.target_m, timeout_s=.01)

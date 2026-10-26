@@ -15,16 +15,18 @@ robot), and select the intended DDS domain and network. The package never
 loads ROS itself; constructing the client raises a `RuntimeError` if the ROS
 packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
-- **Check-only (default):** `python -m experiments.reach --plant robot` builds
-  `RobotConfig(execute=False)`'s `RosPlant`, runs `start(WallClock())` and `stop()`,
-  and prints its `run_state`. It reads the controller inventory but loads no
-  controller, switches nothing, publishes nothing and builds no MPC. Nothing is saved.
+- **Check-only (default):** `python -m experiments.reach --plant robot`: the main's
+  `setup` (`experiments/common.py`) builds `RobotConfig(execute=False)`'s `RosPlant`,
+  runs `start(WallClock())` and `stop()`, prints its `run_state` and returns exit
+  status 0. It reads the controller inventory but loads no controller, switches
+  nothing, publishes nothing and builds no MPC. Nothing is saved.
 - **Execution:** `--execute --target X_M Y_M Z_M` (target required). You type
-  `EXECUTE` before the ROS client exists; anything else returns exit status 2.
-  The main has installed the stop signals first (`handle_stop_signals`). Then
-  `launch` (`experiments/common.py`) compiles GATO's module unless it is cached and
-  builds the `MpcProcess` (`MpcProcess.compile`);
-  `run_experiment` builds the `RosPlant` from `RobotConfig(execute=True)`, and
+  `EXECUTE` in `setup`, before the ROS client exists and before anything compiles;
+  anything else returns exit status 2. Only then does `setup` return
+  `RobotConfig(execute=True)` and `RealTime`. The main has installed the stop
+  signals first (`handle_stop_signals`). Then `run_experiment` creates the run's
+  record, compiles GATO's module unless it is cached and builds the `MpcProcess`
+  (`MpcProcess.compile`), builds the `RosPlant` from `RobotConfig(execute=True)`, and
   `run_real_time` calls `plant.start(WallClock())`, so the startup
   checks see a state read after the build, then `mpc.warmup` from a state read
   after them (GATO's warm-up solve); meanwhile the arm stays under PAL's
@@ -33,7 +35,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
   the run is saved as `interrupted`. A second signal raises `KeyboardInterrupt`
   (for the blocking first-state wait or a compile); `stop()` still runs in the
   loop's `finally`. The MPC process and the safety worker ignore SIGINT.
-  `run_experiment` closes the plant (and with it the safety worker), `launch` the MPC.
+  `run_experiment` closes the plant (and with it the safety worker), then the MPC.
 - **`--duration S`** ends a run after at most S seconds (otherwise the reach
   times out after 8 s and the figure eight runs its 24 s period); use it for
   first runs.
@@ -65,7 +67,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
 The loop's checks (`plan_fault`, `lease_fault`, `command_fault`) return a reason
 (`effort_limit`, `lease_expired`, `invalid_command`): the tick sends nothing,
-reaches the callbacks, and the run ends as `fault` with that reason. The plant's
+reaches the tick callbacks, and the run ends as `fault` with that reason. The plant's
 checks (`RosPlant`, the safety worker) and the MPC's raise: the run ends as
 `error`. Nothing retries. Limits are the full URDF's; the tolerances are fields
 of `Checks` in `robot.py`.

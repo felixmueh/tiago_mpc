@@ -33,7 +33,7 @@ def test_a_run_is_written_and_read_back(tmp_path):
     written = json.loads((tmp_path / "r" / "summary.json").read_text())  # at once
     assert written["format"] == FORMAT and written["metadata"]["status"] == "running"
     assert written["config"]["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.02,
-                                               solve_latency=.01)
+                                               solve_latency_s=.01)
     outcome = timing.run(plant, mpc, task, SampleKnot(), [record], duration=.05)
     record.add_events([Event(plant.clock.now(), "handback", "handed back", dict(restored=True, errors=[]))])
     record.ticks["distance_m"] = np.arange(len(record.ticks["t"])) * .1
@@ -73,11 +73,20 @@ def test_a_run_is_written_and_read_back(tmp_path):
 
 def test_save_refuses_a_column_of_the_wrong_length(tmp_path):
     record = RunRecord(tmp_path / "r", task=Task())
-    run_virtual_time(Plant(), Mpc(), Task(), callbacks=[record], command_period=.01, update_period=.01,
-                     duration=.03, solve_latency=0.)
+    run_virtual_time(Plant(), Mpc(), Task(), tick_callbacks=[record], command_period=.01, update_period=.01,
+                     duration=.03, solve_latency_s=0.)
     record.ticks["short"] = np.zeros(2)
     with pytest.raises(ValueError, match="rows"):
         record.save()
+
+
+def test_load_run_refuses_a_run_of_another_format(tmp_path):
+    record = RunRecord(tmp_path / "r", task=Task())
+    record.save()
+    summary = json.loads((tmp_path / "r" / "summary.json").read_text())
+    (tmp_path / "r" / "summary.json").write_text(json.dumps({**summary, "format": 1}))
+    with pytest.raises(ValueError, match=f"format 1, not {FORMAT}: load it with the code that wrote it"):
+        load_run(tmp_path / "r")
 
 
 @dataclass(frozen=True)

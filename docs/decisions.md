@@ -7,6 +7,68 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-10-26: an experiment is a task and an `evaluate`; each main sets up its
+  run** (Felix; the design is `agent-reading/tiago-mpc-design/experiment-structure-design.md`
+  in the thesis workspace, its last section deciding the review's points). It replaced
+  `launch` and the experiment functions `reach()` and `figure8()`, which took every
+  system piece with a default only to hand it on, and the mains' copies of those defaults.
+  - **An experiment** is its task dataclass and `evaluate(record)`: its metrics as a
+    function of the record, reading the task from `record.config["task"]`, so the same
+    code runs live and on `load_run(path, classes=[Reach])`. It skips the metrics of a
+    run without ticks and ends with `record.save()`; reach's sets `"arrived"` for
+    `"done"`. `TaskInterface.duration_s` is the task's own duration (reach's timeout,
+    the figure eight's period); the loops never read it.
+  - **Defaults once per main:** each main defines its plant config, parameters, task,
+    law and timing once, calls `setup`, `run_experiment` and `evaluate` itself, then
+    prints the metadata and the run directory (two lines, no `report` helper). Python
+    callers (random100, the studies, the tests) pass every piece explicitly.
+    `plan_feedback` and `latency_compensation` keep separate mains with their own setup.
+  - **`run_experiment(plant, mpc, task, law, timing, *, duration=None, out=None,
+    **pieces)`:** `mpc` is `MpcParams` or a built MPC. Given parameters, it compiles
+    (minutes unless cached; its docstring says so) after creating the record and before
+    building the plant, `MpcProcess` on `RealTime`, else the in-process `Mpc`, and
+    closes it in `finally`, also after a failed compile (a saved error). A built MPC
+    (a fake, random100's `MpcProcess` per case) is the caller's, which closes it; its
+    `params` are recorded. `duration=None` is the task's own, a number caps it; the
+    record holds the resolved duration. This loosens the 2026-10-22 decision that a call
+    site that may compile says so (above), and the 2026-10-24 one that the caller
+    builds and closes the MPC (`launch`, Records and history).
+  - **The robot gate is inside `setup(args, plant, timing) -> (plant, timing) | int`.**
+    `sim`: the main's timing with the given `--command-period`, `--update-period` and
+    `--solve-latency` replaced (any timing dataclass with those fields, `Compensated`
+    too; the `Timing` protocol declares a dataclass); `rehearsal`: `RealTime` with the
+    given periods; `robot`: without `--execute` the check-only startup checks and exit
+    status 0, with it the typed `EXECUTE` (2 when cancelled), and only then
+    `RobotConfig(execute=True)` and `RealTime`. No ROS client and no compile before the
+    confirmation. `arguments(description, argv, plants)` lets argparse reject a plant
+    the experiment does not support (`plan_feedback` and `latency_compensation`:
+    `sim` only). `run_compensated` refuses a `solve_latency_s` other than declared
+    seconds (finite, >= 0; not `"measured"`) with a `ValueError` before the plant
+    starts, as `run_virtual_time` does, so `latency_compensation`'s main has no check of
+    its own; it honours `--target` as reach's does. `latency_study` keeps compiling once
+    per task and passes its own `Mpc` per case.
+  - **The budget rule, inverted:** when `run_experiment` builds the MPC, the wall-time
+    budget (`max_sqp_time_s`) stays only where the solve's wall time is the latency
+    (`RealTime`, `VirtualTime` with `"measured"`); every other timing, `Compensated`
+    among them, gets None. It replaces the 2026-10-24 rule (Execution) that named the
+    declared latency.
+  - **`solve_latency_s`:** the unit stays in the name (Felix). `VirtualTime.solve_latency`
+    and `Compensated.latency_s` became `solve_latency_s`, and so did the loops' keyword
+    (`run_virtual_time`, `run_compensated`), `constant_latency`'s parameter, the
+    record's `config.timing` key and the `overrun` event's data key; the option stays
+    `--solve-latency`. `record.FORMAT` became 2: `load_run` refuses a run saved before
+    (format 1, the old keys) and names the code that wrote it (22 October: old
+    recordings stay readable only by their own code).
+  - **`tick_callbacks`:** the loops', `run_compensated`'s and the timings' `callbacks`
+    became `tick_callbacks`, the callbacks that see every `Tick` (the `Callback` alias
+    stays). No plan callbacks (Felix).
+  - **`tiago_mpc/interfaces.py`**, renamed from `plan.py` (Felix's option a): one module
+    for the data that crosses the interfaces (`State`, `Plan`, `Event`, `Tick`) and the
+    protocols, the leaf of the import graph. `Law` became `ControlLaw` (`tm.ControlLaw`).
+  - **`hz_to_s(hz)`** (`util.py`, `tm.hz_to_s`) writes a period as a rate:
+    `hz_to_s(500)` and `hz_to_s(100)` are the timings' default command and
+    control-update periods (exactly `.002` and `.01`).
+
 - **2026-10-22: architecture review follow-up (implemented the same day).**
   Keep the component decomposition; share experiment assembly/lifecycle and
   launch plumbing while retaining task-specific definitions and metrics.
@@ -48,7 +110,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   binary)` load exactly that file; `find_binary(params)` looks it up without
   compiling; `compile_binary(params, use_cache=True)` compiles it (minutes,
   CPU only) unless cached, and `use_cache=False` rebuilds. `Mpc.compile(params,
-  use_cache=True)` does both, so a call site that may compile says so.
+  use_cache=True)` does both, so a call site that may compile says so
+  (loosened 2026-10-26, above: `run_experiment` compiles when given parameters).
   Reason: `Mpc(params)` silently compiled for minutes, and the visualizer needs
   settings changes that never compile. Also approved: `Mpc.step` keeps GATO's
   raw step result, and replays carry their `MpcParams` in `provenance.params`.
@@ -270,7 +333,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   it replaced `SimPlant`'s clock argument. `Fixed`, `Measured` and the old `run`
   went. Budget rule: `max_sqp_time_s=None` for a declared latency, the TIAGO
   budget for `"measured"`, the rehearsal and the robot (this replaces "simulations
-  set None" below). Simulation (`--plant sim`) uses the in-process `Mpc`; the
+  set None" below; inverted on 2026-10-26, Purpose and shape: the budget only on
+  `RealTime` and `"measured"`; `solve_latency` became `solve_latency_s` the same
+  day). Simulation (`--plant sim`) uses the in-process `Mpc`; the
   robot and the rehearsal keep `MpcProcess`, random100 its `MpcProcess` per case
   (Felix, same day). Warnings and counts: a late tick on wall time (once per run,
   not the tick after the first command, the robot's activation; all counted), a
@@ -356,7 +421,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     `ROS_DISTRO`; `gato_source` became its internal `_gato_source`), `Console`,
     `RunRecord(out, **pieces)` (renamed from `Record`) and `load_run(path,
     classes)`, which share one read interface (`config`, `ticks`, `plans`,
-    `events`, `metadata`), and `FORMAT = 1`. `Event` lives in `plan.py`, beside
+    `events`, `metadata`), and `FORMAT = 1` (2 since 2026-10-26). `Event` lives in `plan.py`, beside
     `Tick`, so that inside the package only the root imports `record.py`, and no
     import is lazy (Felix, same day).
   - **A run directory:** `summary.json` (`format`, `provenance`, `config`, the
@@ -405,7 +470,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     and saves again. There is no `done_status`: the reach sets `"arrived"`
     itself, the figure eight ends as `done`. `RunRecord` also works on its own,
     with the same duties written out. `launch(args, experiment, plant, params,
-    timing)` takes the main's `VirtualTime` explicitly (Felix, same day).
+    timing)` takes the main's `VirtualTime` explicitly (Felix, same day). Superseded
+    on 2026-10-26 (Purpose and shape): `launch` went, each experiment's `evaluate`
+    adds its results and saves, and `run_experiment` builds the MPC from parameters.
   - **Many runs:** no study class in the library; an experiment defines its own
     frozen study classes (random100: `Random100Config`, `Case`, `Random100Study`,
     `study.json` once before the first run, one `RunRecord` per case, stop on

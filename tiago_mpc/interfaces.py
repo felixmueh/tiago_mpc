@@ -1,6 +1,7 @@
-"""The plant's state, the MPC's plan and the loop's tick, and the interfaces of the
-pieces: the protocols a plant, an MPC, a task and a timing satisfy (structurally,
-checked by mypy, never at run time) and the types of a control law and a callback.
+"""The data that crosses the pieces' interfaces (the plant's state, the MPC's plan, the
+loop's tick and its events) and the interfaces themselves: the protocols a plant, an MPC,
+a task and a timing satisfy (structurally, checked by mypy, never at run time) and the
+types of a control law and a tick callback.
 
 A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
 (native coordinates), its knot interval dt and its start time t0: the time of
@@ -79,7 +80,7 @@ class Event:
 
 @dataclass(frozen=True)
 class Tick:
-    """What callbacks see once per command tick: its time t and the latest
+    """What tick callbacks see once per command tick: its time t and the latest
     state (state.t may be older and repeat); command is None before the first plan,
     on the last tick and on a fault; new marks the tick at which the plan took effect,
     update the tick at which a control update started (its request); events: what the
@@ -134,28 +135,33 @@ class TaskInterface(Protocol):
     """A frozen dataclass; t counts from the run's first state. at: the (n, 6)
     end-effector reference at the n knots dt apart from t and the named solver updates
     (mpc.UPDATES) for the request at t, None when it changes nothing; done: whether
-    it is met."""
+    it is met; duration_s: the task's own duration in seconds, the run's unless the
+    caller caps it (experiments.common.run_experiment). The loops never read it: they
+    run for the duration they are given."""
     __dataclass_fields__: ClassVar[dict[str, Any]]  # a dataclass: the record saves its fields
 
     def at(self, t: float, n: int, dt: float) -> tuple[np.ndarray, dict[str, Any] | None]: ...
     def done(self, state: State, t: float) -> bool: ...
+    @property
+    def duration_s(self) -> float: ...
 
 
-Law = Callable[[Plan, float, State], np.ndarray]  # law(plan, t, state) -> command (laws.py)
+ControlLaw = Callable[[Plan, float, State], np.ndarray]  # law(plan, t, state) -> command (laws.py)
 Callback = Callable[[Tick], None]  # sees every command tick, e.g. a RunRecord
 
 
 class Timing(Protocol):
     """VirtualTime and RealTime (loops.py), or an experiment's own: a frozen dataclass of
     a loop's settings whose run calls that loop with them and returns its Outcome."""
+    __dataclass_fields__: ClassVar[dict[str, Any]]  # a dataclass: recorded, and replaced by the mains' setup
 
     def run(
         self,
         plant: PlantInterface,
         mpc: MpcInterface,
         task: TaskInterface,
-        law: Law,
-        callbacks: Sequence[Callback],
+        law: ControlLaw,
+        tick_callbacks: Sequence[Callback],
         *,
         duration: float,
     ) -> Outcome: ...

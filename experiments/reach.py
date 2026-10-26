@@ -5,14 +5,12 @@ Run from the checkout's root: python -m experiments.reach [--help]
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
-from pathlib import Path
+import json
 import sys
-from typing import Any
 
 import numpy as np
 
-from experiments.common import arguments, handle_stop_signals, launch, run_experiment
+from experiments.common import arguments, handle_stop_signals, run_experiment, setup
 import tiago_mpc as tm
 
 
@@ -31,6 +29,10 @@ class Reach:
     def __post_init__(self):
         object.__setattr__(self, "target_m", tuple(map(float, self.target_m)))
 
+    @property
+    def duration_s(self) -> float:
+        return self.timeout_s
+
     def at(self, t, n, dt):
         out = np.zeros((n, 6), dtype=np.float32)  # orientation unconstrained
         out[:, :3] = self.target_m
@@ -44,45 +46,36 @@ class Reach:
                     and np.linalg.norm(tm.ee_velocity(state.q, state.qd)) <= self.speed_tol_m_s)
 
 
-def reach(
-    plant: tm.SimConfig | tm.RobotConfig,
-    mpc: tm.MpcInterface,
-    *,
-    task: Reach = Reach(),
-    law: tm.Law = tm.SampleKnot(),
-    timing: tm.Timing = tm.VirtualTime.ideal(),
-    duration: float | None = None,
-    out: str | Path | None = None,
-    **pieces: Any,
-) -> tm.RunRecord:
-    """Reach task with mpc on plant (common.run_experiment); duration (seconds) caps the
-    task's timeout. The status "arrived" replaces "done"."""
-    record = run_experiment(plant, mpc, task, law, timing, out=out,
-                            duration=task.timeout_s if duration is None else min(task.timeout_s, duration),
-                            **pieces)
+def evaluate(record: tm.RunRecord) -> None:
+    """Reach's results on a run of a Reach, live or saved (tm.load_run(path, classes=[Reach])):
+    the status "arrived" replaces "done"; the distance_m column, the initial, final and
+    maximum distance and the final hand speed, unless the run has no ticks. Saves the record."""
+    task, ticks, results = record.config["task"], record.ticks, record.metadata["results"]
     if record.metadata["status"] == "done":
         record.metadata["status"] = "arrived"
-    ticks, results = record.ticks, record.metadata["results"]
-    if len(ticks["t"]) == 0:  # stopped before the first tick
-        return record
-    distance = np.array([task.distance(q) for q in ticks["q"]])
-    ticks["distance_m"] = distance
-    results["initial_distance_m"] = distance[0]
-    results["final_distance_m"] = distance[-1]
-    results["max_distance_m"] = distance.max()
-    results["final_speed_m_s"] = float(np.linalg.norm(tm.ee_velocity(ticks["q"][-1], ticks["qd"][-1])))
+    if len(ticks["t"]):  # none: stopped before the first tick
+        distance = np.array([task.distance(q) for q in ticks["q"]])
+        ticks["distance_m"] = distance
+        results["initial_distance_m"] = distance[0]
+        results["final_distance_m"] = distance[-1]
+        results["max_distance_m"] = distance.max()
+        results["final_speed_m_s"] = float(np.linalg.norm(tm.ee_velocity(ticks["q"][-1], ticks["qd"][-1])))
     record.save()
-    return record
 
 
 def main(argv=None):
     handle_stop_signals()
     args = arguments(__doc__, argv)
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    record = launch(args, partial(reach, task=task), tm.SimConfig(substep=.003), tm.TIAGO,
-                    tm.VirtualTime.ideal())
-    if isinstance(record, int):  # the robot's checks, or a cancelled execution
-        return record
+    pieces = setup(args, tm.SimConfig(substep=.003), tm.VirtualTime.ideal())
+    if isinstance(pieces, int):  # the robot's checks, or a cancelled execution
+        return pieces
+    plant, timing = pieces
+    record = run_experiment(plant, tm.TIAGO, task, tm.SampleKnot(), timing,
+                            duration=args.duration, out=args.output)
+    evaluate(record)
+    print(json.dumps(record.metadata, indent=2, default=str))
+    print(f"Saved {record.out}")
     return 0 if record.metadata["status"] == "arrived" and record.metadata["results"]["limits_pass"] else 1
 
 

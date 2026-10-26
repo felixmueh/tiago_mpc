@@ -1,12 +1,13 @@
 """Control laws: frozen dataclasses called law(plan, t, state) -> command, once per command
-tick (plan.Law), so a run records them as its configuration."""
+tick (interfaces.ControlLaw), so a run records them as its configuration. SampleKnot and
+HoldFirst do trajectory sampling: they select the command from the plan for the current time."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from tiago_mpc.plan import Plan, State
+from tiago_mpc.interfaces import Plan, State
 
 
 @dataclass(frozen=True)

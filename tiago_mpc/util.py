@@ -1,5 +1,5 @@
-"""Shared infrastructure: the cache that GATO's modules and every derived robot file
-share, with content-addressed writes.
+"""Shared infrastructure: hz_to_s, and the cache that GATO's modules and every derived
+robot file share, with content-addressed writes.
 
 cache_root exports GATO_CACHE_DIR because GATO finds its cache only through that variable
 (without it, a per-user directory): GATO's modules then land beside the derived URDFs
@@ -77,3 +77,8 @@ def digest(*parts: bytes) -> str:
     for part in parts:
         h.update(len(part).to_bytes(8, "little") + part)
     return h.hexdigest()[:8]
+
+
+def hz_to_s(hz: float) -> float:
+    """The period of a rate: 1 / hz seconds (hz_to_s(500) == .002)."""
+    return 1 / hz

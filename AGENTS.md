@@ -35,9 +35,9 @@ the guide documents partial patches, version checks and completion status.
 - Types (Felix, 2026-10-22): mypy checks the core, `tiago_mpc/` without
   `safety.py`, and `experiments/common.py` (`python -m mypy`, configured in
   `pyproject.toml`, also run by `tests/test_types.py`). Annotate public functions and
-  methods; the interfaces are the structural protocols in `tiago_mpc/plan.py` (no
+  methods; the interfaces are the structural protocols in `tiago_mpc/interfaces.py` (no
   inheritance, no run-time checks). The other experiments are not type-checked, but are
-  annotated where it helps the editor complete them, e.g. `record: tm.Record`
+  annotated where it helps the editor complete them, e.g. `record: tm.RunRecord`
   (Felix, 2026-10-24).
 - Signatures (Felix, 2026-10-24): a function signature that does not fit on one line (110
   columns) is written one parameter per line, with a trailing comma, a bare `*` on its own
@@ -46,7 +46,7 @@ the guide documents partial patches, version checks and completion status.
 - The root uses plain re-exports (Felix, 2026-10-24). Importing `tiago_mpc` may load Pinocchio and
   GATO's Python package, but never ROS (only creating a `RosPlant` does) and never GATO's compiled
   module (only the MPC process); `test_importing_the_package_loads_no_ros_and_no_compiled_gato` checks this.
-- Experiments use `import tiago_mpc as tm` (Felix, 2026-10-23); package modules import each other with absolute imports (`from tiago_mpc.plan import State`,
+- Experiments use `import tiago_mpc as tm` (Felix, 2026-10-23); package modules import each other with absolute imports (`from tiago_mpc.interfaces import State`,
   Felix, 2026-10-24), never through the root.
 - Run experiments as modules, `python -m experiments.reach` (Felix, 2026-10-23), with the
   checkout's own environment: `uv run python -m …` or `.venv/bin/python -m …`. Each checkout

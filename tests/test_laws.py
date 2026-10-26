@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from tiago_mpc.laws import HoldFirst, SampleKnot
-from tiago_mpc.plan import Plan
+from tiago_mpc.interfaces import Plan
 
 sample_knot, hold_first = SampleKnot(), HoldFirst()
 PLAN = Plan(10., .002, np.zeros((6, 4)), 1. + np.arange(5)[:, None] * np.ones(2))

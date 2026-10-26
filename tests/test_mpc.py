@@ -20,7 +20,7 @@ from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction, Sign, Tanh
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
-from tiago_mpc.plan import Plan, State
+from tiago_mpc.interfaces import Plan, State
 from tiago_mpc.record import from_dict, to_dict
 from tiago_mpc.tiago import GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 

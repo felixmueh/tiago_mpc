@@ -1,17 +1,19 @@
 """Latency compensation in simulation: solve from the state predicted for the moment the
 plan takes effect, and date the plan from then (Findeisen and Allgöwer; Mastalli et al.).
 
-run_virtual_time(..., solve_latency=L) solves from the state measured at tick t, dates the
+run_virtual_time(..., solve_latency_s=L) solves from the state measured at tick t, dates the
 plan t and lets it take effect at t + L, so SampleKnot enters it at knot floor(L / dt).
 Once L reaches one knot interval, knot 0, where each new solve's correction sits, never
 runs, and the reach diverges (docs/robot.md, Latency). run_compensated predicts the state
 at t + L under the commands the loop sends until then, solves from it and dates the plan
 t + L, so every plan starts at its knot 0. It is its own loop, not run_virtual_time: run_virtual_time
 requests from the measured state, and its late-plan check, plan.index(t - plan.t0), raises
-for a plan dated in the future. Its timing is Compensated, which any experiment takes:
+for a plan dated in the future. Its timing is Compensated, which any experiment takes
+(run_experiment builds the in-process Mpc for it, without the wall-time budget):
 
-    reach(SimConfig(substep=.003), Mpc.compile(replace(TIAGO, max_sqp_time_s=None)),
-          timing=Compensated(latency_s=.02))
+    record = run_experiment(SimConfig(substep=.003), TIAGO, Reach(), SampleKnot(),
+                            Compensated(solve_latency_s=.02))
+    evaluate(record)  # reach's
 
 The other remedy needs only a control law (plan_feedback.py); latency_study.py compares
 both, alone and together, with stock SampleKnot. The main runs one compensated reach.
@@ -29,8 +31,8 @@ from typing import Literal
 import numpy as np
 import pinocchio as pin
 
-from experiments.common import arguments, handle_stop_signals
-from experiments.reach import reach
+from experiments.common import arguments, handle_stop_signals, run_experiment, setup
+from experiments.reach import Reach, evaluate
 import tiago_mpc as tm
 
 _TOLERANCE = 1e-9  # as loops.py: absorbs the rounding of summed periods
@@ -98,23 +100,25 @@ def run_compensated(
     mpc,
     task,
     law=tm.SampleKnot(),
-    callbacks=(),
+    tick_callbacks=(),
     *,
     command_period,
     update_period,
     duration,
-    latency_s,
+    solve_latency_s,
     compensate=True,
     prediction_substep_s=None,
     predictor="implicit",
 ):
-    """run_virtual_time(..., solve_latency=latency_s), but each request is made from the
+    """run_virtual_time(..., solve_latency_s=solve_latency_s), but each request is made from the
     state predicted (predict) at the tick its plan takes effect, and dated then.
     compensate=False requests from the measured state, dated now: run_virtual_time's timing.
     prediction_substep_s: the longest prediction step (None: one step per command tick);
     predictor: "implicit" (implicit_step, the default) or "gpu" (gpu_step).
     Virtual time only (it starts the plant with VirtualClock(), which RosPlant refuses);
-    compensating needs the in-process Mpc (its solver and signs). Returns an Outcome.
+    compensating needs the in-process Mpc (its solver and signs). solve_latency_s is
+    declared seconds only (finite, >= 0), else a ValueError before the plant starts.
+    Returns an Outcome.
 
     As in run_virtual_time: the warm-up before the first tick, one outstanding solve, the next request
     at the first control-update slot at or after its plan took effect, each plan checked
@@ -123,7 +127,9 @@ def run_compensated(
     garbage-collection pause and the overrun events. Each plan's stats carry the state it
     was requested from (requested_state, predicted or measured), a plans column of the record.
     """
-    ahead = math.ceil(latency_s / command_period - _TOLERANCE)  # a plan takes effect at the first tick at or after t + L
+    if not (isinstance(solve_latency_s, (int, float)) and math.isfinite(solve_latency_s) and solve_latency_s >= 0):
+        raise ValueError(f"solve_latency_s must be declared seconds (finite, >= 0), not {solve_latency_s!r}")
+    ahead = math.ceil(solve_latency_s / command_period - _TOLERANCE)  # a plan takes effect at the first tick at or after t + L
     substeps = 1 if prediction_substep_s is None else math.ceil(command_period / prediction_substep_s - _TOLERANCE)
     step = None
     if compensate:
@@ -177,7 +183,7 @@ def run_compensated(
                     else:
                         command = None
             tick = tm.Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
-            for callback in callbacks:
+            for callback in tick_callbacks:
                 callback(tick)
             if fault is not None:
                 return tm.Outcome("fault", fault, t - start)
@@ -194,15 +200,15 @@ def run_compensated(
 @dataclass(frozen=True)
 class Compensated:
     """run_compensated's timing, its settings with the defaults of a 20 ms latency."""
-    latency_s: float = .02
-    command_period: float = .002
-    update_period: float = .01
+    solve_latency_s: float = .02
+    command_period: float = tm.hz_to_s(500)
+    update_period: float = tm.hz_to_s(100)
     compensate: bool = True
     prediction_substep_s: float | None = None
     predictor: Literal["implicit", "gpu"] = "implicit"
 
-    def run(self, plant, mpc, task, law, callbacks, *, duration):
-        return run_compensated(plant, mpc, task, law, callbacks, duration=duration, **asdict(self))
+    def run(self, plant, mpc, task, law, tick_callbacks, *, duration):
+        return run_compensated(plant, mpc, task, law, tick_callbacks, duration=duration, **asdict(self))
 
 
 def first_tick_of_each_plan(record):
@@ -214,16 +220,12 @@ def first_tick_of_each_plan(record):
 def main(argv=None):
     """One compensated reach on SimPlant, --solve-latency seconds (declared; default the timing's)."""
     handle_stop_signals()
-    args = arguments(__doc__, argv)
-    if args.plant != "sim" or args.solve_latency == "measured":
-        raise SystemExit("latency_compensation.py: simulation with a declared --solve-latency only")
-    given = dict(latency_s=args.solve_latency, command_period=args.command_period, update_period=args.update_period)
-    timing = Compensated(**{key: value for key, value in given.items() if value is not None})
-    mpc = tm.Mpc.compile(replace(tm.TIAGO, max_sqp_time_s=None))  # in this process: predict uses its solver
-    try:
-        record = reach(tm.SimConfig(substep=.003), mpc, timing=timing, duration=args.duration, out=args.output)
-    finally:
-        mpc.close()
+    args = arguments(__doc__, argv, plants=("sim",))
+    task = Reach() if args.target is None else Reach(tuple(args.target))
+    plant, timing = setup(args, tm.SimConfig(substep=.003), Compensated())  # sim: never a status
+    record = run_experiment(plant, tm.TIAGO, task, tm.SampleKnot(), timing,
+                            duration=args.duration, out=args.output)
+    evaluate(record)
     effect = first_tick_of_each_plan(record)
     actual = np.c_[record.ticks["q"][effect], record.ticks["qd"][effect]]
     error = np.abs(actual - record.plans["requested_state"]) if len(effect) else np.zeros((0, 14))
@@ -231,6 +233,7 @@ def main(argv=None):
                                                               qd_rad_s=float(error[:, 7:].max(initial=0.)))
     record.save()
     print(json.dumps(record.metadata, indent=2, default=str))
+    print(f"Saved {record.out}")
     return 0 if record.metadata["status"] == "arrived" and record.metadata["results"]["limits_pass"] else 1
 
 

@@ -261,13 +261,13 @@ def test_the_robot_refuses_virtual_time_before_any_ros_call(rig):
     with pytest.raises(ValueError, match="wall time only"):
         plant.start(VirtualClock())
     with pytest.raises(ValueError, match="wall time only"):
-        run_virtual_time(plant, Mpc(), Task(), command_period=.01, update_period=.01, duration=.1, solve_latency=0.)
+        run_virtual_time(plant, Mpc(), Task(), command_period=.01, update_period=.01, duration=.1, solve_latency_s=0.)
     assert not rig.arm.calls and plant.monitor is None and not rig.arm.published
 
 
 def test_run_real_time_activates_once_and_hands_back(rig):
     plant, ticks = robot.RosPlant(robot.RobotConfig(execute=True)), []
-    outcome = run_real_time(plant, Mpc(N=32), Task(), callbacks=[ticks.append], command_period=.01,
+    outcome = run_real_time(plant, Mpc(N=32), Task(), tick_callbacks=[ticks.append], command_period=.01,
                             update_period=.01, duration=.1)
     assert outcome.status == "timeout"
     assert [e.kind for k in ticks for e in k.events if e.kind != "late_plan"] == ["activated"]  # behind, not late
@@ -291,7 +291,8 @@ def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
         mpc.dead = tick.command is not None
 
     with pytest.raises(RuntimeError, match="exited"):
-        run_real_time(plant, mpc, Task(), callbacks=[die], command_period=.01, update_period=.01, duration=1.)
+        run_real_time(plant, mpc, Task(), tick_callbacks=[die], command_period=.01, update_period=.01,
+                      duration=1.)
     assert rig.arm.calls[-1] == "handback" and not rig.arm.published[-1].any()
 
 
@@ -323,7 +324,8 @@ def test_invalid_robot_launch_fails_before_ros(rig, monkeypatch, args):
 
 @pytest.mark.parametrize("module", [rc, f8])
 def test_confirmed_execution_runs_on_the_robot_and_records_the_handback(rig, monkeypatch, module, tmp_path):
-    """The whole path on the fake robot: launch, run_experiment, RosPlant on run_real_time, the record."""
+    """The whole path on the fake robot: setup, run_experiment (building and closing the MPC), RosPlant on
+    run_real_time, the record."""
     closed = []
 
     def compile(params):

@@ -39,7 +39,7 @@ def task_specs(scale):
 def describe(scales, latencies, tasks, cases):
     return dict(cells=len(scales)*len(latencies)*len(tasks)*len(cases), repeats=1,
                 plant_scales=scales, latencies_ms=latencies, tasks=tasks, cases=cases,
-                command_period_s=COMMAND_PERIOD, update_period_s=.01,
+                command_period_s=COMMAND_PERIOD, update_period_s=tm.hz_to_s(100),
                 time_basis="simulation", predictor="implicit", prediction_substep_s=None,
                 provenance=tm.provenance(), urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
                 laws={name: tm.to_dict(law) for name, (_, law) in CASES.items() if name in cases},

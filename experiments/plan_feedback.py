@@ -12,7 +12,9 @@ effect. OCS2 feeds back with Riccati gains here; GATO returns none, hence a PD.
 A law needs no loop of its own: it plugs into run_virtual_time, run_real_time and the
 experiments (latency compensation, the other remedy, does: latency_compensation.py).
 
-    reach(SimConfig(substep=.003), mpc, timing=VirtualTime.constant_latency(.02), law=PlanFeedback())
+    record = run_experiment(SimConfig(substep=.003), TIAGO, Reach(), PlanFeedback(),
+                            VirtualTime.constant_latency(.02))
+    evaluate(record)  # reach's
 
 The main runs one reach in simulation as experiments/reach.py does, with this law.
 
@@ -21,14 +23,14 @@ Run from the checkout's root: python -m experiments.plan_feedback [--help]
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
+import json
 import sys
 
 import numpy as np
 import pinocchio as pin
 
-from experiments.common import arguments, handle_stop_signals, launch
-from experiments.reach import Reach, reach
+from experiments.common import arguments, handle_stop_signals, run_experiment, setup
+from experiments.reach import Reach, evaluate
 import tiago_mpc as tm
 
 
@@ -53,8 +55,8 @@ KP, KD = inertia_gains(30.)
 
 @dataclass(frozen=True)
 class PlanFeedback:
-    """The plan's knot torque plus kp, kd (seven per-joint values or one scalar) on the
-    error to the plan's state at t.
+    """Trajectory sampling plus PD feedback on the plan's states: the plan's knot torque
+    plus kp, kd (seven per-joint values or one scalar) on the error to the plan's state at t.
 
     Between knots the plan's state follows GATO's transcription, which holds each knot's
     torque and so a constant acceleration a = (qd_{k+1} - qd_k) / dt (check_model's step):
@@ -77,14 +79,14 @@ class PlanFeedback:
 
 def main(argv=None):
     handle_stop_signals()
-    args = arguments(__doc__, argv)
-    if args.plant != "sim":
-        raise SystemExit("plan_feedback.py runs in simulation only: the law is untested on the robot")
+    args = arguments(__doc__, argv, plants=("sim",))  # the law is untested on the robot
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    record = launch(args, partial(reach, task=task, law=PlanFeedback()), tm.SimConfig(substep=.003), tm.TIAGO,
-                    tm.VirtualTime.ideal())
-    if isinstance(record, int):
-        return record
+    plant, timing = setup(args, tm.SimConfig(substep=.003), tm.VirtualTime.ideal())  # sim: never a status
+    record = run_experiment(plant, tm.TIAGO, task, PlanFeedback(), timing,
+                            duration=args.duration, out=args.output)
+    evaluate(record)
+    print(json.dumps(record.metadata, indent=2, default=str))
+    print(f"Saved {record.out}")
     return 0 if record.metadata["status"] == "arrived" and record.metadata["results"]["limits_pass"] else 1
 
 

@@ -20,8 +20,8 @@ import traceback
 
 import numpy as np
 
-from experiments.common import handle_stop_signals
-from experiments.reach import Reach, reach
+from experiments.common import handle_stop_signals, run_experiment
+from experiments.reach import Reach, evaluate
 import tiago_mpc as tm
 
 HERE = Path(__file__).resolve().parent
@@ -127,9 +127,10 @@ def main(argv=None):
         mpc, record = None, None
         try:
             mpc = tm.MpcProcess(config.params, binary)  # one process per case
-            record = reach(replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:]), mpc,
-                           task=Reach(case.target_m), timing=config.timing, out=out / "runs" / case.name,
-                           case=case.name)
+            plant = replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:])
+            record = run_experiment(plant, mpc, Reach(case.target_m), tm.SampleKnot(), config.timing,
+                                    out=out / "runs" / case.name, case=case.name)
+            evaluate(record)
         except Exception:  # an error is a result: run_experiment saved it; the other cases continue
             traceback.print_exc()
         finally:

@@ -6,6 +6,14 @@ The timing of each loop, with diagrams, is explained in its docstring: run_real_
 RealTime and VirtualTime, carry each loop's settings and run it. A run ends without an
 exception when the task is done, the time is up, a fault is found or a stop is
 requested (STOP); the loop returns how in its Outcome.
+
+A plan's lease is how long it may be commanded: from t0, the time of the state it was
+computed from, until t0 + min(LEASE_S, the plan's length), so never past its last knot
+(31 knots of 2 ms span only 62 ms). Both loops check it at every tick before the law
+runs (lease_fault); a plan still in effect after its lease ends the run with the fault
+"lease_expired".
+
+The two loops are kept separate to improve readability of the real_robot loop.
 """
 from __future__ import annotations
 
@@ -20,8 +28,10 @@ import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.laws import SampleKnot
-from tiago_mpc.plan import Callback, Event, Law, MpcInterface, Plan, PlantInterface, TaskInterface, Tick
+from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Plan, PlantInterface, TaskInterface,
+                                  Tick)
 from tiago_mpc.tiago import limits
+from tiago_mpc.util import hz_to_s
 
 LEASE_S = .1  # a plan may be commanded at most this long after its state's time
 _TOLERANCE = 1e-9  # absorbs the rounding of summed periods
@@ -87,9 +97,8 @@ def plan_fault(plan: Plan) -> str | None:
 
 
 def lease_fault(plan: Plan, t: float) -> str | None:
-    """"lease_expired" once the plan's lease has ended at t0 + min(100 ms, the plan's
-    length), else None: no plan is commanded past its end (31 x 2 ms knots span only
-    62 ms), so a law is never asked past the last knot."""
+    """"lease_expired" once the plan's lease (the module docstring) has ended at t, else
+    None, so a law is never asked past the last knot."""
     return "lease_expired" if t >= plan.t0 + min(LEASE_S, len(plan.torques) * plan.dt) else None
 
 
@@ -113,8 +122,8 @@ def run_real_time(
     plant: PlantInterface,
     mpc: MpcInterface,
     task: TaskInterface,
-    law: Law = SampleKnot(),
-    callbacks: Sequence[Callback] = (),
+    law: ControlLaw = SampleKnot(),
+    tick_callbacks: Sequence[Callback] = (),
     *,
     command_period: float,
     update_period: float,
@@ -124,16 +133,17 @@ def run_real_time(
     the robot (RosPlant), or a rehearsal of it with a simulated arm (SimPlant).
 
     Time is the computer's monotonic clock (WallClock), and everything takes its real time:
-    the solve, the plant, the callbacks. MpcProcess solves concurrently while the loop
+    the solve, the plant, the tick callbacks. MpcProcess solves concurrently while the loop
     keeps ticking, and a plan is used at the first tick after it arrives; on the robot
-    a state's own age adds to the delay. RealTime(), update_period=.01:
+    a state's own age adds to the delay. RealTime(), update_period=.01; the solves took
+    3.5 and 4.5 ms:
 
-      wall time (ms)  0    2    4    6    8    10   12   14   16   18
-      command ticks   |    |    |    |    |    |    |    |    |    |
-      control updates R0                       R1
-      MPC process     [solve  ]                [solve    ]
-      in effect       old=====P0============================P1=======
-                                ^ arrived at 3.5 ms, used at 4 ms
+      wall time (ms)  0   2   4   6   8   10  12  14  16  18
+      command ticks   |   |   |   |   |   |   |   |   |   |
+      control updates R0                  R1
+      solve           [------]            [--------]
+      in effect       old=====P0======================P1===
+                              ^ the first tick after the plan arrived
 
     Each tick sends its command before it requests a plan, so an in-process Mpc, which
     solves inside the request, delays only the next tick: the ticks it misses
@@ -141,25 +151,29 @@ def run_real_time(
 
     Ticks are command_period apart. A late tick, one that starts a command period or
     more after its deadline because the work before it ran past the next tick, skips
-    the missed ticks and is a late_tick event, unless it follows the first command (on
-    the robot, that command switches to effort control through blocking service calls,
-    whose duration is the activated event's switch_s).
+    the missed ticks and is reported as a late_tick event, unless it follows the first
+    command (on the robot, that command switches to effort control through blocking
+    service calls, whose duration is the activated event's switch_s).
 
-    The task's t is counted from the first state's time: the tick's time for done and
-    the duration, the state's time for at. Before the first tick, mpc.warmup runs
+    The task's time starts at 0 with the first state: done and the duration see the
+    tick's time, and at, which gives a request its reference, sees the time of the state
+    the request starts from. Before the first tick, mpc.warmup runs
     from the started plant's state, the arm still held, so its time counts against no
     plan's lease. Each plan is checked when it arrives (plan_fault), each command before
-    it is sent (lease_fault, command_fault): within the plan's lease, t0 + min(LEASE_S =
-    0.1 s, its length), never past its last knot. A fault ends the run; its tick sends
-    nothing, and a faulting plan never takes effect (the tick carries it as Tick.faulted,
+    it is sent (lease_fault, command_fault): within the plan's lease. A fault ends the
+    run; its tick sends nothing, and a faulting plan never takes effect (the tick carries it as Tick.faulted,
     so the record keeps it). Polling result() at every tick also
     notices a dead MPC process within one tick (it raises). Each plan that takes effect a
     knot interval or more after its state, so that its knot 0 never runs, is a late_plan
     event (docs/robot.md, Latency). The last tick, which sees the task done, the time up
-    or STOP set, sends no command but reaches the callbacks. Garbage collection pauses
+    or STOP set, sends no command but reaches the tick callbacks. Garbage collection pauses
     while the loop runs: a full collection over the buffered ticks takes several
     milliseconds. A duration over MAX_RUNTIME_MIN raises before the plant starts.
     """
+
+    # This is written as inline code for clarity. The cost is duplication with the virtual-time loop and potentially more maintenance.
+    # Time will tell if this decision should be revisited.
+
     if duration > 60 * MAX_RUNTIME_MIN:
         raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
     clock, due = WallClock(), Schedule(update_period)
@@ -207,9 +221,9 @@ def run_real_time(
                         sent += 1
                     else:
                         command = None
-            update = not end and fault is None and not solving and due(t)  # requested after the callbacks
+            update = not end and fault is None and not solving and due(t)  # requested after the tick callbacks
             tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
-            for callback in callbacks:
+            for callback in tick_callbacks:
                 callback(tick)
             if fault is not None:
                 return Outcome("fault", fault, t - start)
@@ -231,13 +245,13 @@ def run_virtual_time(
     plant: PlantInterface,
     mpc: MpcInterface,
     task: TaskInterface,
-    law: Law = SampleKnot(),
-    callbacks: Sequence[Callback] = (),
+    law: ControlLaw = SampleKnot(),
+    tick_callbacks: Sequence[Callback] = (),
     *,
     command_period: float,
     update_period: float,
     duration: float,
-    solve_latency: float | Literal["measured"],
+    solve_latency_s: float | Literal["measured"],
 ) -> Outcome:
     """Run task on plant on virtual time until task.done(state, t) or for duration
     seconds: a controlled experiment in simulation (SimPlant).
@@ -249,7 +263,7 @@ def run_virtual_time(
 
     Virtual time. The loop keeps the time (VirtualClock) and moves it itself, tick by
     tick. Nothing takes time unless the loop writes it in, and it writes in two
-    things: the ticks, command_period apart, and the solves, at solve_latency. The
+    things: the ticks, command_period apart, and the solves, at solve_latency_s. The
     simulator's own computing and the loop's work take none; they only make the run
     slower or faster than real time. (On wall time, in run_real_time, everything
     takes its real time instead.) The loop waits for each solve, places its plan at
@@ -261,10 +275,10 @@ def run_virtual_time(
       wall clock      0    2    4                   7.5  9.5  11.5
       virtual time    0    2    4                   6    8    10
                       the computing took no virtual time; on the timeline the
-                      solve lasts solve_latency (its plan is placed at
-                      4 + solve_latency), and the ticks at 6 and 8 run after it.
+                      solve lasts solve_latency_s (its plan is placed at
+                      4 + solve_latency_s), and the ticks at 6 and 8 run after it.
 
-    solve_latency, required, says how long a solve lasts on the timeline:
+    solve_latency_s, required, says how long a solve lasts on the timeline:
       a number    declared, in seconds: the plan is available that long after the
                   request, whatever the solve really took. A solve that took longer
                   is an overrun event (0, the explicit ideal, never is).
@@ -273,36 +287,37 @@ def run_virtual_time(
 
     The timing VirtualTime holds these settings; its constructors are the common
     ones. VirtualTime.ideal(): each plan in effect at the tick of its request
-    (solve_latency 0). Three more, 2 ms command ticks:
+    (solve_latency_s 0). Three more, 2 ms command ticks:
 
-      VirtualTime.constant_latency(solve_latency=.005), a declared latency,
+      VirtualTime.constant_latency(solve_latency_s=.005), a declared latency,
       update_period=.01 (the preset's own latency is 50 ms):
 
-      time (ms)       0    2    4    6    8    10   12   14   16   18   20
-      command ticks   |    |    |    |    |    |    |    |    |    |    |
-      control updates R0                       R1                       R2
-      available                   ^ R0+5                    ^ R1+5
-      in effect       old============P0=======================P1==========
-                                     ^ the first tick at or after 5 ms
+      time (ms)       0   2   4   6   8   10  12  14  16  18  20
+      command ticks   |   |   |   |   |   |   |   |   |   |   |
+      control updates R0                  R1                  R2
+      solve           [---------]         [---------]
+      in effect       old=========P0==================P1=======
+                                  ^ the first tick at or after the plan is available
 
-      VirtualTime.as_fast_as_possible(), solve_latency="measured", update_period=0;
+      VirtualTime.as_fast_as_possible(), solve_latency_s="measured", update_period=0;
       the solves took 3.5 and 4.1 ms of wall time:
 
-      time (ms)       0    2    4    6    8    10   12   14   16
-      command ticks   |    |    |    |    |    |    |    |    |
-      control updates R0        R1             R2
-      available                ^ 3.5      ^ 4+4.1
-      in effect       old=======P0=============P1===============
-                                ^ R1 at the tick P0 takes effect
+      time (ms)       0   2   4   6   8   10  12  14  16
+      command ticks   |   |   |   |   |   |   |   |   |
+      control updates R0      R1          R2
+      solve           [------][-------]
+      in effect       old=====P0==========P1===========
+                              ^ R1 at the tick P0 takes effect
 
-      VirtualTime.constant_rate(), a constant control rate, solve_latency =
+      VirtualTime.constant_rate(), a constant control rate, solve_latency_s =
       update_period = .01: a request at every slot, its plan in effect at the next
       (an overrun event if a solve took longer):
 
-      time (ms)       0    2    4    6    8    10   12   14   16   18   20
-      command ticks   |    |    |    |    |    |    |    |    |    |    |
-      control updates R0                       R1                       R2
-      in effect       old======================P0=======================P1
+      time (ms)       0   2   4   6   8   10  12  14  16  18  20
+      command ticks   |   |   |   |   |   |   |   |   |   |   |
+      control updates R0                  R1                  R2
+      solve           [-------------------[-------------------]
+      in effect       old=================P0==================P1
 
     Watching. SimPlant(sync_real_time=True) holds each tick until the wall clock has
     caught up, so the run can be watched at real speed; falling behind is a
@@ -316,9 +331,10 @@ def run_virtual_time(
     garbage collection pauses while the loop runs, and a duration over MAX_RUNTIME_MIN
     raises before the plant starts.
     """
-    if not (solve_latency == "measured"
-            or isinstance(solve_latency, (int, float)) and math.isfinite(solve_latency) and solve_latency >= 0):
-        raise ValueError(f"solve_latency must be seconds (finite, >= 0) or 'measured', not {solve_latency!r}")
+    if not (solve_latency_s == "measured" or isinstance(solve_latency_s, (int, float))
+            and math.isfinite(solve_latency_s) and solve_latency_s >= 0):
+        raise ValueError("solve_latency_s must be seconds (finite, >= 0) or 'measured', "
+                         f"not {solve_latency_s!r}")
     if duration > 60 * MAX_RUNTIME_MIN:
         raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
     clock, due = VirtualClock(), Schedule(update_period)
@@ -346,11 +362,11 @@ def run_virtual_time(
                 fault = plan_fault(solved)
                 if fault is None:
                     pending, took = solved, solved.stats["wall_s"]
-                    latency = took if solve_latency == "measured" else solve_latency
+                    latency = took if solve_latency_s == "measured" else solve_latency_s
                     if 0. < latency < took:
                         events.append(Event(t, "overrun", f"a solve took {1e3 * took:.1f} ms, longer than "
-                                                          f"solve_latency={1e3 * latency:g} ms",
-                                            dict(plan=updates - 1, wall_s=took, solve_latency=latency)))
+                                                          f"solve_latency_s={1e3 * latency:g} ms",
+                                            dict(plan=updates - 1, wall_s=took, solve_latency_s=latency)))
                     available = t + latency
                     if t >= available - _TOLERANCE:  # zero latency: in effect at this tick
                         new, pending = pending, None
@@ -371,7 +387,7 @@ def run_virtual_time(
                     else:
                         command = None
             tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
-            for callback in callbacks:
+            for callback in tick_callbacks:
                 callback(tick)
             if fault is not None:
                 return Outcome("fault", fault, t - start)
@@ -388,33 +404,33 @@ def run_virtual_time(
 @dataclass(frozen=True)
 class VirtualTime:
     """run_virtual_time's timing: its three settings, without defaults; the common
-    timings are the constructors below, which its docstring draws."""
+    timings are the constructors below, which its docstring describes."""
     command_period: float
     update_period: float
-    solve_latency: float | Literal["measured"]
+    solve_latency_s: float | Literal["measured"]
 
     @classmethod
-    def ideal(cls, command_period: float = .002, update_period: float = .01) -> VirtualTime:
+    def ideal(cls, command_period: float = hz_to_s(500), update_period: float = hz_to_s(100)) -> VirtualTime:
         """Each plan in effect at the tick of its request."""
         return cls(command_period, update_period, 0.)
 
     @classmethod
     def constant_latency(
         cls,
-        solve_latency: float = .05,
-        command_period: float = .002,
-        update_period: float = .01,
+        solve_latency_s: float = .05,
+        command_period: float = hz_to_s(500),
+        update_period: float = hz_to_s(100),
     ) -> VirtualTime:
-        """Each plan available solve_latency seconds after its request."""
-        return cls(command_period, update_period, solve_latency)
+        """Each plan available solve_latency_s seconds after its request."""
+        return cls(command_period, update_period, solve_latency_s)
 
     @classmethod
-    def as_fast_as_possible(cls, command_period: float = .002) -> VirtualTime:
+    def as_fast_as_possible(cls, command_period: float = hz_to_s(500)) -> VirtualTime:
         """Each solve takes its measured time, and the next is requested when its plan takes effect."""
         return cls(command_period, 0., "measured")
 
     @classmethod
-    def constant_rate(cls, period: float = .01, command_period: float = .002) -> VirtualTime:
+    def constant_rate(cls, period: float = hz_to_s(100), command_period: float = hz_to_s(500)) -> VirtualTime:
         """A request every period, its plan in effect a period later."""
         return cls(command_period, period, period)
 
@@ -423,28 +439,28 @@ class VirtualTime:
         plant: PlantInterface,
         mpc: MpcInterface,
         task: TaskInterface,
-        law: Law,
-        callbacks: Sequence[Callback],
+        law: ControlLaw,
+        tick_callbacks: Sequence[Callback],
         *,
         duration: float,
     ) -> Outcome:
-        return run_virtual_time(plant, mpc, task, law, callbacks, duration=duration, **asdict(self))
+        return run_virtual_time(plant, mpc, task, law, tick_callbacks, duration=duration, **asdict(self))
 
 
 @dataclass(frozen=True)
 class RealTime:
     """run_real_time's timing."""
-    command_period: float = .002
-    update_period: float = .01
+    command_period: float = hz_to_s(500)
+    update_period: float = hz_to_s(100)
 
     def run(
         self,
         plant: PlantInterface,
         mpc: MpcInterface,
         task: TaskInterface,
-        law: Law,
-        callbacks: Sequence[Callback],
+        law: ControlLaw,
+        tick_callbacks: Sequence[Callback],
         *,
         duration: float,
     ) -> Outcome:
-        return run_real_time(plant, mpc, task, law, callbacks, duration=duration, **asdict(self))
+        return run_real_time(plant, mpc, task, law, tick_callbacks, duration=duration, **asdict(self))

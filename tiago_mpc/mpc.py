@@ -26,7 +26,7 @@ from gato import SolverParams
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Tanh, passive_torque
-from tiago_mpc.plan import Plan, State
+from tiago_mpc.interfaces import Plan, State
 from tiago_mpc.tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
 from tiago_mpc.util import cache_root, digest
 
@@ -67,8 +67,8 @@ class MpcParams:
     effort_fraction: float = .85
     friction: Friction | None = None  # predictor friction; None is loss-free
     # Wall time for a solve's SQP iterations (MPCController.step's budget_s), within
-    # solver.max_sqp_iters; None: no time limit. launch sets None for a declared solve_latency
-    # and keeps it for "measured", the rehearsal and the robot.
+    # solver.max_sqp_iters; None: no time limit. run_experiment, when it builds the MPC, keeps
+    # it only where the solve's wall time is the latency (RealTime, VirtualTime "measured").
     max_sqp_time_s: float | None = .01
     warmup: bool = True  # Mpc.warmup runs GATO's warm-up solve before the first plan
 

@@ -17,12 +17,13 @@ long as they take, and a plan is used at the first tick after it arrives. It
 drives the robot and the rehearsal, a `SimPlant` on the robot's architecture.
 `run_virtual_time` runs controlled experiments in simulation on virtual time
 (`VirtualClock`), which the loop keeps itself: the experiment declares how long a
-solve lasts (`solve_latency`), and the loop waits for each solve and places its
+solve lasts (`solve_latency_s`), and the loop waits for each solve and places its
 plan at the request plus that latency. Their timings, `RealTime` and `VirtualTime`
 (with the presets `ideal`, `constant_latency`, `as_fast_as_possible` and
 `constant_rate`), hold each loop's settings and run it. Either loop takes any MPC;
-`launch` (`experiments/common.py`) gives `run_virtual_time` an in-process `Mpc` and
-`run_real_time` an `MpcProcess`, which solves concurrently in its own process. Each loop starts the plant on its clock
+given parameters, `run_experiment` (`experiments/common.py`) builds an `MpcProcess`,
+which solves concurrently in its own process, for `RealTime` and an in-process `Mpc`
+for every other timing. Each loop starts the plant on its clock
 (`plant.start(clock)`) and samples plans, checks leases and schedules ticks and
 control updates on it. `State.t` is when the state was measured, on the same
 time, and a plan starts at its state's time; on the robot a state can be older
@@ -36,12 +37,12 @@ solve.
 
 ```
 tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what experiments use),
-              util.py (the cache: cache_root, cached, cache_meshes, digest),
+              util.py (hz_to_s; the cache: cache_root, cached, cache_meshes, digest),
               tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary,
               Mpc, MpcProcess),
-              plan.py (State, Plan, Event, Tick; the protocols PlantInterface, MpcInterface,
-              TaskInterface, Timing; Law, Callback),
+              interfaces.py (State, Plan, Event, Tick; the protocols PlantInterface,
+              MpcInterface, TaskInterface, Timing; ControlLaw, Callback),
               clock.py (VirtualClock, WallClock), laws.py (SampleKnot, HoldFirst),
               loops.py (run_real_time, run_virtual_time, RealTime, VirtualTime, Outcome,
               STOP, plan_fault, lease_fault, command_fault),
@@ -49,8 +50,8 @@ tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what ex
               ros2.py (ROS 2 client), safety.py,
               record.py (the run format: to_dict, from_dict, CLASSES, provenance, Console,
               RunRecord, load_run)
-experiments/  common.py (run_experiment, common_results, handle_stop_signals, launch,
-              the mains' options), reach.py, figure8.py, random100/, replay.py
+experiments/  common.py (run_experiment, common_results, handle_stop_signals, and the mains'
+              arguments and setup), reach.py, figure8.py, random100/, replay.py
 ```
 
 ## Setup
@@ -162,7 +163,7 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
 ```
 
 - **Timing.** `--plant sim` (the default) runs `run_virtual_time` with an in-process
-  `Mpc`, on the experiment's `VirtualTime` (`VirtualTime.ideal()` for reach and
+  `Mpc`, on the main's `VirtualTime` (`VirtualTime.ideal()` for reach and
   figure8). `--solve-latency` says how long a solve lasts on the timeline: declared
   seconds (the preset's 0, the explicit ideal) or `measured`, the solve's own wall time
   (`plan.stats["wall_s"]`). A plan takes effect at the first command tick at or
@@ -191,9 +192,12 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   worker ignore SIGINT; the cancelled `EXECUTE` prompt exits with status 2.
 - **Solve time and warm-up:** `MpcParams.max_sqp_time_s` (10 ms) stops a solve's
   SQP iterations by wall time, within `solver.max_sqp_iters` (5). It follows the
-  timing: `launch` sets it to None for a declared `--solve-latency` (the solve's
-  wall time is irrelevant by assumption) and keeps it for `measured`, the
-  rehearsal and the robot; random100 (a declared 0) sets None.
+  timing: when `run_experiment` builds the MPC, it keeps the budget only where the
+  solve's wall time is the latency (`RealTime`: the rehearsal and the robot;
+  `VirtualTime` with `measured`) and sets None for every other timing (a declared
+  `--solve-latency`, `Compensated`: the solve's wall time is irrelevant by
+  assumption); random100 (a declared 0) and the latency study build their own MPC
+  with None.
   Before the first tick, both loops call `mpc.warmup` with the started plant's
   state, the arm still held: with `MpcParams.warmup` (default), GATO's warm-up
   solve (the solver's own iteration limit, no time limit) seeds the first solve,
@@ -212,7 +216,8 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   10 ms, the knot interval of TIAGO and FIGURE8; 0: back to back, a request at the tick
   the previous plan takes effect); either may differ from the knot interval. Only
   the options given replace the timing's values. `--duration S` ends a run after at
-  most S seconds.
+  most S seconds. In code, a period written as a rate is `tm.hz_to_s(hz)`
+  (`hz_to_s(500) == .002`).
 - **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm with the grasp point slower than 2 cm/s, timeout 8 s.
@@ -224,30 +229,44 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
 
 ## Writing an experiment
 
-An experiment is a task (a frozen dataclass with `at(t, n, dt)`, the reference
-and solver updates at t, and `done(state, t)`) and a function with keyword
-defaults that hands a plant config, an MPC, the task, a law and a timing to
-`run_experiment` (`experiments/common.py`), then adds its own results and columns
-to the returned `RunRecord` and saves it again. `run_experiment` records the pieces
-as the run's configuration, builds the plant (`plant.build()`) and runs the
-timing's loop, sets the status (`done`, `timeout`, `fault`, `interrupted`; `error`
-for a real error, raised again), adds the common results, closes the plant, saves
-the run and exports the replay, also after a fault or an error. Reach turns `done`
-into `arrived`. `main` hands its plant config, parameters and `VirtualTime` to `launch`, which picks
-the plant, the MPC and the timing from `--plant`.
-The caller closes the MPC. Swap a piece by passing another one:
+An experiment is a task and an `evaluate`. The task is a frozen dataclass with
+`at(t, n, dt)`, the reference and solver updates at t, `done(state, t)` and
+`duration_s`, its own duration (reach's timeout, the figure eight's period).
+`evaluate(record)` adds the experiment's columns and results to a run's
+`RunRecord` and saves it; it reads the task from `record.config["task"]`, so the
+same code runs on a saved run (`tm.load_run(path, classes=[Reach])`), and it skips
+the metrics of a run without ticks. Reach's turns `done` into `arrived`.
+
+`run_experiment(plant, mpc, task, law, timing, *, duration=None, out=None, **pieces)`
+(`experiments/common.py`) runs one run for the task's duration, or at most
+`duration` seconds. Given `MpcParams` as `mpc`, it compiles and builds the MPC
+(minutes, unless GATO's module is cached): `MpcProcess` on `RealTime`, the in-process
+`Mpc` on every other timing, with the wall-time budget only where the solve's wall
+time is the latency (above), and closes it; a built MPC is the caller's, which
+closes it. It records the pieces as the run's configuration (the duration it
+resolved, the parameters the MPC loaded), builds the plant (`plant.build()`), runs
+the timing's loop, sets the status (`done`, `timeout`, `fault`, `interrupted`;
+`error` for a real error, raised again, a failed compile among them), adds the
+common results, closes the plant, saves the run and exports the replay, also after
+a fault or an error. Each main defines its defaults once and hands them to
+`setup(args, plant, timing)`, which replaces only what the options name (`--plant`,
+`--command-period`, `--update-period`, `--solve-latency`) and holds the robot's gate
+(after the check-only run or a cancelled confirmation it returns the exit status
+instead); the main then calls `run_experiment` and `evaluate` and prints the metadata
+and the run directory. `arguments(description, argv, plants)` accepts only the plants an
+experiment supports. Swap a piece by passing another one:
 
 ```python
 from dataclasses import replace
 
 import tiago_mpc as tm
-from experiments.reach import Reach, reach
+from experiments.common import run_experiment
+from experiments.reach import Reach, evaluate
 
-params = replace(tm.TIAGO, solver=tm.TIAGO.solver.replace(mu=1.), max_sqp_time_s=None)  # a declared latency
-mpc = tm.Mpc.compile(params)  # in this process; tm.MpcProcess: its own
-record = reach(tm.SimConfig(substep=.003), mpc, timing=tm.VirtualTime.constant_latency(.005),
-               task=Reach(position_tol_m=.02), law=tm.HoldFirst())
-mpc.close()
+params = replace(tm.TIAGO, solver=tm.TIAGO.solver.replace(mu=1.))
+record = run_experiment(tm.SimConfig(substep=.003), params, Reach(position_tol_m=.02), tm.HoldFirst(),
+                        tm.VirtualTime.constant_latency(.005))  # an in-process Mpc without the budget
+evaluate(record)
 print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
 ```
 
@@ -258,10 +277,10 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   `case="pair_00026"`) are recorded too. Frozen configs hold tuples, not lists.
 - A **control law** is a frozen dataclass called `law(plan, t, state) -> command`
   (`SampleKnot()`, `HoldFirst()`, `PlanFeedback(kp, kd)`); a **timing** one whose
-  `run(plant, mpc, task, law, callbacks, duration=...)` runs its loop
-  (`VirtualTime`, `RealTime`, `Compensated`); **callbacks** see every `Tick` (the
+  `run(plant, mpc, task, law, tick_callbacks, duration=...)` runs its loop
+  (`VirtualTime`, `RealTime`, `Compensated`); **tick callbacks** see every `Tick` (the
   tick's time, state, command, plan, whether it is new, whether a control update
-  started, its events). The pieces' interfaces are typed in `tiago_mpc/plan.py`:
+  started, its events). The pieces' interfaces are typed in `tiago_mpc/interfaces.py`:
   a plant, an MPC, a task and a timing need no base class, only what the protocols
   `PlantInterface`, `MpcInterface`, `TaskInterface` and `Timing` declare.
 - `SimConfig(friction=..., integrator=...)` sets the **plant's** losses,
@@ -293,7 +312,7 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   calls it and returns a `tm.Outcome`, it fits `run_experiment` (as `Compensated`).
   Per-plan data of an own loop travels in `plan.stats` (every key a `plans`
   column). Without `run_experiment`, `tm.RunRecord(out, **pieces)` is used on its
-  own: pass it and `tm.Console()` as callbacks, and set the status, take the plant's
+  own: pass it and `tm.Console()` as tick callbacks, and set the status, take the plant's
   events after the loop and save in a `finally` yourself.
 - **Many runs:** an experiment's own frozen study classes, written once with
   `to_dict` before the first run, one `RunRecord` per case; `random100` is the
@@ -336,7 +355,7 @@ python -m experiments.figure8 --plant robot --execute --target X_M Y_M Z_M --dur
 `RunRecord` (`tiago_mpc/record.py`, the one module of the format) writes the
 provenance and configuration at the start and buffers one entry per command tick;
 `save()` writes the run into `--output` or `_expr_data/<task>/<UTC time>/`
-(ignored by Git). Plain JSON and npz, format 1; times count from the first state's:
+(ignored by Git). Plain JSON and npz, format 2; times count from the first state's:
 
 - `summary.json`: `format`; `provenance` (commit, source status, package
   versions, GATO's source, `ROS_DISTRO`); `config`, the pieces (`task`, `params`,

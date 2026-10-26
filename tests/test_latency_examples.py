@@ -1,6 +1,7 @@
 """The two latency examples on fakes (CPU only): PlanFeedback, and run_compensated's timing
 and prediction (experiments/plan_feedback.py, experiments/latency_compensation.py)."""
 from functools import partial
+import math
 
 import numpy as np
 import pytest
@@ -11,7 +12,7 @@ from experiments.plan_feedback import PlanFeedback, inertia_gains
 from test_loops import Mpc, Plant, Task, commanded, go
 from tiago_mpc.dynamics import Tanh
 from tiago_mpc.laws import SampleKnot
-from tiago_mpc.plan import Plan, State
+from tiago_mpc.interfaces import Plan, State
 from tiago_mpc.record import RunRecord, from_dict, to_dict
 from tiago_mpc.tiago import Q_START, arm_urdf, urdf_friction
 
@@ -47,10 +48,10 @@ def test_plan_feedback_follows_the_plans_constant_acceleration_between_knots():
 
 @pytest.mark.parametrize("latency", [0., .02, .025])
 def test_uncompensated_it_times_requests_and_plans_as_run_virtual_time(latency):
-    """The same request times and commands as run_virtual_time(solve_latency=latency)."""
+    """The same request times and commands as run_virtual_time(solve_latency_s=latency)."""
     stock, mine = Mpc(), Mpc()
-    _, a, _ = go(stock, solve_latency=latency, duration=.12)
-    _, b, _ = go(mine, loop=partial(run_compensated, latency_s=latency, compensate=False), duration=.12)
+    _, a, _ = go(stock, solve_latency_s=latency, duration=.12)
+    _, b, _ = go(mine, loop=partial(run_compensated, solve_latency_s=latency, compensate=False), duration=.12)
     assert stock.requests == mine.requests and commanded(a) == commanded(b)
     assert [(k.t, k.new, k.update) for k in a] == [(k.t, k.new, k.update) for k in b]
     assert [[e.kind for e in k.events] for k in a] == [[e.kind for e in k.events] for k in b]  # late_plan
@@ -90,9 +91,9 @@ class Predicting(Mpc):
 def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp_path, substep):
     plant, mpc, ticks = Moving(), Predicting(), []
     record = RunRecord(tmp_path / "r", task=Task())
-    run_compensated(plant, mpc, Task(), SampleKnot(), callbacks=[record, ticks.append], command_period=.01,
-                    update_period=.01, duration=.1, latency_s=.02, prediction_substep_s=substep,
-                    predictor="gpu")  # the fake sim_forward is the plant's model
+    run_compensated(plant, mpc, Task(), SampleKnot(), tick_callbacks=[record, ticks.append],
+                    command_period=.01, update_period=.01, duration=.1, solve_latency_s=.02,
+                    prediction_substep_s=substep, predictor="gpu")  # the fake sim_forward is the plant's model
     # Requested at 0, 20, ..., 80 ms, each from the state predicted 20 ms on, dated then.
     assert [round(t, 6) for t, _ in mpc.requests] == [.02, .04, .06, .08, .1]
     assert commanded(ticks)[:4] == [(.02, 1.), (.03, 2.), (.04, 1.), (.05, 2.)]  # knot 0 runs
@@ -107,13 +108,21 @@ def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp
 
 
 def test_compensation_runs_on_virtual_time_and_returns_an_outcome():
-    plant, _, outcome = go(Mpc(), loop=partial(run_compensated, latency_s=.01, compensate=False), duration=.03)
+    plant, _, outcome = go(Mpc(), loop=partial(run_compensated, solve_latency_s=.01, compensate=False), duration=.03)
     assert type(plant.clock).__name__ == "VirtualClock" and outcome.status == "timeout"
-    timing = Compensated(latency_s=.01, command_period=.01, compensate=False)
+    timing = Compensated(solve_latency_s=.01, command_period=.01, compensate=False)
     plant, ticks = Plant(), []
     outcome = timing.run(plant, Mpc(), Task(), SampleKnot(), [ticks.append], duration=.03)  # as a timing
     assert outcome.status == "timeout" and commanded(ticks) == [(.01, 2.), (.02, 2.)]
     assert from_dict(to_dict(timing), [Compensated]) == timing
+
+
+@pytest.mark.parametrize("latency", ["measured", -.01, math.nan, math.inf])
+def test_compensation_needs_a_declared_latency_before_it_starts_the_plant(latency):
+    plant = Plant()
+    with pytest.raises(ValueError, match="solve_latency_s"):
+        go(Mpc(), plant=plant, loop=partial(run_compensated, solve_latency_s=latency))
+    assert not plant.calls
 
 
 def test_the_implicit_step_is_aba_without_friction_and_stable_with_it():

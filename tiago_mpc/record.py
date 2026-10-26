@@ -42,11 +42,11 @@ True
 
 >>> data = tm.to_dict(tm.VirtualTime.ideal())
 >>> data
-{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency': 0.0}
+{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0}
 >>> tm.from_dict(data) == tm.VirtualTime.ideal()
 True
 
-A run directory holds (FORMAT 1):
+A run directory holds (FORMAT 2):
 - summary.json: format; provenance (provenance()); config, the named pieces given to
   RunRecord, each to_dict-ed, written at the start; metadata: status, reason, end_t,
   results, error and plant (the plant's run_state);
@@ -60,7 +60,7 @@ A run directory holds (FORMAT 1):
 - events.json: every event, a list of {"t", "kind", "message", "data"}.
 Times count from the first state's time. The files are plain JSON and npz, readable
 without this package. Importing this module loads no ROS and no compiled GATO module;
-nothing in the package imports it (Event lives in plan.py, beside Tick).
+nothing in the package imports it (Event lives in interfaces.py, beside Tick).
 """
 from __future__ import annotations
 
@@ -86,13 +86,13 @@ from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.laws import HoldFirst, SampleKnot
 from tiago_mpc.loops import RealTime, VirtualTime
 from tiago_mpc.mpc import AdmmLimits, MpcParams
-from tiago_mpc.plan import Event, Tick
+from tiago_mpc.interfaces import Event, Tick
 from tiago_mpc.robot import Checks, RobotConfig
 from tiago_mpc.safety import CollisionSafetySettings
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import ROOT
 
-FORMAT = 1
+FORMAT = 2
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
     SolverParams, MpcParams, AdmmLimits, Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
     VirtualTime, RealTime, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
@@ -167,7 +167,7 @@ def provenance() -> dict[str, Any]:
 
 
 class Console:
-    """A callback that prints each event's message to stderr; only_first: only the first
+    """A tick callback that prints each event's message to stderr; only_first: only the first
     event of each kind. add_events takes events from outside a tick (a plant's after the
     loop)."""
 
@@ -188,7 +188,7 @@ class Console:
 
 
 class RunRecord:
-    """RunRecord(out, **pieces): a callback that buffers each command tick and its events;
+    """RunRecord(out, **pieces): a tick callback that buffers each command tick and its events;
     save() writes the run. out=None is _expr_data/<task type>/<UTC time>/ ("run" without a
     task piece). The pieces are the run's configuration, frozen dataclasses or JSON values;
     the record writes provenance() and to_dict of each at once, with status "running".
@@ -281,7 +281,8 @@ def load_run(path: str | Path, classes: Iterable[type] = ()) -> RunRecord:
     out = Path(path)
     summary = json.loads((out / "summary.json").read_text())
     if summary.get("format") != FORMAT:
-        raise ValueError(f"{out} is not a run of format {FORMAT}")
+        raise ValueError(f"{out} is a run of format {summary.get('format')}, not {FORMAT}: "
+                         "load it with the code that wrote it (provenance.repository_commit)")
     record = RunRecord.__new__(RunRecord)
     record.out, record.provenance, record.metadata = out, summary["provenance"], summary["metadata"]
     record.config = from_dict(summary["config"], classes)

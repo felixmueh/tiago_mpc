@@ -1,7 +1,7 @@
 """The package root, for experiments: `import tiago_mpc as tm` and use `tm.<name>`.
 
 It re-exports the names an experiment composes. Modules inside the package import each
-other with absolute imports (`from tiago_mpc.plan import State`), never through this
+other with absolute imports (`from tiago_mpc.interfaces import State`), never through this
 root. Importing the package may load Pinocchio and GATO's Python package, but never ROS
 (only creating a RosPlant does) or GATO's compiled module (only the MPC process).
 """
@@ -11,21 +11,25 @@ from tiago_mpc.laws import HoldFirst, SampleKnot
 from tiago_mpc.loops import (STOP, Outcome, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
                              run_real_time, run_virtual_time)
 from tiago_mpc.mpc import TIAGO, UPDATES, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
-from tiago_mpc.plan import Callback, Event, Law, MpcInterface, Plan, PlantInterface, State, TaskInterface, Tick, Timing
+from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Plan, PlantInterface, State,
+                                  TaskInterface, Tick, Timing)
 from tiago_mpc.record import Console, RunRecord, from_dict, load_run, provenance, to_dict
 from tiago_mpc.robot import RobotConfig, RosPlant
 from tiago_mpc.sim import SimConfig, SimPlant
 from tiago_mpc.tiago import (FLANGE_FRAME, FULL_URDF, GRASP_FRAME, Q_REACH, Q_START, RIGHT_ARM_JOINTS, ROOT,
                     ROOT_FRAME, Limits, arm_urdf, ee_position, ee_velocity, fk, limits, urdf_friction)
+from tiago_mpc.util import hz_to_s
 
 __all__ = [
     "VirtualClock", "WallClock", "Friction", "Sign", "StickSlip", "Tanh", "passive_torque", "HoldFirst", "SampleKnot",
     "STOP", "Outcome", "RealTime", "Schedule", "VirtualTime", "command_fault", "lease_fault", "plan_fault",
     "run_real_time", "run_virtual_time",
     "TIAGO", "UPDATES", "Mpc", "MpcParams", "MpcProcess", "compile_binary", "find_binary",
-    "Callback", "Event", "Law", "MpcInterface", "Plan", "PlantInterface", "State", "TaskInterface", "Tick", "Timing",
+    "Callback", "ControlLaw", "Event", "MpcInterface", "Plan", "PlantInterface", "State", "TaskInterface", "Tick",
+    "Timing",
     "Console", "RunRecord", "from_dict", "load_run", "provenance", "to_dict",
     "RobotConfig", "RosPlant", "SimConfig", "SimPlant",
     "FLANGE_FRAME", "FULL_URDF", "GRASP_FRAME", "Q_REACH", "Q_START", "RIGHT_ARM_JOINTS", "ROOT",
     "ROOT_FRAME", "Limits", "arm_urdf", "ee_position", "ee_velocity", "fk", "limits", "urdf_friction",
+    "hz_to_s",
 ]
