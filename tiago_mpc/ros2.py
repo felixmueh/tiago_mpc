@@ -7,6 +7,8 @@ This module provides transport and controller handover, not a motion supervisor.
 The module avoids importing ROS at import time so non-ROS tests and experiments
 can still import :mod:`tiago_mpc.ros2`. ROS packages are loaded lazily when a
 client is constructed.
+
+If someone knows more about ROS2 than me, please improve this module and robot.py
 """
 
 from __future__ import annotations

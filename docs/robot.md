@@ -9,9 +9,10 @@ clients (`tests/test_robot.py`), never run against ROS, Gazebo or the robot.
 
 ## Running
 
-Source ROS 2 and PAL's interface overlay in the launching shell (for example
-`source /opt/ros/humble/setup.bash` plus the overlay, or PAL's setup on the
-robot), and select the intended DDS domain and network. The package never
+Source ROS 2 and PAL's interface overlay in the launching shell and select the
+intended DDS domain and network. In the container (README, "In the container")
+`source container/ros_simulation.sh` or `source container/ros_tiago.sh` does
+both; elsewhere use PAL's setup on the robot. The package never
 loads ROS itself; constructing the client raises a `RuntimeError` if the ROS
 packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 
@@ -153,8 +154,10 @@ the ROS stamps as `State.t` (a comment in `RosPlant.__init__`); not implemented.
 
 ## Not established
 
-- No ROS installation on the host and no ROS container yet (deferred). The
-  Gazebo check waits for Felix.
+- No ROS graph and no robot reached yet. The ROS container exists
+  (`container/`, README) and its ROS imports work, but nothing has run against a
+  controller manager, Gazebo or the robot. The Gazebo check waits for Felix.
+  There is no ROS installation on the host.
 - Whether PAL's effort receiver expires commands when the publisher stops
   (TODO in `ros2.py`). SIGKILL or a host crash skips the handback; what the
   robot's onboard controllers then do is unknown.

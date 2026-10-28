@@ -443,6 +443,18 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   their own safety sequence without refreshing the arm.
 - **2026-10-21: accepted limitation:** gripper mimic followers without feedback
   only warn and stay at neutral.
+- **2026-10-28: the ROS container is owned by this repository** (`container/`).
+  - **One image** for the desktop and the Jetson from one Dockerfile, with the CUDA
+    devel base as a build argument: system Python 3.10, a pinned uv (the host's),
+    ROS 2 Humble with the packages of the old GATO ROS layer, PAL's interface
+    overlay, and the toolchain GATO's run-time compile needs. No GATO checkout, no
+    Python environment, no ROS or DDS variables in the image; `.venv-container`
+    comes from `uv sync`.
+  - **The ROS profile is chosen by sourcing it** (`container/ros_tiago.sh`,
+    `container/ros_simulation.sh`); the launcher only builds, creates or starts,
+    and attaches.
+  - **`--target desktop|jetson` stays explicit.** No session-capture script and no
+    X11 forwarding.
 - **2026-10-22: ROS is sourced in the launching shell**, otherwise a clear
   error; `ROS_DISTRO` is recorded.
 - **2026-10-22: `State.t` is the measurement time;** on the robot the monotonic
@@ -547,7 +559,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - A single-process toggle.
 - A report-only safety check in simulation.
 - Laws beyond sampling the plan; a `configure` hook.
-- The ROS container, and with it the Gazebo check.
+- The Gazebo check (the ROS container exists, 2026-10-28).
 - Migrating the visualizer off `tiago_mpc_vis_baseline`.
 - Publishing/pinning the armature extensions for main and upstream.
 - Moving the costs completely to GATO's cost menu (2026-10-24: a separate step

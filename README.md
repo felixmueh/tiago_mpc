@@ -126,31 +126,42 @@ the shared cache, and records name the checkout's commit. The changed
 
 ### In the container
 
-The container uses its own environment, `.venv-container`, with the system
-Python 3.10 that ROS 2 Humble's `rclpy` is built for. The base image sets
-`UV_PROJECT_ENVIRONMENT=/opt/gato-venv`; the overlay image
-(`impl/GATO-notes/GATO/felixtools/Dockerfile`) overrides it:
-
-```dockerfile
-ENV UV_PROJECT_ENVIRONMENT=.venv-container   # relative: each checkout's root
-ENV UV_PYTHON_PREFERENCE=only-system
-```
+`container/` holds the ROS 2 container, one image for the desktop and the
+Jetson: system Python 3.10 (the one ROS 2 Humble's `rclpy` is built for), a
+pinned uv, the CUDA toolchain, git, ROS 2 Humble and PAL's interface overlay
+(`container/pal_interfaces/`, built natively; its README names the provenance).
+It holds no GATO checkout and no Python environment.
 
 ```bash
-export UV_PROJECT_ENVIRONMENT=.venv-container  # also set these in an already-running older container
-export UV_PYTHON_PREFERENCE=only-system
-env -u PYTHONPATH uv sync                    # the image's PYTHONPATH (GATO's tiago_src, python) precedes site-packages
-env -u PYTHONPATH uv run python -m pytest -q
+container/docker.sh                        # desktop: build the image once, create or start the container, attach
+container/docker.sh --target jetson        # on the Jetson: L4T r36.4.0, image and container tagged jetson-r36.4.0
 ```
 
-Use `uv run` or `.venv-container/bin/python`, not the activated
-`/opt/gato-venv`, which is also first on the image's `PATH`. Robot runs source
-ROS 2 in the launching shell as before, which puts `rclpy` on `PYTHONPATH`.
-**Order when moving to this layout:** the container's old
-environment was `.venv`, where the host's now goes, and the first host
-`uv sync` replaces it. Create `.venv-container` in the container first, move
-the container's work to it and delete the old `.venv` from inside the
-container; only then run `uv sync` on the host.
+The flags `--rebuild-image` (also recreates the container), `--recreate-container`,
+`--restart` and `--no-attach` are in `--help`. The image has your user and group
+IDs. The container uses the host network and IPC, and mounts the parent of this
+checkout, `impl/`, at `/workspace`, so sibling worktrees and a local GATO under
+`../GATO` (`[tool.uv.sources]`) resolve; the shell starts in the checkout
+(`/workspace/tiago_mpc`).
+
+Choose the ROS profile by sourcing it in the shell (they set the DDS variables
+and load the overlay, which chains `/opt/ros/humble`):
+
+```bash
+source container/ros_simulation.sh         # domain 1, loopback only: the same-host PAL simulator
+source container/ros_tiago.sh              # domain 2, Ethernet to the robot (10.68.0.1)
+```
+
+The image sets `UV_PROJECT_ENVIRONMENT=.venv-container` (relative: each
+checkout's root) and `UV_PYTHON_PREFERENCE=only-system`:
+
+```bash
+uv sync                                    # creates .venv-container from uv.lock
+uv run python -m pytest -q
+```
+
+Use `uv run` or `.venv-container/bin/python`. GATO's modules compile at run time
+with the image's nvcc and host compiler into the shared `.cache/gato`.
 
 ## Running the experiments
 

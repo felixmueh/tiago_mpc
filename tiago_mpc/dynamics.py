@@ -47,7 +47,10 @@ class Friction:
 
 
 def passive_torque(velocity: np.ndarray, friction: Friction | None, law: Tanh | Sign) -> np.ndarray:
-    """Positive resisting bias: subtract from actuator torque before ABA. Tanh and Sign only."""
+    """Positive resisting bias: subtract from actuator torque before ABA. Tanh and Sign only.
+
+    Friction only. No gravity.
+    """
     v = np.asarray(velocity, dtype=float)
     if friction is None:
         return np.zeros_like(v)
