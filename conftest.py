@@ -30,7 +30,7 @@ class HoldMpc:
             return None
         gravity = pin.computeGeneralizedGravity(self.model, self.data, state.q)
         return tm.Plan(state.t, self.dt, np.tile(np.r_[state.q, state.qd], (self.N, 1)),
-                       np.tile(gravity, (self.N - 1, 1)), dict(wall_s=0.))
+                       np.tile(gravity, (self.N - 1, 1)), dict(wall_s=0.), measured_t=state.t)
 
     def close(self):
         pass

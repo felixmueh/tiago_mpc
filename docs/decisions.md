@@ -234,13 +234,14 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   Both package loops check the built-in FF composition once before starting
   the plant: FF plus predictor friction, or nested FF, is a configuration error.
   Physical plant and future propagation-model losses remain independent.
-  Arbitrary custom callables remain the caller's responsibility. No new
-  clipping or latency-prediction policy is included.
+  Arbitrary custom callables remain the caller's responsibility. This guard adds
+  no clipping policy; latency prediction is described under Execution.
 - **2026-10-28: run format 3** records laws on their consumers, rather than in
   `Friction`. `load_run` refuses older formats before reconstruction. Existing
-  files are unchanged; WIP `f66172f` reads format 2. Portable replay version 1
-  is unchanged. Temporary published fork pins and later predictive latency
-  integration remain separate follow-ups; no main merge was performed here.
+  files are unchanged; tag `archive/friction-format2-f66172f` reads format 2.
+  Portable replay version 1 is unchanged. Friction was promoted onto main at
+  `c0bcbc8`; the optional latency integration is described under Execution.
+  Publishing the temporary armature fork pins remains pending.
 
 - **2026-10-24: GATO 0.1.5 from PyPI, and a uv project** (Felix; plan in the
   thesis workspace, `research/tiago-mpc-gato-0.1.5-and-uv-plan.md`). This
@@ -345,6 +346,28 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   on knots and commands stay. An ADMM return is no feasibility certificate.
 
 ## Execution
+
+- **2026-10-28: simplify prediction inputs and keep execution data off plans**
+  (Felix). `request` and `_solve` take one `State | Prediction`; a prediction
+  includes its original `measured_t`, while its `t` denotes the future initial
+  condition. `Plan.measured_t` is a required float, equal to `t0` for measured
+  inputs. No consumer fallback or separate optional prediction argument.
+  Remove `_arrived`/`_activated` and lifecycle timing data from `Plan.stats`;
+  it contains solver statistics. Keep only the recorder's request association
+  on `Tick.plan_request_t`, so superseded results retain the correct request.
+
+- **2026-10-28: integrate optional latency prediction on main**
+  (Felix; implementation delegated, KISS). Keep the two loops and their independent
+  command/update rates. `LatencyCompensation` forecasts a separate `Prediction`
+  for MPC; measured `State` stays unchanged for feedback and checks. Fixed forecast
+  delay or previous completed request's delay with an initial estimate; no access
+  to the current solve's future duration. CPU propagation reuses the simulator's
+  Euler step with explicit independent friction/law/armature and actual sent-command
+  history for old measurements. Early replies wait; late replies retain their
+  predicted origin. `Plan.measured_t` preserves the measurement-age lease while
+  `Plan.t0` defines trajectory time. Compensation defaults off; no solver,
+  saturation-policy or visualizer change in this pass. See
+  [latency compensation](latency-compensation.md).
 
 - **2026-10-22: plans are sampled by knot.** The execution controller commands
   the torque of knot k = floor((t − t₀)/dt) from the time t₀ of the state the

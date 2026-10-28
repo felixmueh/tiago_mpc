@@ -4,8 +4,9 @@ a task and a timing satisfy (structurally, checked by mypy, never at run time) a
 types of a control law and a tick callback.
 
 A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
-(native coordinates), its knot interval dt and its start time t0: the time of
-the state it was computed from. Knot k covers t0 + k dt <= t < t0 + (k + 1) dt,
+(native coordinates), its knot interval dt and its start time t0: the origin of
+its initial condition, predicted when compensation is enabled. measured_t retains
+the original observation time. Knot k covers t0 + k dt <= t < t0 + (k + 1) dt,
 a zero-order hold as GATO's transcription assumes; past the last knot there is
 no torque, and a plan's lease ends before it (loops.lease_fault).
 """
@@ -43,12 +44,34 @@ class State:
 
 
 @dataclass(frozen=True)
+class Prediction:
+    """Predicted native q/qd at t, carrying the original measurement time unchanged."""
+    t: float
+    q: np.ndarray
+    qd: np.ndarray
+    measured_t: float = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.t):
+            raise ValueError("prediction time must be finite")
+        if not math.isfinite(self.measured_t) or self.measured_t > self.t:
+            raise ValueError("prediction must not precede its finite measured time")
+        for name in ("q", "qd"):
+            value = np.array(getattr(self, name), dtype=float)
+            if value.shape != (7,) or not np.isfinite(value).all():
+                raise ValueError("prediction needs seven finite native positions and velocities")
+            value.flags.writeable = False
+            object.__setattr__(self, name, value)
+
+
+@dataclass(frozen=True)
 class Plan:
     t0: float
     dt: float
     states: np.ndarray   # (N, 14): q, qd per knot
     torques: np.ndarray  # (N - 1, 7)
     stats: dict = field(default_factory=dict)
+    measured_t: float = field(kw_only=True)  # source observation; prediction never renews its lease
 
     def __post_init__(self):
         states, torques = np.array(self.states, dtype=float), np.array(self.torques, dtype=float)
@@ -57,6 +80,8 @@ class Plan:
             raise ValueError("A plan needs N finite knot states and N - 1 finite knot torques")
         if not math.isfinite(self.t0) or not math.isfinite(self.dt) or self.dt <= 0:
             raise ValueError("A plan needs a finite start time and a positive knot interval")
+        if not math.isfinite(self.measured_t) or self.measured_t > self.t0:
+            raise ValueError("measured_t must be finite and no later than the plan origin")
         states.flags.writeable = torques.flags.writeable = False
         object.__setattr__(self, "states", states)
         object.__setattr__(self, "torques", torques)
@@ -86,7 +111,8 @@ class Tick:
     update the tick at which a control update started (its request); events: what the
     loop and the plant detected since the previous tick (usually none); faulted: the
     plan that arrived at this tick and faulted (loops.plan_fault), which never takes
-    effect, else None."""
+    effect, else None. plan_request_t associates a new/faulted plan with its request
+    tick, independently of solver statistics; None when no plan is introduced."""
     t: float
     state: State
     command: np.ndarray | None
@@ -95,6 +121,7 @@ class Tick:
     update: bool
     events: tuple[Event, ...]
     faulted: Plan | None
+    plan_request_t: float | None = None  # update tick that requested the new/faulted plan
 
 
 class PlantInterface(Protocol):
@@ -120,13 +147,20 @@ class MpcInterface(Protocol):
     """Mpc and MpcProcess (mpc.py): plans of N knots dt apart. warmup prepares the
     solver from a state before the first request and returns when done (nothing when
     params.warmup is off); request raises while the previous plan is unread; result
-    returns a plan once, None while it is pending, and raises if the solve failed."""
+    returns a plan once, None while it is pending, and raises if the solve failed.
+    A request takes the measured State or a Prediction of the future initial condition;
+    either preserves the measurement time that bounds the resulting plan's lease."""
     params: MpcParams
     N: int
     dt: float
 
     def warmup(self, state: State, reference: np.ndarray) -> None: ...
-    def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None: ...
+    def request(
+        self,
+        state: State | Prediction,
+        reference: np.ndarray,
+        updates: dict[str, Any] | None = None,
+    ) -> None: ...
     def result(self, block: bool = False) -> Plan | None: ...
     def close(self) -> None: ...
 

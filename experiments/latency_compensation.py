@@ -22,7 +22,7 @@ Run from the checkout's root: python -m experiments.latency_compensation --solve
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 import json
 import math
 import sys
@@ -50,7 +50,7 @@ def predict(plan, law, state, at, command_period, step, substeps=1):
         for _ in range(substeps):
             x = step(x, u, command_period / substeps)
         t += command_period
-    return tm.State(at, x[:7], x[7:])
+    return tm.Prediction(at, x[:7], x[7:], measured_t=state.t)
 
 
 def gpu_step(mpc):
@@ -124,8 +124,8 @@ def run_compensated(
     at the first control-update slot at or after its plan took effect, each plan checked
     on arrival and each command before it is sent, a fault or STOP ending the run, late_plan
     events, the last tick without a command, plant.stop() first on exit. Left out: the
-    garbage-collection pause and the overrun events. Each plan's stats carry the state it
-    was requested from (requested_state, predicted or measured), a plans column of the record.
+    garbage-collection pause and the overrun events. Prediction inputs are retained in
+    experiment events, separate from solver statistics.
     """
     if not (isinstance(solve_latency_s, (int, float)) and math.isfinite(solve_latency_s) and solve_latency_s >= 0):
         raise ValueError(f"solve_latency_s must be declared seconds (finite, >= 0), not {solve_latency_s!r}")
@@ -135,6 +135,7 @@ def run_compensated(
     if compensate:
         step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction, mpc.params.friction_law)
     clock, due, plan, pending, start, plans = tm.VirtualClock(), tm.Schedule(update_period), None, None, None, 0
+    pending_request_t = 0.
     plant.start(clock)
     try:
         mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])  # the arm is still held
@@ -145,7 +146,9 @@ def run_compensated(
             start = s.t if start is None else start
             done, stopped = task.done(s, t - start), tm.STOP.is_set()
             end = done or stopped or t - start >= duration - _TOLERANCE
+            previous_plan = plan
             new = pending if pending is not None and t >= pending[0] - _TOLERANCE else None
+            plan_request_t = pending_request_t if new is not None else None
             if new is not None:  # (time it takes effect, plan)
                 plan, pending = new[1], None
             fault, update, faulted = None, False, None
@@ -155,16 +158,21 @@ def run_compensated(
                     at += command_period
                 x = predict(plan, law, s, at, command_period, step, substeps) if compensate else s
                 mpc.request(x, *task.at(x.t - start, mpc.N, mpc.dt))
+                if compensate:
+                    events.append(tm.Event(t, "prediction_request", "latency example requested a predicted state",
+                                           dict(t0=x.t - start, requested_state=np.r_[x.q, x.qd].tolist())))
                 solved = mpc.result(block=True)  # blocks: the solve takes no virtual time
                 assert solved is not None
-                solved = replace(solved, stats={**solved.stats, "requested_state": np.r_[x.q, x.qd]})
                 fault = tm.plan_fault(solved)
                 if fault is None:
                     pending = (at, solved)
+                    pending_request_t = t
                     if ahead == 0:  # zero latency: this tick
                         new, plan, pending = pending, pending[1], None
+                        plan_request_t = t
                 else:
                     faulted = solved  # it never takes effect
+                    new, plan, plan_request_t = None, previous_plan, t
             if new is not None:
                 plans += 1
             command = None
@@ -182,7 +190,8 @@ def run_compensated(
                         plant.apply(command)
                     else:
                         command = None
-            tick = tm.Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
+            tick = tm.Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted,
+                           plan_request_t if new is not None or faulted is not None else None)
             for callback in tick_callbacks:
                 callback(tick)
             if fault is not None:
@@ -217,6 +226,20 @@ def first_tick_of_each_plan(record):
     return first[plans >= 0]
 
 
+def requested_states(record):
+    """Exact experiment inputs, from current events or the retained older plan column."""
+    if "requested_state" in record.plans:
+        return record.plans["requested_state"]
+    requests = {e.t: e.data for e in record.events if e.kind == "prediction_request"}
+    values = []
+    for update_t, t0 in zip(record.plans["update_t"], record.plans["t0"]):
+        event = requests[update_t]
+        if not math.isclose(event["t0"], t0, abs_tol=_TOLERANCE):
+            raise ValueError("prediction event does not match its plan origin")
+        values.append(event["requested_state"])
+    return np.asarray(values, dtype=float).reshape(-1, 14)
+
+
 def main(argv=None):
     """One compensated reach on SimPlant, --solve-latency seconds (declared; default the timing's)."""
     handle_stop_signals()
@@ -228,7 +251,8 @@ def main(argv=None):
     evaluate(record)
     effect = first_tick_of_each_plan(record)
     actual = np.c_[record.ticks["q"][effect], record.ticks["qd"][effect]]
-    error = np.abs(actual - record.plans["requested_state"]) if len(effect) else np.zeros((0, 14))
+    error = (np.abs(actual - requested_states(record)[record.ticks["plan"][effect]])
+             if len(effect) else np.zeros((0, 14)))
     record.metadata["results"]["prediction_error_max"] = dict(q_rad=float(error[:, :7].max(initial=0.)),
                                                               qd_rad_s=float(error[:, 7:].max(initial=0.)))
     record.save()

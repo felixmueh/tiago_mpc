@@ -12,7 +12,7 @@ from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.loops import (STOP, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
                              run_real_time, run_virtual_time)
-from tiago_mpc.interfaces import Plan, State
+from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import Event
 
 
@@ -76,6 +76,7 @@ class Mpc:
         self.params, self.N, self.dt, self.over = None, N, dt, over
         self.delay, self.replies, self.wall = delay, replies, wall
         self.warmups, self.requests, self.waiting, self.dead = [], [], None, False
+        self.predictions, self.requested_states = [], []
 
     def warmup(self, state, reference):
         assert not self.requests and reference.shape == (self.N, 6)
@@ -85,7 +86,9 @@ class Mpc:
         assert self.waiting is None, "a request is pending"
         assert reference.shape == (self.N, 6)
         self.requests.append((state.t, updates))
-        self.waiting = [self.delay, state.t]
+        self.predictions.append(state if isinstance(state, Prediction) else None)
+        self.requested_states.append(state)
+        self.waiting = [self.delay, state.t, state.measured_t if isinstance(state, Prediction) else state.t]
 
     def result(self, block=False):
         if self.dead:
@@ -95,12 +98,14 @@ class Mpc:
         if self.waiting[0] > 0 and not block:
             self.waiting[0] -= 1
             return None
-        t, self.waiting = self.waiting[1], None
+        t, measured_t = self.waiting[1:]
+        self.waiting = None
         torques = np.ones((self.N - 1, 7))
         torques[:, 0] = np.arange(1., self.N)
         if len(self.requests) == self.over:
             torques[:, 1], torques[-1, 6] = 0., 26.1
-        return Plan(t, self.dt, np.zeros((self.N, 14)), torques, dict(wall_s=self.wall))
+        stats = dict(wall_s=self.wall)
+        return Plan(t, self.dt, np.zeros((self.N, 14)), torques, stats, measured_t=measured_t)
 
     def close(self):
         pass
@@ -480,14 +485,14 @@ def test_a_plan_above_the_raw_effort_limit_ends_the_run_before_any_of_its_knots_
 
 
 def test_the_faults_name_the_reason_and_none_without_one():
-    plan = Plan(0., .01, np.zeros((32, 14)), np.ones((31, 7)))
+    plan = Plan(0., .01, np.zeros((32, 14)), np.ones((31, 7)), measured_t=0.)
     assert plan_fault(plan) is None and command_fault(np.ones(7)) is None and lease_fault(plan, .099) is None
-    assert plan_fault(Plan(0., .01, np.zeros((3, 14)), np.r_[np.ones((1, 7)), [[1.] * 6 + [26.1]]])) == "effort_limit"
+    assert plan_fault(Plan(0., .01, np.zeros((3, 14)), np.r_[np.ones((1, 7)), [[1.] * 6 + [26.1]]], measured_t=0.)) == "effort_limit"
     assert command_fault(np.r_[np.ones(6), 26.1]) == "effort_limit"  # joint 7: 26 Nm
     for bad in (np.r_[np.ones(6), np.nan], np.ones(6)):
         assert command_fault(bad) == "invalid_command"
     assert lease_fault(plan, .1) == "lease_expired"
-    assert lease_fault(Plan(0., .01, np.zeros((4, 14)), np.ones((3, 7))), .03) == "lease_expired"  # its end
+    assert lease_fault(Plan(0., .01, np.zeros((4, 14)), np.ones((3, 7)), measured_t=0.), .03) == "lease_expired"  # its end
 
 
 @pytest.mark.parametrize("loop, kw", [(run_virtual_time, dict(solve_latency_s=0.)), (run_real_time, {})])

@@ -23,7 +23,7 @@ def test_friction_feedforward_uses_planned_velocity_and_native_signs():
     v1 = 2*v0
     states = np.array([np.r_[np.zeros(7), v] for v in (v0, v1)])
     torque = np.arange(7.)[None]
-    plan = Plan(1., .01, states, torque)
+    plan = Plan(1., .01, states, torque, measured_t=1.)
     measured = State(1.005, np.zeros(7), -v0)
     friction = Friction((1.,)*7, (.5,)*7)
     expected = torque[0] + np.tanh(1.5*v0/.03) + .5*1.5*v0
@@ -36,7 +36,7 @@ def test_friction_feedforward_uses_planned_velocity_and_native_signs():
 
 
 def test_smooth_feedforward_has_no_breakaway_kick_at_rest():
-    plan = Plan(0., .01, np.zeros((2, 14)), np.ones((1, 7)))
+    plan = Plan(0., .01, np.zeros((2, 14)), np.ones((1, 7)), measured_t=0.)
     law = FrictionFeedforward(Friction((3.,)*7, (2.,)*7))
     np.testing.assert_array_equal(law(plan, .004, State(.004, np.zeros(7), np.zeros(7))), np.ones(7))
     with pytest.raises(ValueError, match='explicit'):

@@ -42,7 +42,7 @@ True
 
 >>> data = tm.to_dict(tm.VirtualTime.ideal())
 >>> data
-{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0}
+{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0, 'compensation': None}
 >>> tm.from_dict(data) == tm.VirtualTime.ideal()
 True
 
@@ -53,10 +53,13 @@ A run directory holds (FORMAT 3):
 - ticks.npz, one row per command tick: t, state_t, q, qd, command (NaN when none was
   sent), plan (the index of the plan in effect, -1 before the first), update (the index
   of the control update started at that tick, -1 for none), plus experiment columns;
-- plans.npz, one row per plan: t0, update_t (the t of the tick whose update started it),
+- plans.npz, one row per plan: t0 (the predicted origin when compensated), measured_t
+  (the original observation time), update_t (the tick whose update started it),
   states (P, N, 14), torques (P, N - 1, 7), every key of plan.stats that no plan has as
   None, plus experiment columns; a plan that faulted is the last row (Tick.faulted), and
-  no tick's plan index points at it;
+  no tick's plan index points at it. update_t comes from the new/faulted plan's
+  Tick.plan_request_t, preserving its request association even if another result
+  was superseded before use. Plan.stats contains solver statistics only;
 - events.json: every event, a list of {"t", "kind", "message", "data"}.
 Times count from the first state's time. The files are plain JSON and npz, readable
 without this package. Importing this module loads no ROS and no compiled GATO module;
@@ -86,6 +89,7 @@ from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
 from tiago_mpc.loops import RealTime, VirtualTime
 from tiago_mpc.mpc import AdmmLimits, MpcParams
+from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.interfaces import Event, Tick
 from tiago_mpc.robot import Checks, RobotConfig
 from tiago_mpc.safety import CollisionSafetySettings
@@ -96,7 +100,7 @@ FORMAT = 3
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
     SolverParams, MpcParams, AdmmLimits, Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
     PlanFeedback, FrictionFeedforward,
-    VirtualTime, RealTime, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
+    VirtualTime, RealTime, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
 )
 
 
@@ -245,11 +249,15 @@ class RunRecord:
     @cached_property
     def plans(self) -> dict[str, np.ndarray]:
         t0 = self._ticks[0].state.t if self._ticks else 0.
-        plans = [k.plan for k in self._ticks if k.new and k.plan is not None]
-        plans += [k.faulted for k in self._ticks if k.faulted is not None]  # on the last tick
-        ticks = self.ticks  # control update i yields plan i
+        plan_ticks = [k for k in self._ticks if k.new and k.plan is not None]
+        plan_ticks += [k for k in self._ticks if k.faulted is not None]  # on the last tick
+        plans = [k.plan for k in plan_ticks if k.new and k.plan is not None]
+        plans += [k.faulted for k in plan_ticks if k.faulted is not None]
+        if any(k.plan_request_t is None for k in plan_ticks):
+            raise ValueError("A recorded new or faulted plan needs its request time")
         columns = dict(t0=np.array([p.t0 - t0 for p in plans]),
-                       update_t=ticks["t"][ticks["update"] >= 0][:len(plans)],
+                       measured_t=np.array([p.measured_t - t0 for p in plans]),
+                       update_t=np.array([k.plan_request_t for k in plan_ticks], dtype=float) - t0,
                        states=np.array([p.states for p in plans]), torques=np.array([p.torques for p in plans]))
         for key in (plans[0].stats if plans else ()):
             values = [p.stats[key] for p in plans]

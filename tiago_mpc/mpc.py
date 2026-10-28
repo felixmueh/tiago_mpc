@@ -26,7 +26,7 @@ from gato import SolverParams
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Tanh, passive_torque
-from tiago_mpc.interfaces import Plan, State
+from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
 from tiago_mpc.util import cache_root, digest
 
@@ -300,10 +300,12 @@ def _known(updates):
         raise KeyError(f"unknown MPC updates: {sorted(unknown)}")
 
 
-def _checked(mpc, plan, t):
+def _checked(mpc, plan, t, measured_t):
     """The plan answers the request, is well formed and finite; effort is run's check."""
     if plan.t0 != t:
         raise RuntimeError("MPC result does not match the request")
+    if plan.measured_t != measured_t:
+        raise RuntimeError("MPC result does not match the measured state")
     if plan.dt != mpc.dt:
         raise RuntimeError("MPC plan has an unexpected knot interval")
     if (plan.states.shape != (mpc.N, 14) or plan.torques.shape != (mpc.N - 1, 7)
@@ -349,7 +351,12 @@ class Mpc:
             self.controller.warmup(x, reference)
             self._reset = True
 
-    def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
+    def request(
+        self,
+        state: State | Prediction,
+        reference: np.ndarray,
+        updates: dict[str, Any] | None = None,
+    ) -> None:
         _known(updates)
         if self._plan is not None:
             raise RuntimeError("an MPC request is pending")
@@ -357,7 +364,7 @@ class Mpc:
 
     def result(self, block: bool = False) -> Plan | None:
         plan, self._plan = self._plan, None
-        return None if plan is None else _checked(self, plan, plan.t0)
+        return None if plan is None else _checked(self, plan, plan.t0, plan.measured_t)
 
     def close(self) -> None:
         pass
@@ -369,7 +376,7 @@ class Mpc:
             raise ValueError("Measured state must contain seven finite native positions/velocities")
         return np.r_[q, qd] * np.tile(self.signs, 2)
 
-    def _solve(self, state, reference, updates):
+    def _solve(self, state: State | Prediction, reference, updates):
         x = self._x(state)
         for name, value in (updates or {}).items():
             UPDATES[name](self, value)
@@ -401,7 +408,8 @@ class Mpc:
             admm_linsys_mode=step.admm_linsys,
             row_viol=None if step.row_viol is None else np.array(step.row_viol))
         states = knots[:, :14] * np.tile(self.signs, 2)
-        return Plan(state.t, self.dt, states, knots[:-1, 14:] * self.signs, stats)
+        measured_t = state.measured_t if isinstance(state, Prediction) else state.t
+        return Plan(state.t, self.dt, states, knots[:-1, 14:] * self.signs, stats, measured_t=measured_t)
 
 
 _SPAWN = mp.get_context("spawn")
@@ -421,7 +429,7 @@ class MpcProcess:
         self._process = _SPAWN.Process(target=_serve, args=(params, binary, self._requests, self._replies),
                                        daemon=True)
         self._process.start()
-        self._pending: float | None = None  # the outstanding request's state time
+        self._pending: tuple[float, float] | None = None  # predicted origin and measured time
         try:
             self._reply(block=True)  # ready
         except BaseException:
@@ -441,12 +449,17 @@ class MpcProcess:
             self._requests.put(("warmup", state, reference))
             self._reply(block=True)
 
-    def request(self, state: State, reference: np.ndarray, updates: dict[str, Any] | None = None) -> None:
+    def request(
+        self,
+        state: State | Prediction,
+        reference: np.ndarray,
+        updates: dict[str, Any] | None = None,
+    ) -> None:
         _known(updates)
         if self._pending is not None:
             raise RuntimeError("an MPC request is pending")
         self._requests.put(("_solve", state, reference, updates))
-        self._pending = state.t
+        self._pending = (state.t, state.measured_t if isinstance(state, Prediction) else state.t)
 
     def result(self, block: bool = False) -> Plan | None:
         reply = self._reply(block and self._pending is not None)
@@ -455,7 +468,7 @@ class MpcProcess:
         if self._pending is None:
             raise RuntimeError("unexpected MPC reply")
         t, self._pending = self._pending, None
-        return _checked(self, reply, t)
+        return _checked(self, reply, *t)
 
     def close(self) -> None:
         if self._process.is_alive():

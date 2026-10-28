@@ -7,9 +7,10 @@ RealTime and VirtualTime, carry each loop's settings and run it. A run ends with
 exception when the task is done, the time is up, a fault is found or a stop is
 requested (STOP); the loop returns how in its Outcome.
 
-A plan's lease is how long it may be commanded: from t0, the time of the state it was
-computed from, until t0 + min(LEASE_S, the plan's length), so never past its last knot
-(31 knots of 2 ms span only 62 ms). Both loops check it at every tick before the law
+A plan's lease ends at min(measured_t + LEASE_S, t0 + the plan's length), so neither
+prediction nor a future t0 renews its source observation's age allowance, and it never
+runs past its last knot (31 knots of 2 ms span only 62 ms). Without compensation,
+measured_t equals t0. Both loops check it at every tick before the law
 runs (lease_fault); a plan still in effect after its lease ends the run with the fault
 "lease_expired".
 
@@ -18,7 +19,7 @@ The two loops are kept separate to improve readability of the real_robot loop.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import gc
 import math
 import threading
@@ -30,10 +31,11 @@ from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.laws import FrictionFeedforward, SampleKnot
 from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Plan, PlantInterface, TaskInterface,
                                   Tick)
+from tiago_mpc.prediction import LatencyCompensation, _Predictor, _tick_at_or_after
 from tiago_mpc.tiago import limits
 from tiago_mpc.util import hz_to_s
 
-LEASE_S = .1  # a plan may be commanded at most this long after its state's time
+LEASE_S = .1  # a plan may be commanded at most this long after its measured source state
 _TOLERANCE = 1e-9  # absorbs the rounding of summed periods
 # Not validated for long runs. Records stored in memory and GC disabled.
 # Only raise after verification or handling these issues yourself.
@@ -56,7 +58,7 @@ STOP = threading.Event()
 class Outcome:
     """How a loop ended: status "done" (the task is done), "timeout" (the duration
     ended), "fault" or "interrupted" (STOP); reason, for a fault "effort_limit",
-    "lease_expired" or "invalid_command", for an interruption "stop_requested", else
+    "lease_expired", "invalid_command" or "prediction_unavailable", for an interruption "stop_requested", else
     None; t: the last tick's time, counted from the first state's."""
     status: str
     reason: str | None
@@ -99,7 +101,7 @@ def plan_fault(plan: Plan) -> str | None:
 def lease_fault(plan: Plan, t: float) -> str | None:
     """"lease_expired" once the plan's lease (the module docstring) has ended at t, else
     None, so a law is never asked past the last knot."""
-    return "lease_expired" if t >= plan.t0 + min(LEASE_S, len(plan.torques) * plan.dt) else None
+    return "lease_expired" if t >= min(plan.measured_t + LEASE_S, plan.t0 + len(plan.torques) * plan.dt) else None
 
 
 def command_fault(command: np.ndarray) -> str | None:
@@ -141,6 +143,7 @@ def run_real_time(
     command_period: float,
     update_period: float,
     duration: float,
+    compensation: LatencyCompensation | None = None,
 ) -> Outcome:
     """Run task on plant on wall time until task.done(state, t) or for duration seconds:
     the robot (RosPlant), or a rehearsal of it with a simulated arm (SimPlant).
@@ -182,6 +185,12 @@ def run_real_time(
     or STOP set, sends no command but reaches the tick callbacks. Garbage collection pauses
     while the loop runs: a full collection over the buffered ticks takes several
     milliseconds. A duration over MAX_RUNTIME_MIN raises before the plant starts.
+
+    Optional compensation predicts the solve's initial condition without changing the
+    measured State. Early replies wait for their predicted origin, late replies retain
+    their age. The physical propagation model and delay forecast are explicit settings.
+    A failed forecast ends as prediction_unavailable; the current valid command and
+    callbacks may already have run before that request-time fault is detected.
     """
 
     # This is written as inline code for clarity. The cost is duplication with the virtual-time loop and potentially more maintenance.
@@ -192,6 +201,8 @@ def run_real_time(
     _check_compensation(mpc, law)
     clock, due = WallClock(), Schedule(update_period)
     plan, solving, start, deadline = None, False, None, None
+    predictor = None if compensation is None else _Predictor(compensation, LEASE_S, command_fault)
+    waiting, requested_at, request_tick = None, 0., 0.
     sent, plans = 0, 0
     plant.start(clock)  # startup checks on a fresh state; the robot accepts wall time only
 
@@ -218,10 +229,23 @@ def run_real_time(
             new, fault, faulted = mpc.result(), None, None  # a plan that arrived since the last tick
             if new is not None:
                 solving, fault = False, plan_fault(new)
+                if predictor is not None:
+                    predictor.arrived(clock.now() - requested_at)
+                    fault = fault or lease_fault(new, t)
+                    if fault is None:
+                        waiting, new = new, None
                 if fault is None:
-                    plan, plans = new, plans + 1
+                    if new is not None:
+                        plan, plans = new, plans + 1
                 else:
                     new, faulted = None, new  # it never takes effect
+            if waiting is not None and fault is None:
+                fault = lease_fault(waiting, t)
+                if fault is not None:
+                    faulted, waiting = waiting, None
+                elif t >= waiting.t0 - _TOLERANCE:
+                    new, waiting = waiting, None
+                    plan, plans = new, plans + 1
             command = None
             if plan is not None and not end and fault is None:
                 if new is not None and plan.index(t - plan.t0) >= 1:
@@ -231,12 +255,16 @@ def run_real_time(
                     command = np.asarray(law(plan, t, s), dtype=float)
                     fault = command_fault(command)
                     if fault is None:
+                        sent_at = clock.now() if predictor is not None else 0.
                         plant.apply(command)
+                        if predictor is not None:
+                            predictor.sent(sent_at, command)
                         sent += 1
                     else:
                         command = None
-            update = not end and fault is None and not solving and due(t)  # requested after the tick callbacks
-            tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
+            update = not end and fault is None and not solving and waiting is None and due(t)
+            tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted,
+                        request_tick if new is not None or faulted is not None else None)
             for callback in tick_callbacks:
                 callback(tick)
             if fault is not None:
@@ -244,7 +272,18 @@ def run_real_time(
             if end:
                 return _ended(done, stopped, t - start)
             if update:  # the command is out: now ask for a new plan
-                mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
+                request_tick = t
+                if predictor is None:
+                    mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
+                else:
+                    now = clock.now()  # after publication and callbacks; prediction work follows
+                    next_tick = _tick_at_or_after(now + 1e-9, deadline + command_period, command_period)
+                    at = _tick_at_or_after(now + predictor.latency_s, next_tick, command_period)
+                    predicted = predictor.predict(s, now, at, plan, law, command, next_tick, command_period)
+                    if predicted is None:
+                        return Outcome("fault", "prediction_unavailable", clock.now() - start)
+                    requested_at = clock.now()
+                    mpc.request(predicted, *task.at(predicted.t - start, mpc.N, mpc.dt))
                 solving = True
             deadline += command_period
             plant.advance(deadline)  # the plant holds the command until then
@@ -266,6 +305,7 @@ def run_virtual_time(
     update_period: float,
     duration: float,
     solve_latency_s: float | Literal["measured"],
+    compensation: LatencyCompensation | None = None,
 ) -> Outcome:
     """Run task on plant on virtual time until task.done(state, t) or for duration
     seconds: a controlled experiment in simulation (SimPlant).
@@ -344,6 +384,10 @@ def run_virtual_time(
     knot 0 is a late_plan event, the last tick (also on STOP) sends no command,
     garbage collection pauses while the loop runs, and a duration over MAX_RUNTIME_MIN
     raises before the plant starts.
+
+    Optional compensation uses a separate physical model and a fixed or previous-delay
+    forecast. The current solve's duration controls availability only, never its own
+    forecast. Measured State timestamps and the observation-relative lease are retained.
     """
     if not (solve_latency_s == "measured" or isinstance(solve_latency_s, (int, float))
             and math.isfinite(solve_latency_s) and solve_latency_s >= 0):
@@ -354,6 +398,8 @@ def run_virtual_time(
     _check_compensation(mpc, law)
     clock, due = VirtualClock(), Schedule(update_period)
     plan, pending, available, start = None, None, 0., None  # pending: the solved plan
+    predictor = None if compensation is None else _Predictor(compensation, LEASE_S, command_fault)
+    requested_at, pending_received = 0., False
     updates, plans = 0, 0
     plant.start(clock)
     gc.disable()  # full collections took 7-10 ms at 500 Hz
@@ -366,27 +412,60 @@ def run_virtual_time(
             done, stopped = task.done(s, t - start), STOP.is_set()
             end = done or stopped or t - start >= duration - _TOLERANCE
             new, fault, update, faulted = None, None, False, None
-            if pending is not None and t >= available - _TOLERANCE:  # the first tick at or after it
-                new, pending = pending, None
+            plan_request_t = None
+            if pending is not None and t >= available - _TOLERANCE:
+                if predictor is not None and not pending_received:
+                    predictor.arrived(available - requested_at)
+                    pending_received = True
+                if predictor is None or t >= pending.t0 - _TOLERANCE:
+                    plan_request_t = requested_at
+                    new, pending = pending, None
+            prepared_plan, prepared_command = None, None
             # Between requests nothing is polled: a dead MpcProcess is noticed at the next request.
             if pending is None and not end and due(t):
                 update, updates = True, updates + 1
-                mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
-                solved = mpc.result(block=True)  # wait for it: no virtual time passes
-                assert solved is not None
-                fault = plan_fault(solved)
-                if fault is None:
-                    pending, took = solved, solved.stats["wall_s"]
-                    latency = took if solve_latency_s == "measured" else solve_latency_s
-                    if 0. < latency < took:
-                        events.append(Event(t, "overrun", f"a solve took {1e3 * took:.1f} ms, longer than "
-                                                          f"solve_latency_s={1e3 * latency:g} ms",
-                                            dict(plan=updates - 1, wall_s=took, solve_latency_s=latency)))
-                    available = t + latency
-                    if t >= available - _TOLERANCE:  # zero latency: in effect at this tick
-                        new, pending = pending, None
+                request_at = t
+                if predictor is None:
+                    mpc.request(s, *task.at(s.t - start, mpc.N, mpc.dt))
                 else:
-                    faulted = solved  # it never takes effect
+                    prepared_plan = new if new is not None else plan
+                    if prepared_plan is not None:
+                        fault = lease_fault(prepared_plan, t)
+                        if fault is None:
+                            prepared_command = np.asarray(law(prepared_plan, t, s), dtype=float)
+                            fault = command_fault(prepared_command)
+                    at = _tick_at_or_after(t + predictor.latency_s, t, command_period)
+                    predicted = (None if fault is not None else predictor.predict(
+                        s, t, at, prepared_plan, law, prepared_command, t + command_period, command_period))
+                    if predicted is None:
+                        fault = fault or "prediction_unavailable"
+                    else:
+                        mpc.request(predicted, *task.at(predicted.t - start, mpc.N, mpc.dt))
+                if fault is not None:
+                    update = False
+                else:
+                    solved = mpc.result(block=True)  # wait for it: no virtual time passes
+                    assert solved is not None
+                    fault = plan_fault(solved)
+                    if fault is None:
+                        pending, took = solved, solved.stats["wall_s"]
+                        requested_at, pending_received = request_at, False
+                        latency = took if solve_latency_s == "measured" else solve_latency_s
+                        if 0. < latency < took:
+                            events.append(Event(t, "overrun", f"a solve took {1e3 * took:.1f} ms, longer than "
+                                                              f"solve_latency_s={1e3 * latency:g} ms",
+                                                dict(plan=updates - 1, wall_s=took, solve_latency_s=latency)))
+                        available = t + latency
+                        if t >= available - _TOLERANCE:
+                            if predictor is not None:
+                                predictor.arrived(latency)
+                                pending_received = True
+                            if predictor is None or t >= pending.t0 - _TOLERANCE:
+                                plan_request_t = requested_at
+                                new, pending = pending, None
+                    else:
+                        faulted, plan_request_t = solved, request_at
+                        new = None  # an earlier ready plan sent no command before this fault
             if new is not None:
                 plan, plans = new, plans + 1
             command = None
@@ -395,13 +474,18 @@ def run_virtual_time(
                     events.append(_late_plan(plan, t, plans - 1))
                 fault = lease_fault(plan, t)  # before the law: never past the last knot
                 if fault is None:
-                    command = np.asarray(law(plan, t, s), dtype=float)
+                    command = (prepared_command if predictor is not None and plan is prepared_plan
+                               else np.asarray(law(plan, t, s), dtype=float))
+                    assert command is not None
                     fault = command_fault(command)
                     if fault is None:
                         plant.apply(command)
+                        if predictor is not None:
+                            predictor.sent(t, command)
                     else:
                         command = None
-            tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted)
+            tick = Tick(t, s, command, plan, new is not None, update, (*events, *plant.take_events()), faulted,
+                        plan_request_t if new is not None or faulted is not None else None)
             for callback in tick_callbacks:
                 callback(tick)
             if fault is not None:
@@ -423,6 +507,7 @@ class VirtualTime:
     command_period: float
     update_period: float
     solve_latency_s: float | Literal["measured"]
+    compensation: LatencyCompensation | None = None
 
     @classmethod
     def ideal(cls, command_period: float = hz_to_s(500), update_period: float = hz_to_s(100)) -> VirtualTime:
@@ -459,7 +544,9 @@ class VirtualTime:
         *,
         duration: float,
     ) -> Outcome:
-        return run_virtual_time(plant, mpc, task, law, tick_callbacks, duration=duration, **asdict(self))
+        return run_virtual_time(plant, mpc, task, law, tick_callbacks, duration=duration,
+                                command_period=self.command_period, update_period=self.update_period,
+                                solve_latency_s=self.solve_latency_s, compensation=self.compensation)
 
 
 @dataclass(frozen=True)
@@ -467,6 +554,7 @@ class RealTime:
     """run_real_time's timing."""
     command_period: float = hz_to_s(500)
     update_period: float = hz_to_s(100)
+    compensation: LatencyCompensation | None = None
 
     def run(
         self,
@@ -478,4 +566,6 @@ class RealTime:
         *,
         duration: float,
     ) -> Outcome:
-        return run_real_time(plant, mpc, task, law, tick_callbacks, duration=duration, **asdict(self))
+        return run_real_time(plant, mpc, task, law, tick_callbacks, duration=duration,
+                             command_period=self.command_period, update_period=self.update_period,
+                             compensation=self.compensation)

@@ -20,7 +20,7 @@ from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
-from tiago_mpc.interfaces import Plan, State
+from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, to_dict
 from tiago_mpc.tiago import GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
@@ -314,6 +314,24 @@ def test_native_coordinates_cross_only_the_gpu_boundary(controller):
     assert m.result() is None  # one plan per request
 
 
+@pytest.mark.parametrize('worker', [False, True])
+def test_prediction_is_separate_from_measured_state_and_crosses_worker_interface(controller, process, worker):
+    m = process() if worker else Mpc(PARAMS, BINARY)
+    measured = state(1.)
+    predicted = Prediction(1.006, measured.q + .01, measured.qd - .02, measured_t=measured.t)
+    q, qd = measured.q.copy(), measured.qd.copy()
+    m.request(predicted, REFERENCE)
+    plan = m.result(block=True)
+    assert plan.t0 == 1.006 and plan.measured_t == 1.
+    assert measured.t == 1.
+    np.testing.assert_array_equal(measured.q, q)
+    np.testing.assert_array_equal(measured.qd, qd)
+    np.testing.assert_array_equal(plan.states[0], np.r_[predicted.q, predicted.qd])
+    assert 'predicted_initial_state' not in plan.stats
+    with pytest.raises(ValueError, match='precede'):
+        m.request(Prediction(.99, q, qd, measured_t=measured.t), REFERENCE)
+
+
 def test_after_a_warmup_requests_never_reset_and_dt_elapsed_follows_state_times(controller):
     m = Mpc(PARAMS, BINARY)
     m.warmup(state(.5, scale=2.), REFERENCE)
@@ -371,8 +389,8 @@ def test_a_plan_above_the_raw_effort_limit_is_returned(controller):
 @pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite"])
 def test_every_knot_is_checked(controller, bad):
     m = Mpc(PARAMS, BINARY)
-    fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)))
-    assert mpc._checked(m, Plan(**fields), 1.)
+    fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)), measured_t=1.)
+    assert mpc._checked(m, Plan(**fields), 1., 1.)
     if bad == "shape":
         fields.update(states=np.zeros((N + 1, 14)), torques=np.ones((N, 7)))
     elif bad in ("t0", "dt"):
@@ -381,7 +399,7 @@ def test_every_knot_is_checked(controller, bad):
     if bad == "nonfinite":  # only an unpickled plan skips Plan's own check
         object.__setattr__(plan, "torques", np.full((N - 1, 7), np.nan))
     with pytest.raises(RuntimeError):
-        mpc._checked(m, plan, 1.)
+        mpc._checked(m, plan, 1., 1.)
 
 
 class Channel(queue.Queue):
@@ -460,7 +478,7 @@ def test_process_rejects_a_reply_for_another_state(process, controller):
     p = process()
     controller.gate = threading.Event()
     p.request(state(), REFERENCE)
-    p._replies.put(Plan(.99, DT, np.zeros((N, 14)), np.ones((N - 1, 7))))
+    p._replies.put(Plan(.99, DT, np.zeros((N, 14)), np.ones((N - 1, 7)), measured_t=.99))
     with pytest.raises(RuntimeError, match="does not match"):
         p.result()
     controller.gate.set()

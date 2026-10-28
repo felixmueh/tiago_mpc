@@ -29,6 +29,12 @@ control updates on it. `State.t` is when the state was measured, on the same
 time, and a plan starts at its state's time; on the robot a state can be older
 than the tick and repeat. On the robot the safety check runs in its own process.
 
+Both loops support optional [latency compensation](docs/latency-compensation.md):
+predict the state at the next plan's intended start under the ongoing commands,
+then solve from that prediction. The measured state and its age remain separate.
+Pass `compensation=LatencyCompensation(...)` in the timing; it defaults off.
+Its physical friction and armature model is independent of the optimizer's model.
+
 A run ends without an exception: the task done, the time up, a fault (a plan or
 command beyond the raw effort limit, an expired lease, an invalid command) or a stop
 request (Ctrl-C, SIGTERM) end the loop, which returns an `Outcome(status, reason, t)`.
@@ -47,6 +53,7 @@ tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what ex
               PlanFeedback, FrictionFeedforward),
               loops.py (run_real_time, run_virtual_time, RealTime, VirtualTime, Outcome,
               STOP, plan_fault, lease_fault, command_fault),
+              prediction.py (LatencyCompensation and physical state propagation),
               sim.py (SimConfig, SimPlant), robot.py (RobotConfig, RosPlant),
               ros2.py (ROS 2 client), safety.py,
               record.py (the run format: to_dict, from_dict, CLASSES, provenance, Console,

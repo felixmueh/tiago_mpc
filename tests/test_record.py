@@ -34,7 +34,7 @@ def test_a_run_is_written_and_read_back(tmp_path):
     written = json.loads((tmp_path / "r" / "summary.json").read_text())  # at once
     assert written["format"] == FORMAT and written["metadata"]["status"] == "running"
     assert written["config"]["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.02,
-                                               solve_latency_s=.01)
+                                               solve_latency_s=.01, compensation=None)
     outcome = timing.run(plant, mpc, task, SampleKnot(), [record], duration=.05)
     record.add_events([Event(plant.clock.now(), "handback", "handed back", dict(restored=True, errors=[]))])
     record.ticks["distance_m"] = np.arange(len(record.ticks["t"])) * .1
@@ -49,7 +49,7 @@ def test_a_run_is_written_and_read_back(tmp_path):
     np.testing.assert_array_equal(ticks["update"], [0, -1, 1, -1, 2, -1])
     np.testing.assert_allclose(plans["update_t"], [.002, .022, .042], atol=1e-12)  # the requests' ticks
     np.testing.assert_allclose(plans["t0"], [0., .02, .04], atol=1e-12)  # their states
-    assert set(plans) == {"t0", "update_t", "states", "torques", "wall_s", "label"}
+    assert set(plans) == {"t0", "measured_t", "update_t", "states", "torques", "wall_s", "label"}
     assert [(e.kind, round(e.t, 6)) for e in record.events] == [
         ("late_plan", .012), ("pacing_behind", .012), ("pacing_behind", .022), ("late_plan", .032),
         ("pacing_behind", .032), ("pacing_behind", .042), ("pacing_behind", .052), ("handback", .052)]

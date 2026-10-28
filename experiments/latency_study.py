@@ -18,7 +18,7 @@ import numpy as np
 
 from experiments import figure8, reach
 from experiments.common import handle_stop_signals, run_experiment
-from experiments.latency_compensation import Compensated, first_tick_of_each_plan
+from experiments.latency_compensation import Compensated, first_tick_of_each_plan, requested_states
 import tiago_mpc as tm
 
 COMMAND_PERIOD = tm.hz_to_s(500)  # the experiments' default; the control-update period is the knot interval
@@ -74,7 +74,8 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
 def row(out, task, case, ms, compensate):
     """One run's outcome. The takeover error is the plant's state at the tick each plan took
     effect minus the state it was requested from: the prediction error when compensated
-    (the plans' requested_state), otherwise how far the arm moved during the latency. Not
+    (the experiment's requested-state events, or its older saved plan column), otherwise
+    how far the arm moved during the latency. Not
     the plan's knot 0: GATO returns it only as close to the requested state as the solve
     converged. fault: the fault's or interruption's reason, else an error's last line."""
     run = tm.load_run(out)
@@ -82,7 +83,8 @@ def row(out, task, case, ms, compensate):
     time_s, state, command, t0 = ticks["t"], np.c_[ticks["q"], ticks["qd"]], ticks["command"], plans["t0"]
     if compensate:
         effect = first_tick_of_each_plan(run)
-        error = np.abs(state[effect] - plans["requested_state"]) if len(effect) else np.zeros((0, 14))
+        error = (np.abs(state[effect] - requested_states(run)[ticks["plan"][effect]])
+                 if len(effect) else np.zeros((0, 14)))
     else:
         delay = math.ceil(ms / 1e3 / COMMAND_PERIOD - 1e-9) * COMMAND_PERIOD
         i, k = (np.searchsorted(time_s, t0 + d - 1e-9) for d in (0., delay))

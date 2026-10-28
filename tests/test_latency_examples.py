@@ -6,14 +6,15 @@ import math
 import numpy as np
 import pytest
 
-from experiments.latency_compensation import Compensated, first_tick_of_each_plan, implicit_step, run_compensated
+from experiments.latency_compensation import (Compensated, first_tick_of_each_plan, implicit_step,
+                                              requested_states, run_compensated)
 from experiments.latency_study import row
 from test_loops import Mpc, Plant, Task, commanded, go
 from tiago_mpc.dynamics import Tanh
 from tiago_mpc.laws import PlanFeedback, SampleKnot
 from tiago_mpc.util import inertia_gains
 from tiago_mpc.interfaces import Plan, State
-from tiago_mpc.record import RunRecord, from_dict, to_dict
+from tiago_mpc.record import RunRecord, from_dict, load_run, to_dict
 from tiago_mpc.tiago import Q_START, arm_urdf, urdf_friction
 
 
@@ -35,7 +36,7 @@ def step(x, u, h):
 def test_plan_feedback_follows_the_plans_constant_acceleration_between_knots():
     x0, u = np.r_[np.zeros(7), np.ones(7)], np.full(7, 2.)
     x1 = step(x0, u, .01)
-    plan = Plan(1., .01, np.array([x0, x1, step(x1, -u, .01)]), np.array([u, -u]))
+    plan = Plan(1., .01, np.array([x0, x1, step(x1, -u, .01)]), np.array([u, -u]), measured_t=1.)
     law = PlanFeedback(kp=10., kd=np.arange(7.))
     on = step(x0, u, .004)  # on the plan 4 ms into knot 0: the knot torque alone
     np.testing.assert_allclose(law(plan, 1.004, State(1.004, on[:7], on[7:])), u)
@@ -97,13 +98,21 @@ def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp
     # Requested at 0, 20, ..., 80 ms, each from the state predicted 20 ms on, dated then.
     assert [round(t, 6) for t, _ in mpc.requests] == [.02, .04, .06, .08, .1]
     assert commanded(ticks)[:4] == [(.02, 1.), (.03, 2.), (.04, 1.), (.05, 2.)]  # knot 0 runs
-    assert not any(k.events for k in ticks)  # no plan is late
+    assert all(e.kind == 'prediction_request' for k in ticks for e in k.events)  # no plan is late
     np.testing.assert_allclose(record.plans["update_t"], [0., .02, .04, .06, .08])
     np.testing.assert_allclose(record.plans["t0"], [.02, .04, .06, .08, .1])
     effect = first_tick_of_each_plan(record)
     np.testing.assert_allclose(record.ticks["t"][effect], [.02, .04, .06, .08, .1])
     actual = np.c_[record.ticks["q"][effect], record.ticks["qd"][effect]]
-    np.testing.assert_allclose(record.plans["requested_state"], actual, atol=1e-6)
+    np.testing.assert_allclose(requested_states(record), actual, atol=1e-6)
+    assert 'requested_state' not in record.plans
+    assert all(set(k.plan.stats) == {'wall_s'} for k in ticks if k.new)
+    record.save()
+    loaded = load_run(record.out)
+    np.testing.assert_array_equal(requested_states(loaded), requested_states(record))
+    loaded.plans['requested_state'] = requested_states(loaded)
+    loaded.events.clear()  # older saved runs retain their original requested-state column
+    np.testing.assert_allclose(requested_states(loaded), actual, atol=1e-6)
     assert actual[-1, 7] > 0  # the arm moved: the prediction was not trivial
 
 
@@ -115,6 +124,21 @@ def test_compensation_runs_on_virtual_time_and_returns_an_outcome():
     outcome = timing.run(plant, Mpc(), Task(), SampleKnot(), [ticks.append], duration=.03)  # as a timing
     assert outcome.status == "timeout" and commanded(ticks) == [(.01, 2.), (.02, 2.)]
     assert from_dict(to_dict(timing), [Compensated]) == timing
+
+
+def test_faulted_plan_does_not_enter_active_prediction_error_or_replace_active_tick_plan(tmp_path):
+    record, ticks = RunRecord(tmp_path/'faulted', task=Task()), []
+    outcome = run_compensated(Moving(), Predicting(over=4), Task(), SampleKnot(), [record, ticks.append],
+                              command_period=.01, update_period=.01, duration=.1, solve_latency_s=.02,
+                              predictor='gpu')
+    assert outcome.reason == 'effort_limit'
+    assert ticks[-1].plan is ticks[-2].plan and not ticks[-1].new
+    record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t)
+    record.save()
+    assert len(first_tick_of_each_plan(record)) == 2 and len(record.plans['t0']) == 3
+    result = row(record.out, 'reach', 'compensated', 20., True)
+    assert result['fault'] == 'effort_limit' and result['takeover_q_mrad'] == 0.
+    assert result['takeover_qd_rad_s'] == 0.
 
 
 @pytest.mark.parametrize("latency", ["measured", -.01, math.nan, math.inf])

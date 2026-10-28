@@ -15,7 +15,7 @@ from experiments.latency_compensation import Compensated
 from tiago_mpc import record as rec
 from tiago_mpc.laws import SampleKnot
 from tiago_mpc.loops import STOP, RealTime, VirtualTime
-from tiago_mpc.interfaces import Plan, State
+from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, load_run
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, arm_urdf, fk, urdf_friction
@@ -65,7 +65,9 @@ class Mpc:
                      zero_pcg_rows=0, admm_linsys_mode="pcg", row_viol=None)
         torques = np.tile(u, (self.N - 1, 1))
         torques[-1, 6] += self.extra
-        self.plan = Plan(state.t, self.dt, np.tile(np.r_[state.q, state.qd], (self.N, 1)), torques, stats)
+        measured_t = state.measured_t if isinstance(state, Prediction) else state.t
+        self.plan = Plan(state.t, self.dt, np.tile(np.r_[state.q, state.qd], (self.N, 1)), torques, stats,
+                         measured_t=measured_t)
 
     def result(self, block=False):
         plan, self.plan = self.plan, None
@@ -97,7 +99,7 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     assert config["params"]["N"] == 4 and config["task"]["type"] == type(task).__name__
     assert config["plant"]["type"] == "SimConfig" and config["law"] == dict(type="SampleKnot")
     assert config["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.01,
-                                    solve_latency_s=.01 if name == "reach" else 0.)
+                                    solve_latency_s=.01 if name == "reach" else 0., compensation=None)
     assert config["duration"] == .05 and results["limits_pass"]
     if name == "figure8":
         assert config["plant"]["substep"] == .001 and config["plant"]["integrator"] == "euler"

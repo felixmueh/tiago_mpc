@@ -11,7 +11,8 @@ from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleK
 from tiago_mpc.loops import (STOP, Outcome, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
                              run_real_time, run_virtual_time)
 from tiago_mpc.mpc import TIAGO, UPDATES, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
-from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Plan, PlantInterface, State,
+from tiago_mpc.prediction import LatencyCompensation
+from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Plan, PlantInterface, Prediction, State,
                                   TaskInterface, Tick, Timing)
 from tiago_mpc.record import Console, RunRecord, from_dict, load_run, provenance, to_dict
 from tiago_mpc.robot import RobotConfig, RosPlant
@@ -27,6 +28,7 @@ __all__ = [
     "STOP", "Outcome", "RealTime", "Schedule", "VirtualTime", "command_fault", "lease_fault", "plan_fault",
     "run_real_time", "run_virtual_time",
     "TIAGO", "UPDATES", "Mpc", "MpcParams", "MpcProcess", "compile_binary", "find_binary",
+    "LatencyCompensation", "Prediction",
     "Callback", "ControlLaw", "Event", "MpcInterface", "Plan", "PlantInterface", "State", "TaskInterface", "Tick",
     "Timing",
     "Console", "RunRecord", "from_dict", "load_run", "provenance", "to_dict",

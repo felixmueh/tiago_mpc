@@ -9,7 +9,7 @@ from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleK
 from tiago_mpc.interfaces import Plan
 
 sample_knot, hold_first = SampleKnot(), HoldFirst()
-PLAN = Plan(10., .002, np.zeros((6, 4)), 1. + np.arange(5)[:, None] * np.ones(2))
+PLAN = Plan(10., .002, np.zeros((6, 4)), 1. + np.arange(5)[:, None] * np.ones(2), measured_t=10.)
 
 
 def test_sample_knot_holds_each_knot_from_the_state_time():
@@ -42,13 +42,13 @@ def test_public_package_laws_rebuild_from_recorded_type_names_without_extra_clas
     rebuilt = tm.from_dict(payload)
     assert rebuilt == law and tm.to_dict(rebuilt) == payload
     states = np.arange(42., dtype=float).reshape(3, 14)/100
-    plan = tm.Plan(1., .01, states, np.ones((2, 7)))
+    plan = tm.Plan(1., .01, states, np.ones((2, 7)), measured_t=1.)
     measured = tm.State(1., np.zeros(7), np.full(7, -.1))
     np.testing.assert_array_equal(rebuilt(plan, 1.014, measured), law(plan, 1.014, measured))
 
 
 def test_feedforward_checks_horizon_even_when_its_base_law_holds_the_first_torque():
-    plan = tm.Plan(1., .01, np.zeros((3, 14)), np.ones((2, 7)))
+    plan = tm.Plan(1., .01, np.zeros((3, 14)), np.ones((2, 7)), measured_t=1.)
     law = tm.FrictionFeedforward(tm.Friction((1.,)*7, (0.,)*7), tm.HoldFirst())
     state = tm.State(1.03, np.zeros(7), np.zeros(7))
     with pytest.raises(RuntimeError, match="last knot"):
@@ -63,7 +63,7 @@ def test_plan_feedback_defaults_are_the_model_constants():
 def test_feedforward_evaluates_interpolated_plan_velocity_independently_of_measured_velocity(evaluation):
     states = np.zeros((3, 14))
     states[:, 7:] = np.array([0., .02, .04])[:, None]
-    plan = tm.Plan(1., .01, states, np.full((2, 7), 3.))
+    plan = tm.Plan(1., .01, states, np.full((2, 7), 3.), measured_t=1.)
     friction = tm.Friction((1.,)*7, (.5,)*7)
     law = FrictionFeedforward(friction, tm.HoldFirst(), evaluation)
     t = 1.005
