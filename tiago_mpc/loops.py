@@ -27,7 +27,7 @@ from typing import Literal
 import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
-from tiago_mpc.laws import SampleKnot
+from tiago_mpc.laws import FrictionFeedforward, SampleKnot
 from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Plan, PlantInterface, TaskInterface,
                                   Tick)
 from tiago_mpc.tiago import limits
@@ -111,6 +111,19 @@ def command_fault(command: np.ndarray) -> str | None:
     return "effort_limit" if np.any(np.abs(command) > effort) else None
 
 
+def _check_compensation(mpc: MpcInterface, law: ControlLaw) -> None:
+    """Reject duplicate compensation in the built-in law composition before startup.
+
+    Plant/propagation losses describe resistance and are independent of this
+    actuator check. Arbitrary user callables remain the caller's responsibility.
+    """
+    if isinstance(law, FrictionFeedforward):
+        if isinstance(law.base_law, FrictionFeedforward):
+            raise ValueError("Friction feedforward cannot wrap another friction feedforward law")
+        if mpc.params.friction is not None:
+            raise ValueError("Friction feedforward requires predictor friction=None to avoid double compensation")
+
+
 def _late_plan(plan: Plan, t: float, index: int) -> Event:
     """The late-plan event of plan number index, which takes effect at t."""
     return Event(t, "late_plan", f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, "
@@ -176,6 +189,7 @@ def run_real_time(
 
     if duration > 60 * MAX_RUNTIME_MIN:
         raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
+    _check_compensation(mpc, law)
     clock, due = WallClock(), Schedule(update_period)
     plan, solving, start, deadline = None, False, None, None
     sent, plans = 0, 0
@@ -337,6 +351,7 @@ def run_virtual_time(
                          f"not {solve_latency_s!r}")
     if duration > 60 * MAX_RUNTIME_MIN:
         raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
+    _check_compensation(mpc, law)
     clock, due = VirtualClock(), Schedule(update_period)
     plan, pending, available, start = None, None, 0., None  # pending: the solved plan
     updates, plans = 0, 0

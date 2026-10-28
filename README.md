@@ -43,7 +43,8 @@ tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what ex
               Mpc, MpcProcess),
               interfaces.py (State, Plan, Event, Tick; the protocols PlantInterface,
               MpcInterface, TaskInterface, Timing; ControlLaw, Callback),
-              clock.py (VirtualClock, WallClock), laws.py (SampleKnot, HoldFirst),
+              clock.py (VirtualClock, WallClock), laws.py (SampleKnot, HoldFirst,
+              PlanFeedback, FrictionFeedforward),
               loops.py (run_real_time, run_virtual_time, RealTime, VirtualTime, Outcome,
               STOP, plan_fault, lease_fault, command_fault),
               sim.py (SimConfig, SimPlant), robot.py (RobotConfig, RosPlant),
@@ -276,22 +277,23 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   plant), the law and the timing. Extra keyword pieces of `run_experiment` (e.g.
   `case="pair_00026"`) are recorded too. Frozen configs hold tuples, not lists.
 - A **control law** is a frozen dataclass called `law(plan, t, state) -> command`
-  (`SampleKnot()`, `HoldFirst()`, `PlanFeedback(kp, kd)`); a **timing** one whose
+  (`tm.SampleKnot()`, `tm.HoldFirst()`, `tm.PlanFeedback(kp, kd)`,
+  `tm.FrictionFeedforward(friction, base_law)`); a **timing** one whose
   `run(plant, mpc, task, law, tick_callbacks, duration=...)` runs its loop
   (`VirtualTime`, `RealTime`, `Compensated`); **tick callbacks** see every `Tick` (the
   tick's time, state, command, plan, whether it is new, whether a control update
   started, its events). The pieces' interfaces are typed in `tiago_mpc/interfaces.py`:
   a plant, an MPC, a task and a timing need no base class, only what the protocols
   `PlantInterface`, `MpcInterface`, `TaskInterface` and `Timing` declare.
-- `SimConfig(friction=..., integrator=...)` sets the **plant's** losses,
-  `MpcParams.friction` the **predictor's**; the run records both.
-- **Friction simulation:** a `Friction` holds the coefficients and its Coulomb law,
-  plain data that each integrator interprets: `StickSlip()` (the default),
+- `SimConfig(friction=..., friction_law=..., integrator=...)` sets the **plant's** losses,
+  `MpcParams.friction` and `friction_law` the **predictor's**; the run records both.
+- **Friction simulation:** a `Friction` holds only the Coulomb and viscous coefficients.
+  Each consumer chooses its law: `StickSlip()` (the plant default),
   `Sign()` or `Tanh(width_rad_s)`. `SimConfig(friction=urdf_friction(), integrator="euler")`
   uses semi-implicit Euler, implicit viscous damping and a coupled stick/slip solve.
   Joints hold at zero velocity while the needed friction lies within ±c, and slip
-  at c. `urdf_friction(Sign())` instead evaluates Coulomb as `c*sign(v_old)` (it
-  can chatter and creep near zero), `urdf_friction(Tanh(.03))` as
+  at c. Setting `friction_law=Sign()` instead evaluates Coulomb as `c*sign(v_old)` (it
+  can chatter and creep near zero), `friction_law=Tanh(.03)` as
   `c*tanh(v_old/width)` (the predictor's law; it creeps below the threshold).
   Damping stays implicit in all three. They use the full Pinocchio mass matrix and
   bias at the old state and advance q with the new velocity. The default maximum
@@ -301,9 +303,12 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   loss-free and, with `Tanh` or `Sign`, RK4 with the passive torque at every stage
   (the URDF's damping needs substeps far below 1 ms there); it refuses
   `StickSlip`, which exists only as the Euler step's solve. `passive_torque`
-  likewise covers `Tanh` and `Sign` only. `MpcParams.friction` takes `Tanh` only.
-  A saved `Friction` records its law by type name (`{"type": "StickSlip"}`).
-  Armature remains disabled. These plant choices do not qualify
+  likewise covers `Tanh` and `Sign` only, as a separate third argument.
+  `MpcParams.friction_law` takes `Tanh` only. Numerical choices are recorded on
+  their consumer by type name (`{"type": "StickSlip"}`), independently of coefficients.
+  Armature defaults to zero; this experiment branch also accepts an explicit
+  seven-joint reflected-inertia tuple in `SimConfig.armature` and `MpcParams.armature`.
+  These plant choices do not qualify
   friction-enabled MPC or tracking.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
@@ -317,8 +322,31 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
 - **Many runs:** an experiment's own frozen study classes, written once with
   `to_dict` before the first run, one `RunRecord` per case; `random100` is the
   example (`experiments/random100/run.py`).
-- **Examples, two remedies for solve latency:** `experiments/plan_feedback.py`, a law
-  (a PD around the plan), and `experiments/latency_compensation.py`, its own loop
+- **Execution laws are package components:** `tm.PlanFeedback` adds PD around the
+  interpolated plan; `tm.FrictionFeedforward` adds the specified `Tanh` or `Sign`
+  losses at planned velocity, composing with `tm.SampleKnot()` by default or with
+  another law. For example,
+  `tm.FrictionFeedforward(tm.urdf_friction(), tm.PlanFeedback(), evaluation=tm.Tanh(.03))`.
+  Both use native coordinates and are rebuilt by `tm.from_dict` and `tm.load_run`
+  without extra law classes. `tm.inertia_gains(omega, damping_ratio=zeta, armature=values)`
+  derives explicit PD gains from the effective inertia at `Q_START` (or a supplied
+  `q`). The helper lives in `util.py` and keeps zero armature as its calculation
+  default. `tm.PlanFeedback()` reads the checked-in `PD_KP` and `PD_KD` tuples in
+  `tiago.py`: the chosen 20 rad/s, damping-ratio-1.4 simulation tune with armature.
+  `ARMATURE_KG_M2` is stored there too; enabling it in plant/predictor remains explicit.
+  Edit these literals manually. To calculate replacement values without writing files:
+
+  ```python
+  kp, kd = tm.inertia_gains(20., damping_ratio=1.4, armature=tm.ARMATURE_KG_M2)
+  print(f"PD_KP = {kp!r}\nPD_KD = {kd!r}")
+  ```
+
+  Both package loops reject external friction feedforward with predictor friction
+  enabled, or nested external feedforward, before starting the plant. Physical
+  plant losses do not count as actuator compensation. The check covers the built-in
+  composition; custom callable laws remain the caller's responsibility.
+- **Examples, two remedies for solve latency:** `experiments/plan_feedback.py` uses
+  the package PD law, and `experiments/latency_compensation.py` provides its own loop
   (solve from the predicted state) behind the timing `Compensated`;
   `experiments/latency_study.py` compares them.
 - **Friction comparison:** `python -m experiments.friction_study --dry-run` describes
@@ -328,6 +356,20 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   tracking predicts nominal tanh friction. Run with
   `--output _expr_data/controller-friction/<fresh-name>`. Each cell runs once;
   this compares task behavior rather than wall-clock performance or robot readiness.
+- **Execution-controller tuning:** [controller_tuning.py](experiments/controller_tuning.py)
+  contains explicit simulation presets `TUNED_PD`, `TUNED_FEEDFORWARD` and `TUNED_BOTH`,
+  selected on tracking and reaching with armature, then checked on different tasks,
+  coefficients and timing. The historical `tm.PlanFeedback()` defaults stay unchanged.
+  [Manual robot tuning](docs/controller-tuning-on-robot.md) explains conservative transfer;
+  these presets are not hardware-qualified and the study never connects to ROS.
+  The runner defaults to measured solve latency; `--solve-latency` also accepts
+  declared seconds. `--scenario no_friction` removes only passive plant losses,
+  retaining armature and the selected controller/predictor. `mpc_friction` and
+  `mpc_friction_pd` select the internal-MPC friction comparison (no external FF).
+  Evaluation records full/after-first-second plan-requested low-speed fractions,
+  stall durations and eligible joint time, velocity/torque ripple, and torque
+  total variation per second. Thresholds and units are recorded; these are
+  descriptive metrics, not proof that a pause was caused by friction.
 
 ## On the robot
 
@@ -355,7 +397,7 @@ python -m experiments.figure8 --plant robot --execute --target X_M Y_M Z_M --dur
 `RunRecord` (`tiago_mpc/record.py`, the one module of the format) writes the
 provenance and configuration at the start and buffers one entry per command tick;
 `save()` writes the run into `--output` or `_expr_data/<task>/<UTC time>/`
-(ignored by Git). Plain JSON and npz, format 2; times count from the first state's:
+(ignored by Git). Plain JSON and npz, format 3; times count from the first state's:
 
 - `summary.json`: `format`; `provenance` (commit, source status, package
   versions, GATO's source, `ROS_DISTRO`); `config`, the pieces (`task`, `params`,
@@ -377,6 +419,9 @@ provenance and configuration at the start and buffers one entry per command tick
 `tm.load_run(path, classes=[Reach])` reads a run back with the same interface
 (`run.ticks["q"]`, `run.config["timing"]`, `run.metadata["status"]`, `run.events`):
 a metric added later is the same code, and `run.save()` writes it back.
+The loader rejects other format versions before reconstructing their configuration.
+Format-2 runs remain readable with WIP `f66172f`; their files are unchanged.
+Portable replay files keep their existing version.
 
 More: [docs/robot.md](docs/robot.md) (robot path and checks),
 [docs/safety.md](docs/safety.md) (collision-safety worker),

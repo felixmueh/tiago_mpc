@@ -1,7 +1,7 @@
 """SimConfig and SimPlant: the right arm as a Pinocchio plant in native coordinates.
 
 It holds each command until the next tick. The integrators and the Coulomb laws
-(Friction.law) each takes:
+(SimConfig.friction_law) each takes:
 - 'rk4': GATO's RK4 when loss-free; with a Tanh or Sign friction, RK4 with the passive
   torque at every stage (plant_rk4). StickSlip is Euler-only.
 - 'euler': semi-implicit Euler with implicit damping (plant_euler), for every law: Tanh
@@ -21,7 +21,7 @@ import pinocchio as pin
 from gato.common import rk4
 
 from tiago_mpc.clock import VirtualClock, WallClock
-from tiago_mpc.dynamics import Friction, StickSlip, plant_euler, plant_rk4
+from tiago_mpc.dynamics import CoulombLaw, Friction, StickSlip, plant_euler, plant_rk4
 from tiago_mpc.interfaces import Event, State
 from tiago_mpc.tiago import Q_START, arm_urdf
 
@@ -31,18 +31,26 @@ class SimConfig:
     """The simulated arm, a value; build() is its SimPlant. q, qd: the start state (tuples;
     lists and arrays are converted), by default the comfortable pose at rest; substep:
     the longest integration step; friction: the plant's losses (None: loss-free);
+    friction_law: their Coulomb evaluation or coupled stick/slip integration;
+    armature: constant reflected joint inertia, passed to Pinocchio once;
     integrator: 'rk4' or 'euler' (the module docstring); sync_real_time: pace a
     virtual-time run for watching (SimPlant). SimPlant checks the values."""
     q: tuple[float, ...] = tuple(map(float, Q_START))
     qd: tuple[float, ...] = (0.,) * 7
     substep: float = .001
     friction: Friction | None = None
+    friction_law: CoulombLaw = StickSlip()
     integrator: Literal["rk4", "euler"] = "rk4"
     sync_real_time: bool = False
+    armature: tuple[float, ...] = (0.,) * 7  # reflected joint inertia, kg m²
 
     def __post_init__(self):
         object.__setattr__(self, "q", tuple(map(float, self.q)))
         object.__setattr__(self, "qd", tuple(map(float, self.qd)))
+        values = tuple(float(value) for value in self.armature)
+        if len(values) != 7 or not all(np.isfinite(value) and value >= 0 for value in values):
+            raise ValueError('armature must contain seven finite nonnegative values')
+        object.__setattr__(self, 'armature', values)
 
     def build(self) -> SimPlant:
         return SimPlant(self)
@@ -66,10 +74,12 @@ class SimPlant:
             raise ValueError("substep must be finite and positive")
         if config.integrator not in ("rk4", "euler"):
             raise ValueError(f"Unknown integrator: {config.integrator}")
-        if config.integrator == "rk4" and config.friction is not None and isinstance(config.friction.law, StickSlip):
+        if (config.integrator == "rk4" and config.friction is not None
+                and isinstance(config.friction_law, StickSlip)):
             raise ValueError("StickSlip Coulomb friction is Euler-only; use integrator='euler'")
         self.config = config
         self.model = pin.buildModelFromUrdf(str(arm_urdf()))
+        self.model.armature = np.asarray(config.armature)  # Pinocchio includes it in ABA, CRBA and RNEA
         self.data = self.model.createData()
         self.q, self.qd = np.array(config.q, dtype=float), np.array(config.qd, dtype=float)
         self.command: np.ndarray | None = None
@@ -121,14 +131,15 @@ class SimPlant:
         if t - self.t <= 1e-12:
             return
         friction = self.config.friction
+        law = self.config.friction_law
         # No command yet: the state stays while time moves on, as the robot's onboard position
         # controller holds the arm until the first command activates effort control.
         while self.command is not None and self.t < t - 1e-12:
             h = min(self.config.substep, t - self.t)
             if self.config.integrator == "euler":
-                q, qd = plant_euler(self.model, self.data, self.q, self.qd, self.command, h, friction)
+                q, qd = plant_euler(self.model, self.data, self.q, self.qd, self.command, h, friction, law)
             elif friction is not None:
-                q, qd = plant_rk4(self.model, self.data, self.q, self.qd, self.command, h, friction)
+                q, qd = plant_rk4(self.model, self.data, self.q, self.qd, self.command, h, friction, law)
             else:
                 q, qd = rk4(self.model, self.data, self.q, self.qd, self.command, h)
             if not np.isfinite(q).all() or not np.isfinite(qd).all():

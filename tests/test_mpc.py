@@ -18,14 +18,14 @@ import pytest
 
 from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
-from tiago_mpc.dynamics import Friction, Sign, Tanh
+from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.interfaces import Plan, State
 from tiago_mpc.record import from_dict, to_dict
 from tiago_mpc.tiago import GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
-LOSSES = Friction([1.] * 7, [.5] * 7, Tanh(.03))
+LOSSES = Friction([1.] * 7, [.5] * 7)
 
 
 @pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(TIAGO, N=8, admm=replace(TIAGO.admm, iters=5))])
@@ -59,7 +59,7 @@ def fake_binary(directory, params, plant=None):
     return path
 
 
-@pytest.mark.parametrize("params", [TIAGO, FIGURE8])
+@pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(FIGURE8, friction_law=Tanh(.05))])
 def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkeypatch, no_compile, tmp_path, params):
     seen = {}
     binary = fake_binary(tmp_path, params)
@@ -86,7 +86,7 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     assert seen["module"] == str(binary)
     # Smooth predictor friction is registered, with its width, only when the params have one.
     friction = {} if params.friction is None else dict(joint_dynamics=True,
-                                                         friction_width=params.friction.law.width_rad_s)
+                                                         friction_width=params.friction_law.width_rad_s)
     assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, **friction)
 
 
@@ -167,8 +167,26 @@ def test_compile_binary_registers_and_rebuilds_without_overwriting(monkeypatch, 
 def test_same_plant_inputs_same_name(tmp_path):
     (tmp_path / "arm.urdf").write_text("<robot/>")
     a = mpc.plant_name(tmp_path / "arm.urdf", LOSSES)
-    assert a == mpc.plant_name(tmp_path / "arm.urdf", Friction([1.] * 7, [.5] * 7, Tanh(.03)))
+    assert a == mpc.plant_name(tmp_path / "arm.urdf", Friction([1.] * 7, [.5] * 7), friction_law=Tanh(.03))
     assert len(a) == len("tiago_right_") + 8 and a.startswith("tiago_right_")
+
+
+@pytest.mark.parametrize("friction,armature,width,expected", [
+    (None, (0.,)*7, .03, "tiago_right_8dbe11dc"),
+    (None, (0.,)*7, .2, "tiago_right_8dbe11dc"),
+    (Friction((0.,)*7, (0.,)*7), (0.,)*7, .03, "tiago_right_dcad8b05"),
+    (LOSSES, (0.,)*7, .03, "tiago_right_8a7f89af"),
+    (LOSSES, (0.,)*7, .05, "tiago_right_9265f19b"),
+    (LOSSES, (1.,)*7, .03, "tiago_right_dfdac0d5"),
+    (LOSSES, (1.,)*7, .05, "tiago_right_49c9e22a"),
+])
+def test_separate_law_preserves_pre_refactor_compiled_names(monkeypatch, tmp_path, friction, armature,
+                                                           width, expected):
+    # Names captured from f66172f's coefficient-plus-law representation, before this refactor.
+    monkeypatch.setattr(mpc.importlib.metadata, "version", lambda name: "0.1.5")
+    path = tmp_path / "arm.urdf"
+    path.write_text("<robot/>")
+    assert mpc.plant_name(path, friction, armature, Tanh(width)) == expected
 
 
 def test_changed_plant_identity_changes_name(tmp_path):
@@ -178,7 +196,7 @@ def test_changed_plant_identity_changes_name(tmp_path):
     names = {
         mpc.plant_name(tmp_path / "other.urdf", LOSSES),
         mpc.plant_name(tmp_path / "arm.urdf", None),
-        mpc.plant_name(tmp_path / "arm.urdf", replace(LOSSES, law=Tanh(.05))),
+        mpc.plant_name(tmp_path / "arm.urdf", LOSSES, friction_law=Tanh(.05)),
         mpc.plant_name(tmp_path / "arm.urdf", replace(LOSSES, coulomb_nm=[2.] * 7)),
         mpc.plant_name(tmp_path / "arm.urdf", replace(LOSSES, viscous_nm_s_per_rad=[.6] * 7)),
     }
@@ -201,7 +219,7 @@ def test_smooth_model_check_uses_the_grasp_frame():
     solver.sim_forward.side_effect = reached_dynamics
     with pytest.raises(RuntimeError, match="FK check passed"):
         mpc.check_model(solver, model, model.createData(), np.ones(7),
-                        Friction([1.] * 7, [1.] * 7, Tanh(.03)))
+                        Friction([1.] * 7, [1.] * 7), Tanh(.03))
     solver.sim_forward.assert_called_once()
 
 
@@ -225,7 +243,7 @@ def test_the_start_pose_lies_inside_the_planning_box():
 
 @pytest.mark.parametrize("change", [*(dict(max_sqp_time_s=b) for b in (0., -1., np.nan, np.inf)),
                                     *(dict(solver=TIAGO.solver.replace(max_sqp_iters=n)) for n in (0, 2.5)),
-                                    dict(friction=URDF_FRICTION), dict(friction=urdf_friction(Sign()))])  # plant-only laws
+                                    *(dict(friction_law=law) for law in (Sign(), StickSlip()))])
 def test_invalid_params_are_refused(change):
     with pytest.raises(ValueError):
         replace(TIAGO, **change)
@@ -479,3 +497,26 @@ def test_a_spawned_process_reports_a_failed_load(tmp_path):
     # A real spawned process: loading fails on the missing binary before any GPU work.
     with pytest.raises(RuntimeError, match="FileNotFoundError"):
         MpcProcess(TIAGO, tmp_path / "missing.so")
+
+
+def test_armature_has_its_own_model_identity_and_is_forwarded_without_axis_flips(monkeypatch, tmp_path):
+    values = (.746, .882, .211, .648, .326, .343, .27)
+    params = replace(TIAGO, armature=values)
+    model, path, signs, name = mpc._plant(params)
+    np.testing.assert_array_equal(model.armature, values)
+    assert signs[5] == -1 and values[5] > 0
+    assert name != mpc._plant(TIAGO)[3]
+    assert mpc.plant_name(path, None, (0.,)*7) == mpc.plant_name(path)
+    seen = {}
+    monkeypatch.setattr(gato, 'register_robot', lambda name, path, **kw: seen.update(kw))
+    mpc._register(params, path, name)
+    assert seen['joint_armature'] == values
+    assert from_dict(to_dict(params)) == params
+
+
+@pytest.mark.parametrize('values', [(0.,)*6, (-1.,)*7, (float('nan'),)*7, (float('inf'),)*7])
+def test_invalid_armature_is_rejected_before_model_generation(values):
+    from tiago_mpc.sim import SimConfig
+    for cls in (MpcParams, SimConfig):
+        with pytest.raises(ValueError, match='armature'):
+            cls(armature=values)

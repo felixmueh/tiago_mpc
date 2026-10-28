@@ -18,20 +18,21 @@ Read [AGENTS.md](../AGENTS.md), [README.md](../README.md) and
 implementation changes uncommitted for his review. The checkout currently has
 ongoing edits based on `ff7ee86`; inspect them before editing shared files.
 
-The 24 October working tree uses the following API, which replaces the older
-string-valued Coulomb-law interface:
+The current API (28 October) separates coefficients from numerical law choices:
 
 - [dynamics.py](../tiago_mpc/dynamics.py): `Friction(coulomb_nm,
-  viscous_nm_s_per_rad, law=StickSlip())`; the law is plain frozen data:
+  viscous_nm_s_per_rad)` stores coefficients; the law is separate frozen data:
   `StickSlip()`, `Sign()` or `Tanh(width_rad_s)`.
-- [sim.py](../tiago_mpc/sim.py): `SimConfig(friction=..., integrator=...)`, built into a `SimPlant`.
+- [sim.py](../tiago_mpc/sim.py): `SimConfig(friction=..., friction_law=StickSlip(), integrator=...)`,
+  built into a `SimPlant`.
   `StickSlip` uses semi-implicit Euler with implicit viscous damping and the
   coupled `_stick_slip` solve. The default maximum substep is 1 ms. RK4 supports
   loss-free dynamics or explicit `Sign`/`Tanh` friction, but rejects `StickSlip`.
-- [tiago.py](../tiago_mpc/tiago.py): `urdf_friction(law=StickSlip())` reads
+- [tiago.py](../tiago_mpc/tiago.py): `urdf_friction()` reads
   coefficients from the canonical full URDF. Derived arm/GPU URDFs are cached,
   not committed. Native joint coordinates stay unchanged.
-- [mpc.py](../tiago_mpc/mpc.py): `MpcParams.friction` accepts `Tanh` only.
+- [mpc.py](../tiago_mpc/mpc.py): `MpcParams.friction_law` accepts `Tanh` only;
+  `MpcParams.friction` independently supplies the coefficients or disables losses.
   Reaching predicts no friction by default; tracking predicts the URDF values
   with `Tanh(.03)`. `record.from_dict` reconstructs recorded law data by type name.
 
@@ -184,7 +185,8 @@ physics does not require changing generic GATO/GRiD code or controller tuning.
    ±50% scale does not represent the fitted vector: joint 2 needs about twice the
    Coulomb term and half the damping. Preserve original failures and cohorts.
 
-The earlier [48-cell controller comparison](../../tiago_mpc-controller-friction/_expr_data/controller-friction-20261023/REPORT.txt)
+The earlier 48-cell controller comparison (results retired at Felix's request
+during the 2026-10-27 intermediate-worktree cleanup)
 used source `57cfe79`, single-threshold constraint friction and 1 ms steps. It
 does not validate a split-threshold model. At half nominal friction, all four
 zero-delay tracking controllers violated recorded speed limits; the PD cases

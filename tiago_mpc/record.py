@@ -46,7 +46,7 @@ True
 >>> tm.from_dict(data) == tm.VirtualTime.ideal()
 True
 
-A run directory holds (FORMAT 2):
+A run directory holds (FORMAT 3):
 - summary.json: format; provenance (provenance()); config, the named pieces given to
   RunRecord, each to_dict-ed, written at the start; metadata: status, reason, end_t,
   results, error and plant (the plant's run_state);
@@ -83,7 +83,7 @@ from gato import SolverParams
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.laws import HoldFirst, SampleKnot
+from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
 from tiago_mpc.loops import RealTime, VirtualTime
 from tiago_mpc.mpc import AdmmLimits, MpcParams
 from tiago_mpc.interfaces import Event, Tick
@@ -92,9 +92,10 @@ from tiago_mpc.safety import CollisionSafetySettings
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import ROOT
 
-FORMAT = 2
+FORMAT = 3
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
     SolverParams, MpcParams, AdmmLimits, Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
+    PlanFeedback, FrictionFeedforward,
     VirtualTime, RealTime, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
 )
 

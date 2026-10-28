@@ -20,7 +20,7 @@ from pathlib import Path
 import queue
 import signal
 import sys
-from typing import Any, cast
+from typing import Any
 
 from gato import SolverParams
 import numpy as np
@@ -66,6 +66,8 @@ class MpcParams:
     velocity_fraction: float = .8
     effort_fraction: float = .85
     friction: Friction | None = None  # predictor friction; None is loss-free
+    friction_law: Tanh = Tanh(.03)  # GATO's differentiable Coulomb evaluation
+    armature: tuple[float, ...] = (0.,) * 7  # reflected joint inertia, kg m²; never link inertia
     # Wall time for a solve's SQP iterations (MPCController.step's budget_s), within
     # solver.max_sqp_iters; None: no time limit. run_experiment, when it builds the MPC, keeps
     # it only where the solve's wall time is the latency (RealTime, VirtualTime "measured").
@@ -73,6 +75,10 @@ class MpcParams:
     warmup: bool = True  # Mpc.warmup runs GATO's warm-up solve before the first plan
 
     def __post_init__(self):
+        armature = tuple(float(value) for value in self.armature)
+        if len(armature) != 7 or not all(math.isfinite(value) and value >= 0 for value in armature):
+            raise ValueError('armature must contain seven finite nonnegative values')
+        object.__setattr__(self, 'armature', armature)
         if self.N < 2 or not math.isfinite(self.dt_s) or self.dt_s <= 0:
             raise ValueError("N must be >=2 and dt_s finite and positive")
         if not isinstance(self.solver.max_sqp_iters, int) or self.solver.max_sqp_iters < 1:
@@ -80,8 +86,8 @@ class MpcParams:
         time = self.max_sqp_time_s
         if time is not None and (not math.isfinite(time) or time <= 0):
             raise ValueError("max_sqp_time_s must be finite and positive, or None")
-        if not (self.friction is None or isinstance(self.friction.law, Tanh)):
-            raise ValueError("GATO predicts Tanh Coulomb friction only; Sign and StickSlip are plant-only")
+        if not isinstance(self.friction_law, Tanh):
+            raise ValueError("GATO predicts Tanh Coulomb friction only")
 
 
 TIAGO = MpcParams()
@@ -108,13 +114,20 @@ def set_bounds(solver, model, signs, params):
 # per variant would let two variants overwrite each other in a shared cache, so the
 # name hashes everything compiled into the module, and GATO's version: each version's
 # registration (its manifest entry) then has its own name. The hash is a cache key, not provenance.
-def plant_name(gpu_urdf_path: Path, friction: Friction | None = None) -> str:
+def plant_name(
+    gpu_urdf_path: Path,
+    friction: Friction | None = None,
+    armature: tuple[float, ...] = (0.,) * 7,
+    friction_law: Tanh = Tanh(.03),
+) -> str:
     """tiago_right_<hash> over the installed GATO version, the GPU URDF bytes,
-    grasp frame and predictor friction as passed to registration (coefficients
-    and Tanh width)."""
+    grasp frame, predictor friction (coefficients and Tanh width), and nonzero
+    reflected armature as passed to registration."""
     config = json.dumps(friction and dict(
         coulomb_nm=friction.coulomb_nm, viscous_nm_s_per_rad=friction.viscous_nm_s_per_rad,
-        width_rad_s=cast(Tanh, friction.law).width_rad_s), sort_keys=True).encode()
+        width_rad_s=friction_law.width_rad_s), sort_keys=True).encode()
+    if any(armature):
+        config += json.dumps(dict(armature=armature), sort_keys=True).encode()
     return "tiago_right_" + digest(importlib.metadata.version("gato-mpc").encode(),
                                    Path(gpu_urdf_path).read_bytes(), GRASP_FRAME.encode(), config)
 
@@ -127,13 +140,14 @@ def _plant(params: MpcParams):
 
     cache_root()
     model = pin.buildModelFromUrdf(str(arm_urdf()))
+    model.armature = np.asarray(params.armature)
     if not model.existFrame(GRASP_FRAME):
         raise ValueError(f"Missing end-effector frame {GRASP_FRAME}")
     bin_dir = str(Path(sys.executable).parent)
     if os.environ["PATH"].split(os.pathsep)[0] != bin_dir:
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
     gpu_path, signs = runtime_urdf(params.friction)
-    return model, gpu_path, signs, plant_name(gpu_path, params.friction)
+    return model, gpu_path, signs, plant_name(gpu_path, params.friction, params.armature, params.friction_law)
 
 
 def _register(params: MpcParams, gpu_path: Path, plant: str) -> None:
@@ -142,11 +156,12 @@ def _register(params: MpcParams, gpu_path: Path, plant: str) -> None:
     import gato
 
     friction = params.friction
+    armature = dict(joint_armature=params.armature) if any(params.armature) else {}
     # With joint_dynamics, GRiD generates the GPU URDF's damping and tanh Coulomb friction
     # into the dynamics and derivatives, with the width compiled in.
-    gato.register_robot(plant, gpu_path, N=[params.N], ee_frame=GRASP_FRAME,
+    gato.register_robot(plant, gpu_path, N=[params.N], ee_frame=GRASP_FRAME, **armature,
                         **({} if friction is None
-                           else dict(joint_dynamics=True, friction_width=cast(Tanh, friction.law).width_rad_s)))
+                           else dict(joint_dynamics=True, friction_width=params.friction_law.width_rad_s)))
 
 
 def find_binary(params: MpcParams) -> Path | None:
@@ -213,7 +228,7 @@ def load_controller(params: MpcParams, binary: Path | None):
         _register(params, gpu_path, plant)
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,
                        params=params.solver)
-    check_model(solver, model, model.createData(), signs, params.friction)
+    check_model(solver, model, model.createData(), signs, params.friction, params.friction_law)
     controller = gato.MPCController(
         solver, limits="admm", linsys="pcg", warm_start=params.warm_start,
         reset_rho_each_step=params.reset_rho_each_step, admm_linsys=params.admm_linsys,
@@ -222,7 +237,14 @@ def load_controller(params: MpcParams, binary: Path | None):
     return controller, signs
 
 
-def check_model(solver, model, data, signs, friction=None):
+def check_model(
+    solver,
+    model,
+    data,
+    signs,
+    friction: Friction | None = None,
+    friction_law: Tanh = Tanh(.03),
+):
     """The GPU model against Pinocchio's native one at two poses: FK; moving and at rest
     (the steepest tanh slope), one step of 1 ms and of dt against GATO's constant-
     acceleration (trapezoidal) step, and the first knot's A-block against finite
@@ -231,14 +253,14 @@ def check_model(solver, model, data, signs, friction=None):
 
     def step(x, u, h):
         q, v = x[:7], x[7:]
-        a = pin.aba(model, data, q, v, u - passive_torque(v, friction)).copy()
+        a = pin.aba(model, data, q, v, u - passive_torque(v, friction, friction_law)).copy()
         return np.r_[q + v*h + .5*a*h*h, v + a*h]
 
     ss = np.tile(signs, 2)
     for q in (Q_START, Q_REACH):
         np.testing.assert_allclose(solver.ee_pos(q*signs), fk(q, GRASP_FRAME), atol=1e-5, rtol=1e-4)
         for v in (np.array([.3, -.35, .4, -.45, .5, -.55, .6]), np.zeros(7)):
-            x, u = np.r_[q, v], pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, friction)
+            x, u = np.r_[q, v], pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, friction, friction_law)
             for h in (.001, solver.dt):
                 gpu = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], h))[0]*ss
                 np.testing.assert_allclose(gpu, step(x, u, h), atol=2e-3, rtol=1e-3)

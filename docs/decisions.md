@@ -7,6 +7,24 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-10-27: compare sticking/smoothness and remove plant friction** (Felix).
+  Extend the controller-tuning experiment with sustained low-speed episodes
+  conditioned on motion requested by the active plan, duration distributions,
+  velocity ripple and applied-command variation. Report tracking error and
+  eligible request time with these metrics. The no-friction plant retains
+  armature, timing, integrator and frozen controller estimates. Fresh comparisons
+  use measured solve latency; retained runs keep their original declared timing
+  and are analyzed read-only. Static-friction realism is a separate design
+  investigation, not an unannounced change to this comparison's physics.
+
+- **2026-10-27: plan feedback and friction feedforward are package laws** (Felix).
+  `PlanFeedback`, `FrictionFeedforward` and the armature-aware `inertia_gains`
+  helper live in `tiago_mpc/laws.py` with plain root re-exports. Experiments compose
+  them through `tm`; record loading knows both law types, including their nested
+  composition. The former experiment definitions are removed. Historical PD
+  defaults and interpolation stay unchanged; tuned presets remain explicit in
+  `experiments/controller_tuning.py`. This promotion adds no robot qualification.
+
 - **2026-10-26: an experiment is a task and an `evaluate`; each main sets up its
   run** (Felix; the design is `agent-reading/tiago-mpc-design/experiment-structure-design.md`
   in the thesis workspace, its last section deciding the review's points). It replaced
@@ -195,6 +213,35 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Friction and GATO
 
+- **2026-10-28: model-side armature and PD values; gain calculation is a utility**
+  (Felix; implemented in the friction worktree after WIP `f66172f`). The literal
+  `ARMATURE_KG_M2`, `PD_KP` and `PD_KD` tuples are manually editable in `tiago.py`.
+  `util.inertia_gains` returns plain float tuples that can be printed as matching
+  assignments; it never rewrites files or recalculates defaults at import.
+  `PlanFeedback()` uses the tuned simulation gains (20 rad/s, damping ratio 1.4,
+  including supplied armature). This changes the former 30 rad/s link-only
+  default; named `old_pd`/`old_both` tuning candidates explicitly retain their
+  previous gains. This is a default selection, not hardware qualification.
+- **2026-10-28: separate friction coefficients from their numerical law**
+  (Felix; interface refactor only, current physics retained). `Friction` holds
+  `coulomb_nm` and `viscous_nm_s_per_rad`; `urdf_friction()` returns those data.
+  `SimConfig.friction_law` selects `StickSlip`, `Sign` or `Tanh`;
+  `MpcParams.friction_law` is `Tanh`; `FrictionFeedforward.evaluation` is `Tanh`
+  or `Sign`. Defaults and arithmetic are unchanged except the chosen PD gains.
+  Static holding and sliding still share one Coulomb threshold. Identical
+  effective predictor settings retain their binary identity.
+- **2026-10-28: reject duplicate friction compensation before startup** (Felix).
+  Both package loops check the built-in FF composition once before starting
+  the plant: FF plus predictor friction, or nested FF, is a configuration error.
+  Physical plant and future propagation-model losses remain independent.
+  Arbitrary custom callables remain the caller's responsibility. No new
+  clipping or latency-prediction policy is included.
+- **2026-10-28: run format 3** records laws on their consumers, rather than in
+  `Friction`. `load_run` refuses older formats before reconstruction. Existing
+  files are unchanged; WIP `f66172f` reads format 2. Portable replay version 1
+  is unchanged. Temporary published fork pins and later predictive latency
+  integration remain separate follow-ups; no main merge was performed here.
+
 - **2026-10-24: GATO 0.1.5 from PyPI, and a uv project** (Felix; plan in the
   thesis workspace, `research/tiago-mpc-gato-0.1.5-and-uv-plan.md`). This
   supersedes the fork entry of 2026-10-21 below.
@@ -265,6 +312,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   passive torque at every stage (`plant_rk4`) is restored for `Tanh` and `Sign`;
   `StickSlip` stays Euler-only, and `passive_torque` refuses it. The plant names
   still hash the coefficients and the width alone, so they did not change.
+  The 2026-10-28 coefficient/law separation above supersedes the container API.
 - **2026-10-22: the smoothing width becomes compile-time only**, to diverge less
   from upstream GATO. Done 2026-10-24 with GATO 0.1.5 (`friction_width` at
   registration).
@@ -501,7 +549,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - Laws beyond sampling the plan; a `configure` hook.
 - The ROS container, and with it the Gazebo check.
 - Migrating the visualizer off `tiago_mpc_vis_baseline`.
-- Armature in the simulator.
+- Publishing/pinning the armature extensions for main and upstream.
 - Moving the costs completely to GATO's cost menu (2026-10-24: a separate step
   after the GATO 0.1.5 migration).
 

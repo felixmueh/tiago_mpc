@@ -1,5 +1,5 @@
-"""Shared infrastructure: hz_to_s, and the cache that GATO's modules and every derived
-robot file share, with content-addressed writes.
+"""Utilities: inertia-based gain estimates, hz_to_s, and the cache that GATO's modules
+and every derived robot file share, with content-addressed writes.
 
 cache_root exports GATO_CACHE_DIR because GATO finds its cache only through that variable
 (without it, a per-user directory): GATO's modules then land beside the derived URDFs
@@ -8,12 +8,46 @@ the same cache.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 import hashlib
 import os
 import subprocess
 from pathlib import Path
 from typing import Callable
 import xml.etree.ElementTree as ET
+
+import numpy as np
+
+
+def inertia_gains(
+    bandwidth_rad_s: float,
+    damping_ratio: float = 1.,
+    q: Sequence[float] | np.ndarray | None = None,
+    armature: Sequence[float] | np.ndarray = (0.,) * 7,
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Estimate kp=m*w², kd=2*zeta*m*w from the effective inertia diagonal at q.
+
+    q=None uses Q_START. Reflected armature is explicit in kg m²; the zero default
+    estimates link-only gains. Pinocchio includes it in CRBA once. This single-joint
+    approximation does not cancel coupling or transmission elasticity. The result is
+    two tuples of Python floats: print them to copy into tiago.PD_KP and tiago.PD_KD.
+    This function never updates the stored values.
+    """
+    import pinocchio as pin
+
+    from tiago_mpc.tiago import Q_START, arm_urdf  # tiago also imports this module's cache helpers
+
+    if not (np.isfinite(bandwidth_rad_s) and bandwidth_rad_s > 0
+            and np.isfinite(damping_ratio) and damping_ratio > 0):
+        raise ValueError("bandwidth and damping ratio must be finite and positive")
+    armature = np.asarray(armature, dtype=float)
+    if armature.shape != (7,) or not np.isfinite(armature).all() or np.any(armature < 0):
+        raise ValueError("armature must contain seven finite nonnegative inertias")
+    model = pin.buildModelFromUrdf(str(arm_urdf()))
+    model.armature = armature
+    m = np.diag(pin.crba(model, model.createData(), np.asarray(Q_START if q is None else q, dtype=float)))
+    kp, kd = m * bandwidth_rad_s**2, 2 * damping_ratio * m * bandwidth_rad_s
+    return tuple(map(float, kp)), tuple(map(float, kd))
 
 
 def main_checkout(repo: Path) -> Path:

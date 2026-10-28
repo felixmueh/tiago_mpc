@@ -19,7 +19,6 @@ import numpy as np
 from experiments import figure8, reach
 from experiments.common import handle_stop_signals, run_experiment
 from experiments.latency_compensation import Compensated, first_tick_of_each_plan
-from experiments.plan_feedback import PlanFeedback
 import tiago_mpc as tm
 
 COMMAND_PERIOD = tm.hz_to_s(500)  # the experiments' default; the control-update period is the knot interval
@@ -39,7 +38,7 @@ TASKS = {  # name: (the experiment's evaluate, task, params, plant)
                 tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")),
 }
 CASES = {"stock": (False, tm.SampleKnot()), "compensated": (True, tm.SampleKnot()),  # name: (compensate, law)
-         "feedback": (False, PlanFeedback()), "compensated+feedback": (True, PlanFeedback())}
+         "feedback": (False, tm.PlanFeedback()), "compensated+feedback": (True, tm.PlanFeedback())}
 
 
 def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor="implicit", *, task_specs=None):

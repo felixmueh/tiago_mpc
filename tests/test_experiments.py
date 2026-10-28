@@ -90,7 +90,7 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
         f8.evaluate(record)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     config, metadata, results = summary["config"], summary["metadata"], summary["metadata"]["results"]
-    assert summary["format"] == 2 and set(summary) == {"format", "provenance", "config", "metadata"}
+    assert summary["format"] == rec.FORMAT and set(summary) == {"format", "provenance", "config", "metadata"}
     assert metadata["status"] == ("timeout" if name == "reach" else "done") and metadata["reason"] is None
     assert metadata["end_t"] == pytest.approx(.05) and metadata["error"] is None and metadata["plant"] == {}
     assert set(config) == {"task", "params", "plant", "law", "timing", "duration"}
@@ -101,8 +101,8 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     assert config["duration"] == .05 and results["limits_pass"]
     if name == "figure8":
         assert config["plant"]["substep"] == .001 and config["plant"]["integrator"] == "euler"
-        assert config["plant"]["friction"]["law"] == dict(type="StickSlip")
-        assert config["params"]["friction"]["law"] == dict(type="Tanh", width_rad_s=.03)  # predictor stays smooth
+        assert config["plant"]["friction_law"] == dict(type="StickSlip")
+        assert config["params"]["friction_law"] == dict(type="Tanh", width_rad_s=.03)  # predictor stays smooth
         assert set(results) >= {"metrics_full_cycle", "metrics_after_initial_1s"}
     else:
         assert set(results) >= {"initial_distance_m", "final_distance_m", "max_distance_m", "final_speed_m_s"}
@@ -135,7 +135,10 @@ def test_provenance_names_the_installed_gato_and_an_editable_checkouts_commit(mo
 
     source = rec._gato_source()
     assert source["version"] == importlib.metadata.version("gato-mpc") and source["file"] == gato.__file__
-    assert "commit" not in source  # a PyPI wheel has no direct_url.json; uv.lock pins it
+    if source['direct_url'] and source['direct_url'].get('dir_info', {}).get('editable'):
+        assert source['commit'] and isinstance(source['status'], str)
+    else:
+        assert 'commit' not in source  # a PyPI wheel is identified by its locked version
     assert rec.provenance()["gato"] == source and rec.provenance()["repository_commit"] == rec._git("rev-parse", "HEAD")
     url = json.dumps(dict(url=rec.ROOT.as_uri(), dir_info=dict(editable=True)))  # this checkout as the fork
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: NS(version="9.9", read_text=lambda f: url))

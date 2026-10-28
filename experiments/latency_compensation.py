@@ -71,7 +71,7 @@ def gpu_step(mpc):
 
 # TODO: implicit_step ignores the external_force solver update (mpc.UPDATES), which
 # gpu_step includes (knot 0's wrench); a task that sets it needs gpu_step or the wrench here.
-def implicit_step(friction):
+def implicit_step(friction, friction_law=tm.Tanh(.03)):
     """The same arm model (Pinocchio on the arm URDF, which check_model ties to GATO's),
     one semi-implicit Euler step that is implicit in the passive torque p(qd) only,
     linearised:
@@ -88,8 +88,8 @@ def implicit_step(friction):
     def step(x, u, h):
         q, qd = x[:7], x[7:]
         slope = (0. if friction is None else np.asarray(friction.viscous_nm_s_per_rad)
-                 + np.asarray(friction.coulomb_nm) / friction.law.width_rad_s / np.cosh(qd / friction.law.width_rad_s)**2)
-        force = u - pin.rnea(model, data, q, qd, np.zeros(7)) - tm.passive_torque(qd, friction)
+                 + np.asarray(friction.coulomb_nm) / friction_law.width_rad_s / np.cosh(qd / friction_law.width_rad_s)**2)
+        force = u - pin.rnea(model, data, q, qd, np.zeros(7)) - tm.passive_torque(qd, friction, friction_law)
         qd_next = qd + np.linalg.solve(pin.crba(model, data, q) + h * np.diag(slope * np.ones(7)), h * force)
         return np.r_[q + h * qd_next, qd_next]
     return step
@@ -133,7 +133,7 @@ def run_compensated(
     substeps = 1 if prediction_substep_s is None else math.ceil(command_period / prediction_substep_s - _TOLERANCE)
     step = None
     if compensate:
-        step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction)
+        step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction, mpc.params.friction_law)
     clock, due, plan, pending, start, plans = tm.VirtualClock(), tm.Schedule(update_period), None, None, None, 0
     plant.start(clock)
     try:

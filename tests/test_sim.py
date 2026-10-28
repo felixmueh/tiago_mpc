@@ -15,23 +15,24 @@ from tiago_mpc.tiago import Q_START, urdf_friction
 U = np.linspace(-1., 1., 7)
 
 
-@pytest.mark.parametrize("friction,substep,integrator", [(None, .003, "rk4"), (None, .001, "euler"),
-                                                         (urdf_friction(Tanh(.03)), .001, "euler"),
-                                                         (urdf_friction(Sign()), .001, "euler"),
-                                                         (urdf_friction(), .001, "euler"),
-                                                         (urdf_friction(Tanh(.03)), 1e-4, "rk4"),
-                                                         (urdf_friction(Sign()), 1e-4, "rk4")])
-def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, substep, integrator):
-    plant = SimConfig(substep=substep, friction=friction, integrator=integrator).build()
+@pytest.mark.parametrize("friction,law,substep,integrator", [(None, StickSlip(), .003, "rk4"),
+                                                            (None, StickSlip(), .001, "euler"),
+                                                            (urdf_friction(), Tanh(.03), .001, "euler"),
+                                                            (urdf_friction(), Sign(), .001, "euler"),
+                                                            (urdf_friction(), StickSlip(), .001, "euler"),
+                                                            (urdf_friction(), Tanh(.03), 1e-4, "rk4"),
+                                                            (urdf_friction(), Sign(), 1e-4, "rk4")])
+def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, law, substep, integrator):
+    plant = SimConfig(substep=substep, friction=friction, friction_law=law, integrator=integrator).build()
     q, qd, t = plant.q.copy(), plant.qd.copy(), 0.
     plant.start(VirtualClock())
     plant.apply(U)
     plant.advance(.01)
     while t < .01 - 1e-12:  # e.g. 3, 3, 3 and 1 ms
         h = min(substep, .01 - t)
-        q, qd = (plant_euler(plant.model, plant.data, q, qd, U, h, friction) if integrator == "euler"
+        q, qd = (plant_euler(plant.model, plant.data, q, qd, U, h, friction, law) if integrator == "euler"
                  else rk4(plant.model, plant.data, q, qd, U, h) if friction is None
-                 else plant_rk4(plant.model, plant.data, q, qd, U, h, friction))
+                 else plant_rk4(plant.model, plant.data, q, qd, U, h, friction, law))
         t += h
     s = plant.state()
     assert s.t == plant.clock.now() == .01 and plant.run_state == {} and plant.take_events() == []
@@ -46,7 +47,7 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, subste
 
 @pytest.mark.parametrize("settings", [dict(substep=0), dict(substep=-.001), dict(substep=np.nan),
                                      dict(integrator="other"), dict(friction=urdf_friction()),  # rk4, the default
-                                     dict(integrator="rk4", friction=urdf_friction(StickSlip()))])
+                                     dict(integrator="rk4", friction=urdf_friction(), friction_law=StickSlip())])
 def test_invalid_integration_settings_fail_when_the_plant_is_built(settings):
     config = SimConfig(**settings)  # a value; SimPlant checks it
     with pytest.raises(ValueError):
@@ -54,7 +55,8 @@ def test_invalid_integration_settings_fail_when_the_plant_is_built(settings):
 
 
 def test_a_sim_config_is_a_value_of_tuples_that_round_trips():
-    config = SimConfig(q=np.asarray(Q_START), qd=[0] * 7, friction=urdf_friction(Tanh(.03)), integrator="euler")
+    config = SimConfig(q=np.asarray(Q_START), qd=[0] * 7, friction=urdf_friction(),
+                       friction_law=Tanh(.03), integrator="euler")
     assert config.q == tuple(Q_START) and config.qd == (0.,) * 7 and hash(config) == hash(replace(config))
     assert from_dict(to_dict(config)) == config and SimConfig().integrator == "rk4"
     plant = config.build()

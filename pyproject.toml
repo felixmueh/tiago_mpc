@@ -7,6 +7,7 @@ version = "0.1.0"
 requires-python = "==3.10.*"  # ROS 2 Humble's rclpy is 3.10; GATO's module key includes the Python ABI
 dependencies = [
     "gato-mpc==0.1.5",         # pins grid-rbd==0.5.5 itself (0.5.5 in uv.lock)
+    "grid-rbd==0.5.5",         # direct dependency so this experiment's local armature source is selected
     "pin==3.9.0",
     "cmeel-urdfdom==4.0.1",    # Pinocchio 3.9 wheels link urdfdom 4 / tinyxml2 10; unconstrained latest breaks import
     "cmeel-tinyxml2==10.0.0",
@@ -60,3 +61,8 @@ ignore_errors = false
 module = ["gato.*", "pinocchio.*", "rclpy.*", "builtin_interfaces.*", "rcl_interfaces.*",
           "controller_manager_msgs.*", "sensor_msgs.*", "std_msgs.*", "sea_state_msgs.*"]
 ignore_missing_imports = true
+
+# TODO: Move to upstream once they support armature.
+[tool.uv.sources]
+gato-mpc = { path = "../GATO-tiago-armature", editable = true }
+grid-rbd = { path = "../GRiD-tiago-armature" }  # wheel build stages GRiD's validated peer/resources bundle

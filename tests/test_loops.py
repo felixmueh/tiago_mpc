@@ -1,5 +1,5 @@
 """The two loops on a fake plant and a fake Mpc (CPU only); run_real_time on faked wall time."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import numpy as np
@@ -7,7 +7,9 @@ import pytest
 
 from tiago_mpc import clock as clock_module
 from tiago_mpc import loops
-from tiago_mpc.laws import HoldFirst
+from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
+from tiago_mpc.dynamics import Friction
+from tiago_mpc.mpc import TIAGO
 from tiago_mpc.loops import (STOP, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
                              run_real_time, run_virtual_time)
 from tiago_mpc.interfaces import Plan, State
@@ -117,6 +119,68 @@ class Task:
 
     def done(self, state, t):
         return t >= self.done_at - 1e-9
+
+
+@pytest.mark.parametrize("loop", [run_real_time, run_virtual_time])
+@pytest.mark.parametrize("feedback", [False, True])
+def test_duplicate_mpc_and_external_friction_is_rejected_before_start(loop, feedback, wall):
+    plant, mpc = Plant(), Mpc()
+    # Different estimates still compensate the same losses twice.
+    mpc.params = replace(TIAGO, friction=Friction((2.,)*7, (1.,)*7))
+    base = PlanFeedback() if feedback else SampleKnot()
+    law = FrictionFeedforward(Friction((1.,)*7, (.5,)*7), base)
+    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    if loop is run_virtual_time:
+        settings['solve_latency_s'] = .0055
+    with pytest.raises(ValueError, match="double compensation"):
+        loop(plant, mpc, Task(), law, **settings)
+    assert not plant.calls and not plant.applied and not mpc.warmups and not mpc.requests
+
+
+@pytest.mark.parametrize("loop", [run_real_time, run_virtual_time])
+def test_nested_external_compensation_is_rejected_before_start(loop, wall):
+    plant, mpc = Plant(), Mpc()
+    mpc.params = TIAGO
+    friction = Friction((1.,)*7, (.5,)*7)
+    law = FrictionFeedforward(friction, FrictionFeedforward(friction))
+    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    if loop is run_virtual_time:
+        settings['solve_latency_s'] = .0055
+    with pytest.raises(ValueError, match="another friction feedforward"):
+        loop(plant, mpc, Task(), law, **settings)
+    assert not plant.calls and not mpc.warmups and not mpc.requests
+
+
+@pytest.mark.parametrize("loop", [run_real_time, run_virtual_time])
+@pytest.mark.parametrize("mode", ["external", "external_pd", "internal_pd"])
+def test_valid_compensation_choices_still_execute(loop, mode, wall):
+    plant, mpc = Plant(), Mpc(wall=.004)
+    friction = Friction((1.,)*7, (.5,)*7)
+    mpc.params = replace(TIAGO, friction=friction if mode == "internal_pd" else None)
+    base = PlanFeedback() if mode.endswith('pd') else SampleKnot()
+    law = FrictionFeedforward(friction, base) if mode.startswith('external') else base
+    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    if loop is run_virtual_time:
+        settings['solve_latency_s'] = .004
+    outcome = loop(plant, mpc, Task(), law, **settings)
+    assert outcome.status == 'timeout' and plant.applied
+    assert plant.calls == ['start', 'stop'] and mpc.requests
+
+
+@pytest.mark.parametrize("loop", [run_real_time, run_virtual_time])
+def test_physical_friction_and_armature_do_not_count_as_double_compensation(loop, wall):
+    from tiago_mpc.sim import SimConfig
+    from tiago_mpc.tiago import ARMATURE_KG_M2
+
+    friction = Friction((1.,)*7, (.5,)*7)
+    plant = SimConfig(friction=friction, integrator='euler', armature=ARMATURE_KG_M2).build()
+    mpc = Mpc(wall=.004)
+    mpc.params = TIAGO
+    settings = dict(command_period=.002, update_period=.02, duration=.006)
+    if loop is run_virtual_time:
+        settings['solve_latency_s'] = .004
+    outcome = loop(plant, mpc, Task(), FrictionFeedforward(friction), **settings)
+    assert outcome.status == 'timeout' and mpc.requests
 
 
 def go(mpc, task=Task(), loop=run_virtual_time, duration=.1, update_period=.01, plant=None, **kw):

@@ -2,7 +2,8 @@
 and the files derived from the full URDF.
 
 models/tiago_pro/tiago_pro.urdf is the only robot description in the repository and
-the source of the coefficients and limits. Every other robot file is derived from it
+the source of friction coefficients and limits. Armature and stored PD gains live here.
+Every other robot file is derived from it
 at run time and written to the cache (util.cache_root): the reduced arm (arm_urdf), its
 GPU copy (runtime_urdf) and the safety collision model (safety.py). Nothing derived
 is committed, so nothing derived can go stale.
@@ -22,7 +23,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pinocchio as pin
 
-from tiago_mpc.dynamics import CoulombLaw, Friction, StickSlip
+from tiago_mpc.dynamics import Friction
 from tiago_mpc.util import cache_meshes, cached
 
 ROOT = Path(__file__).resolve().parents[1]  # the repository
@@ -38,6 +39,25 @@ FLANGE_FRAME = "arm_right_tool_joint"
 Q_START = np.array([-0.39, -1.73, -0.38, -2.33, 0.0, -1.21, 0.04])
 # A nearby posture: the default reach target's, and the model check's second pose.
 Q_REACH = Q_START + np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
+
+# Right arm, native joint order 1–7. Reflected inertia in kg m², supplied on
+# 2026-10-21, not identified. Enable it explicitly in the plant or predictor;
+# it is not part of the URDF and is never folded into link inertia.
+ARMATURE_KG_M2 = (.746, .882, .211, .648, .326, .343, .27)
+
+# Stored PD gains: kp in Nm/rad, kd in Nm s/rad, native joint order 1–7.
+# The 2026-10-27 simulation tune used effective inertia at Q_START with the
+# supplied armature, 20 rad/s bandwidth and damping ratio 1.4. These are not
+# hardware-qualified gains. Edit these literals directly; util.inertia_gains
+# provides estimates to copy here, without recalculating defaults at import.
+PD_KP = (
+    437.77012743826697, 510.6232322004456, 140.62973559712063, 363.94911197026863,
+    138.12976415871805, 145.21463447546623, 108.3090348183072,
+)
+PD_KD = (
+    61.287817841357366, 71.48725250806238, 19.688162983596886, 50.9528756758376,
+    19.338166982220525, 20.33004882656527, 15.163264874563007,
+)
 
 
 # The reduced right arm. GATO plans for a fixed-base serial chain, and the MPC moves
@@ -149,10 +169,10 @@ def limits() -> Limits:
     return Limits(*arrays)
 
 
-def urdf_friction(law: CoulombLaw = StickSlip()) -> Friction:
-    """The full URDF's right-arm friction and damping coefficients (the only default), with law."""
+def urdf_friction() -> Friction:
+    """The full URDF's right-arm friction and damping coefficients, without a numerical law."""
     model = _arm()[0]
-    return Friction(tuple(model.friction), tuple(model.damping), law)
+    return Friction(tuple(model.friction), tuple(model.damping))
 
 
 def fk(q: np.ndarray, frame: str = GRASP_FRAME) -> np.ndarray:

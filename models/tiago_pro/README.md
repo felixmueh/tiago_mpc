@@ -22,6 +22,15 @@ written them into the source file, so they are not PAL's.
 The supplied armature (kg m², joints 1 to 7) is not in the URDF, because its
 loaders (Pinocchio, GRiD 0.5.5) do not read it: left 0.511, 1.19, 0.472, 0.296,
 0.424, 0.151, 0.14; right 0.746, 0.882, 0.211, 0.648, 0.326, 0.343, 0.27.
+The right-arm tuple is checked in as `ARMATURE_KG_M2` in
+[`tiago_mpc/tiago.py`](../../tiago_mpc/tiago.py), beside the manually editable
+`PD_KP` and `PD_KD` gains. The stored PD default is the 20 rad/s, damping-ratio-1.4
+simulation tune with armature; it is not hardware-qualified. `util.inertia_gains`
+returns literal float tuples to copy into these assignments, without writing them.
+`SimConfig.armature` and `MpcParams.armature` enable inertia explicitly, with zero
+defaults. Pinocchio receives its
+`model.armature` property; the predictor requires the local GRiD/GATO armature
+extensions. Nothing is added to the XML or folded into link inertias.
 
 **The values are questionable:** supplied on 2026-10-21, not identified. The
 physical fit of 2026-10-16 (right arm, joints 1 to 4) gives c = 2.01, 2.39,

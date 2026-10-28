@@ -85,7 +85,10 @@ interval equals the control-update or command period.
   committed (Felix, 2026-10-23): the reduced arm and grasp frame (`tiago.arm_urdf`),
   the GPU copy (`runtime_urdf`), the safety collision model. Change the full URDF
   or the derivation, never a derived file. The armature is not in the URDF (no
-  loader reads it), never folded into link inertia; kp/kd are not stored.
+  loader reads it), never folded into link inertia. The right-arm armature and
+  PD gains are literal values in `tiago.py`, edited manually (Felix, 2026-10-28).
+  The gain calculation is in `util.py`; it returns pasteable tuples and never
+  rewrites the model. `PlanFeedback()` uses the chosen stored tuned gains.
 - Native TIAGo coordinates everywhere (ROS, plants, records). Joint 6's sign map
   lives only at the GPU boundary; do not remove it on GRiD-only evidence.
 - Do not modify generic GRiD code or generated headers; select frames through

@@ -7,7 +7,7 @@ root. Importing the package may load Pinocchio and GATO's Python package, but ne
 """
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh, passive_torque
-from tiago_mpc.laws import HoldFirst, SampleKnot
+from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
 from tiago_mpc.loops import (STOP, Outcome, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
                              run_real_time, run_virtual_time)
 from tiago_mpc.mpc import TIAGO, UPDATES, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
@@ -16,12 +16,14 @@ from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Pla
 from tiago_mpc.record import Console, RunRecord, from_dict, load_run, provenance, to_dict
 from tiago_mpc.robot import RobotConfig, RosPlant
 from tiago_mpc.sim import SimConfig, SimPlant
-from tiago_mpc.tiago import (FLANGE_FRAME, FULL_URDF, GRASP_FRAME, Q_REACH, Q_START, RIGHT_ARM_JOINTS, ROOT,
+from tiago_mpc.tiago import (ARMATURE_KG_M2, FLANGE_FRAME, FULL_URDF, GRASP_FRAME, PD_KD, PD_KP,
+                    Q_REACH, Q_START, RIGHT_ARM_JOINTS, ROOT,
                     ROOT_FRAME, Limits, arm_urdf, ee_position, ee_velocity, fk, limits, urdf_friction)
-from tiago_mpc.util import hz_to_s
+from tiago_mpc.util import hz_to_s, inertia_gains
 
 __all__ = [
-    "VirtualClock", "WallClock", "Friction", "Sign", "StickSlip", "Tanh", "passive_torque", "HoldFirst", "SampleKnot",
+    "VirtualClock", "WallClock", "Friction", "Sign", "StickSlip", "Tanh", "passive_torque",
+    "FrictionFeedforward", "HoldFirst", "PlanFeedback", "SampleKnot", "inertia_gains",
     "STOP", "Outcome", "RealTime", "Schedule", "VirtualTime", "command_fault", "lease_fault", "plan_fault",
     "run_real_time", "run_virtual_time",
     "TIAGO", "UPDATES", "Mpc", "MpcParams", "MpcProcess", "compile_binary", "find_binary",
@@ -29,7 +31,8 @@ __all__ = [
     "Timing",
     "Console", "RunRecord", "from_dict", "load_run", "provenance", "to_dict",
     "RobotConfig", "RosPlant", "SimConfig", "SimPlant",
-    "FLANGE_FRAME", "FULL_URDF", "GRASP_FRAME", "Q_REACH", "Q_START", "RIGHT_ARM_JOINTS", "ROOT",
+    "ARMATURE_KG_M2", "FLANGE_FRAME", "FULL_URDF", "GRASP_FRAME", "PD_KD", "PD_KP",
+    "Q_REACH", "Q_START", "RIGHT_ARM_JOINTS", "ROOT",
     "ROOT_FRAME", "Limits", "arm_urdf", "ee_position", "ee_velocity", "fk", "limits", "urdf_friction",
     "hz_to_s",
 ]

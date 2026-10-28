@@ -15,11 +15,11 @@ from tiago_mpc.tiago import ROOT
 if TYPE_CHECKING:  # read by mypy only
     from experiments.figure8 import Figure8
     from experiments.latency_compensation import Compensated
-    from experiments.plan_feedback import PlanFeedback
     from experiments.reach import Reach
     import test_experiments
     import test_loops
-    from tiago_mpc.laws import HoldFirst, SampleKnot
+    from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
+    from tiago_mpc.dynamics import Friction, Tanh
     from tiago_mpc.loops import RealTime, VirtualTime
     from tiago_mpc.mpc import Mpc, MpcProcess
     from tiago_mpc.interfaces import ControlLaw, MpcInterface, PlantInterface, TaskInterface, Timing
@@ -29,7 +29,8 @@ if TYPE_CHECKING:  # read by mypy only
     plants: list[type[PlantInterface]] = [SimPlant, RosPlant, test_loops.Plant]
     mpcs: list[type[MpcInterface]] = [Mpc, MpcProcess, test_loops.Mpc, test_experiments.Mpc]
     tasks: list[type[TaskInterface]] = [Reach, Figure8, test_loops.Task]
-    laws: list[ControlLaw] = [SampleKnot(), HoldFirst(), PlanFeedback()]
+    laws: list[ControlLaw] = [SampleKnot(), HoldFirst(), PlanFeedback(),
+                              FrictionFeedforward(Friction((1.,)*7, (0.,)*7), PlanFeedback(), Tanh(.03))]
     timings: list[Timing] = [VirtualTime.ideal(), RealTime(), Compensated()]
 
 

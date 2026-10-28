@@ -34,10 +34,9 @@ CoulombLaw = Tanh | Sign | StickSlip  # record.to_dict tells them apart by their
 
 @dataclass(frozen=True)
 class Friction:
-    """Joint losses: Coulomb with its law, plus viscous, per native arm joint."""
+    """Coulomb and viscous coefficients per native arm joint; each consumer selects its law."""
     coulomb_nm: tuple[float, ...]
     viscous_nm_s_per_rad: tuple[float, ...]
-    law: CoulombLaw = StickSlip()
 
     def __post_init__(self):
         for key in ("coulomb_nm", "viscous_nm_s_per_rad"):
@@ -47,20 +46,18 @@ class Friction:
             object.__setattr__(self, key, values)
 
 
-def passive_torque(velocity: np.ndarray, friction: Friction | None) -> np.ndarray:
+def passive_torque(velocity: np.ndarray, friction: Friction | None, law: Tanh | Sign) -> np.ndarray:
     """Positive resisting bias: subtract from actuator torque before ABA. Tanh and Sign only."""
     v = np.asarray(velocity, dtype=float)
     if friction is None:
         return np.zeros_like(v)
-    match friction.law:
+    match law:
         case Tanh(width_rad_s=width):
             coulomb = np.tanh(v / width)
         case Sign():
             coulomb = np.sign(v)
-        case StickSlip():
-            raise ValueError("StickSlip has no passive torque: it is the Euler step's stick/slip solve")
         case _:
-            assert_never(friction.law)
+            raise ValueError("passive_torque needs an explicit Tanh or Sign torque law")
     return np.asarray(friction.viscous_nm_s_per_rad)*v + np.asarray(friction.coulomb_nm)*coulomb
 
 
@@ -72,9 +69,11 @@ def plant_euler(
     actuator_torque: np.ndarray,
     dt: float,
     friction: Friction | None,
+    friction_law: CoulombLaw,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Native-coordinate Euler with implicit viscous damping; inertia and bias at (q, v).
 
+    M(q) includes model.armature via Pinocchio CRBA; do not add it twice.
     A = M(q) + dt*diag(b), r = M(q)*v + dt*(torque - bias(q, v)).
     Tanh and Sign solve A*v_next = r - dt*c*tanh(v/width) or r - dt*c*sign(v): Coulomb is
     explicit in the old velocity, and sign can chatter.
@@ -94,7 +93,7 @@ def plant_euler(
     else:
         system = mass + dt*np.diag(friction.viscous_nm_s_per_rad)
         threshold = dt*np.asarray(friction.coulomb_nm)
-        match friction.law:
+        match friction_law:
             case Tanh(width_rad_s=width):
                 new = np.linalg.solve(system, momentum - threshold*np.tanh(velocity/width))
             case Sign():
@@ -102,7 +101,7 @@ def plant_euler(
             case StickSlip():
                 new = _stick_slip(system, momentum, threshold)
             case _:
-                assert_never(friction.law)
+                assert_never(friction_law)
     return pin.integrate(model, q, dt*new), new
 
 
@@ -114,13 +113,17 @@ def plant_rk4(
     actuator_torque: np.ndarray,
     dt: float,
     friction: Friction,
+    friction_law: CoulombLaw,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Native-coordinate RK4 with the passive torque recomputed at every stage (Tanh or Sign)."""
     import pinocchio as pin
 
+    if isinstance(friction_law, StickSlip):
+        raise ValueError("StickSlip Coulomb friction is Euler-only; use plant_euler")
+
     def acceleration(q_stage, v_stage):
         return pin.aba(model, data, q_stage, v_stage,
-                       actuator_torque-passive_torque(v_stage, friction)).copy()
+                       actuator_torque-passive_torque(v_stage, friction, friction_law)).copy()
     k1q = velocity
     k1v = acceleration(q, velocity)
     k2q = velocity + dt*k1v/2

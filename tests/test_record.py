@@ -28,7 +28,8 @@ def test_a_run_is_written_and_read_back(tmp_path):
             self.events.append(Event(t, "pacing_behind", "behind", dict(behind_s=.001)))
 
     plant, mpc, task, timing = Emitting(measure=lambda t: t - .002), Mpc(wall=.004), Task(), VirtualTime(.01, .02, .01)
-    record = RunRecord(tmp_path / "r", task=task, params=TIAGO, plant=SimConfig(friction=urdf_friction(Tanh(.03))),
+    record = RunRecord(tmp_path / "r", task=task, params=TIAGO,
+                       plant=SimConfig(friction=urdf_friction(), friction_law=Tanh(.03)),
                        law=SampleKnot(), timing=timing, duration=.05, case="first")
     written = json.loads((tmp_path / "r" / "summary.json").read_text())  # at once
     assert written["format"] == FORMAT and written["metadata"]["status"] == "running"
@@ -80,12 +81,13 @@ def test_save_refuses_a_column_of_the_wrong_length(tmp_path):
         record.save()
 
 
-def test_load_run_refuses_a_run_of_another_format(tmp_path):
+@pytest.mark.parametrize("old_format", [1, 2])
+def test_load_run_refuses_a_run_of_another_format(tmp_path, old_format):
     record = RunRecord(tmp_path / "r", task=Task())
     record.save()
     summary = json.loads((tmp_path / "r" / "summary.json").read_text())
-    (tmp_path / "r" / "summary.json").write_text(json.dumps({**summary, "format": 1}))
-    with pytest.raises(ValueError, match=f"format 1, not {FORMAT}: load it with the code that wrote it"):
+    (tmp_path / "r" / "summary.json").write_text(json.dumps({**summary, "format": old_format}))
+    with pytest.raises(ValueError, match=f"format {old_format}, not {FORMAT}: load it with the code that wrote it"):
         load_run(tmp_path / "r")
 
 
