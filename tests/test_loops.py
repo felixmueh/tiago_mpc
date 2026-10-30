@@ -590,3 +590,12 @@ def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
     assert len(body) == 999 and np.isfinite(record.ticks["command"][:-1]).all()
     # One late tick is allowed for a loaded machine; a full garbage collection gives several.
     assert np.median(body) < .5 and np.percentile(body, 99) < 1. and np.sum(body > 2.) <= 1
+
+
+def test_compensated_plans_take_effect_at_a_tick_a_rounding_error_before_their_origin():
+    """50 Hz control updates with a fixed 20 ms forecast on virtual time: after about 2 s of summed
+    2 ms ticks, the tick at a predicted origin t + 20 ms lands about 2e-15 s before it, and its plan
+    still takes effect there."""
+    timing, ticks = VirtualTime(.002, .02, .02, LatencyCompensation(latency_s=.02)), []
+    outcome = timing.run(Plant(), Mpc(N=32, dt=.03), Task(), SampleKnot(), [ticks.append], duration=2.2)
+    assert outcome.status == "timeout" and sum(k.new for k in ticks) == 110

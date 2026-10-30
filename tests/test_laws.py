@@ -15,6 +15,7 @@ PLAN = Plan(10., .002, np.zeros((6, 4)), 1. + np.arange(5)[:, None] * np.ones(2)
 def test_sample_knot_holds_each_knot_from_the_state_time():
     assert sample_knot(PLAN, 10., None)[0] == 1.
     assert sample_knot(PLAN, 10.0019, None)[0] == 1.
+    assert sample_knot(PLAN, 10. - 1e-15, None)[0] == 1.  # summed ticks may reach t0 a rounding error early
     # 10 + 3 * .002 rounds below the boundary; it still selects knot 3.
     assert sample_knot(PLAN, 10. + 3 * .002, None)[0] == 4.
     np.testing.assert_array_equal(sample_knot(PLAN, 10.0099, None), [5., 5.])

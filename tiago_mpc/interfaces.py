@@ -87,10 +87,11 @@ class Plan:
         object.__setattr__(self, "torques", torques)
 
     def index(self, offset_s: float) -> int:
-        """Zero-order-hold knot of a time offset from t0; may exceed the plan."""
-        if not offset_s >= 0 or math.isinf(offset_s):
+        """Zero-order-hold knot of a time offset from t0; may exceed the plan. An offset a rounding
+        error below 0 is knot 0: summed command ticks reach a predicted t0 up to that early."""
+        if not offset_s >= -_KNOT_TOLERANCE * self.dt or math.isinf(offset_s):
             raise ValueError("time precedes the plan's state or is not finite")
-        return math.floor(offset_s / self.dt + _KNOT_TOLERANCE)
+        return max(0, math.floor(offset_s / self.dt + _KNOT_TOLERANCE))
 
 
 @dataclass(frozen=True)
