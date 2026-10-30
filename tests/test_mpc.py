@@ -85,7 +85,7 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
     assert seen["module"] == str(binary)
     # Smooth predictor friction is registered, with its width, only when the params have one; the
-    # supplied armature is the default.
+    # fitted armature is the default.
     friction = {} if params.friction is None else dict(joint_dynamics=True,
                                                          friction_width=params.friction_law.width_rad_s)
     assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, joint_armature=ARMATURE_KG_M2, **friction)
@@ -168,7 +168,7 @@ def test_compile_binary_registers_and_rebuilds_without_overwriting(monkeypatch, 
 def test_same_plant_inputs_same_name(tmp_path):
     (tmp_path / "arm.urdf").write_text("<robot/>")
     a = mpc.plant_name(tmp_path / "arm.urdf", LOSSES)
-    assert a == mpc.plant_name(tmp_path / "arm.urdf", Friction([1.] * 7, [.5] * 7), friction_law=Tanh(.03))
+    assert a == mpc.plant_name(tmp_path / "arm.urdf", Friction([1.] * 7, [.5] * 7), friction_law=Tanh(.1))
     assert len(a) == len("tiago_right_") + 8 and a.startswith("tiago_right_")
 
 
@@ -516,9 +516,9 @@ def test_a_spawned_process_reports_a_failed_load(tmp_path):
 
 
 def test_armature_has_its_own_model_identity_and_is_forwarded(monkeypatch, tmp_path):
-    values = (.746, .882, .211, .648, .326, .343, .27)
+    values = (.43, .43, .19, .17, .21, .17, .18)
     params = replace(TIAGO, armature=values)
-    assert params == TIAGO  # the supplied armature is the default
+    assert params == TIAGO  # the fitted armature is the default
     model, path, name = mpc._plant(params)
     np.testing.assert_array_equal(model.armature, values)
     assert name != mpc._plant(replace(TIAGO, armature=(0.,) * 7))[2]

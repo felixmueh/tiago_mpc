@@ -61,8 +61,8 @@ def gpu_step(mpc):
     only its own output buffer: the solver's warm start, duals and rho are untouched.
 
     The step is explicit: with the URDF's friction in the predictor, one 2 ms step makes
-    joint 7 diverge (0.0008 kg m^2 against 2.95 N m s/rad plus the tanh slope of about 19:
-    a time constant of about 36 us), unless split into substeps below twice that."""
+    joint 7 diverge without armature (0.0008 kg m^2 against b plus the tanh slope c/w: a time
+    constant of tens of microseconds), unless split into substeps below twice that."""
     return lambda x, u, h: np.asarray(mpc.controller.solver.sim_forward(x[None], u[None], h), dtype=float)[0]
 
 
@@ -74,7 +74,7 @@ def implicit_step(friction, friction_law=tm.Tanh(.03)):
     linearised:
         qd+ = qd + (M + h D)^-1 h (u - bias(q, qd) - p(qd)),   q+ = q + h qd+
     with D = diag(dp/dqd) = diag(b + (c/w) sech^2(qd/w)) (dynamics.passive_torque). The
-    passive torque is the stiff term (joint 7's time constant is about 36 us), so this
+    passive torque is the stiff term (joint 7's time constant is tens of microseconds), so this
     keeps a 2 ms step stable; inertia and bias stay explicit. Linearised at qd, it misses the
     tanh's steep slope at zero: near rest joint 7's speed chatters by about h c / (m + h b)
     (0.15 rad/s at 2 ms), bounded, with a negligible position error. friction: the

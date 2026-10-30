@@ -105,7 +105,7 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     if name == "figure8":
         assert config["plant"]["substep"] == .001 and config["plant"]["integrator"] == "euler"
         assert config["plant"]["friction_law"] == dict(type="StickSlip")
-        assert config["params"]["friction_law"] == dict(type="Tanh", width_rad_s=.03)  # predictor stays smooth
+        assert config["params"]["friction_law"] == dict(type="Tanh", width_rad_s=.1)  # predictor stays smooth
         assert set(results) >= {"metrics_full_cycle", "metrics_after_initial_1s"}
     else:
         assert set(results) >= {"initial_distance_m", "final_distance_m", "max_distance_m", "final_speed_m_s"}

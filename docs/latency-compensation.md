@@ -65,7 +65,7 @@ one is waiting to activate.
 
 Propagation has its own friction coefficients, Coulomb law, armature and maximum
 Euler substep. It reuses the coupled dynamics step from the simulator, assigning
-armature to the Pinocchio model once. The defaults are loss-free with the supplied
+armature to the Pinocchio model once. The defaults are loss-free with the fitted
 armature (`ARMATURE_KG_M2`), as are the predictor's and the simulated plant's; enable
 friction explicitly, as above. The optimizer's model
 and the real/simulated plant remain separately configured.

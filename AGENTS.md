@@ -61,11 +61,13 @@ the guide documents partial patches, version checks and completion status.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)
 
-The supplied friction, damping and armature values are questionable (see
+The friction, damping and armature values are questionable: the right arm's are
+fitted from one real chirp per joint, the left arm's are supplied (see
 `models/tiago_pro/README.md` and `docs/real-robot-friction-plan.md` in the thesis
 workspace). Develop with them anyway, but never bake a coefficient into an
 algorithm, and test each controller against a plant whose coefficients differ
-from the predictor's (for example the 2026-10-16 physical fits, or ±50 %). The
+from the predictor's (for example the supplied values, the 2026-10-16 physical
+fits, or ±50 %). The
 simulated plant may be more detailed than the predictor; enable such detail
 explicitly and record both models. Never apply passive losses twice.
 

@@ -32,7 +32,7 @@ class SimConfig:
     lists and arrays are converted), by default the comfortable pose at rest; substep:
     the longest integration step; friction: the plant's losses (None: loss-free);
     friction_law: their Coulomb evaluation or coupled stick/slip integration;
-    armature: constant reflected joint inertia, passed to Pinocchio once, by default the supplied one;
+    armature: constant reflected joint inertia, passed to Pinocchio once, by default the fitted one;
     integrator: 'rk4' or 'euler' (the module docstring); sync_real_time: pace a
     virtual-time run for watching (SimPlant). SimPlant checks the values."""
     q: tuple[float, ...] = tuple(map(float, Q_START))

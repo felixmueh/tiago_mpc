@@ -242,12 +242,12 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   most S seconds. In code, a period written as a rate is `tm.hz_to_s(hz)`
   (`hz_to_s(500) == .002`).
 - **reach:** `TIAGO` defaults (32 knots of 30 ms, planning speeds at 60 % of the raw
-  limits), loss-free with the supplied armature, 3 ms RK4 substeps, `PlanFeedback()` on
+  limits), loss-free with the fitted armature, 3 ms RK4 substeps, `PlanFeedback()` on
   `VirtualTime.like(RealTime())`, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm with the grasp point slower than 2 cm/s, timeout 8 s.
 - **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, `StickSlip`
-  Coulomb in the plant (Euler, 1 ms substeps) and `Tanh(.03)` (width 0.03 rad/s) in the
+  Coulomb in the plant (Euler, 1 ms substeps) and `Tanh(.1)` (width 0.1 rad/s) in the
   predictor; status `done` at the end of its period.
 - **Exit status** 1 on a timeout (the reach), a fault, an interruption or a raw-limit
   excess; 2 for a cancelled execution.
@@ -331,8 +331,8 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   `MpcParams.friction_law` takes `Tanh` only. Numerical choices are recorded on
   their consumer by type name (`{"type": "StickSlip"}`), independently of coefficients.
   Armature, a seven-joint reflected-inertia tuple in `MpcParams.armature`, `SimConfig.armature`
-  and `LatencyCompensation.armature`, defaults to the supplied `ARMATURE_KG_M2` in all three
-  (supplied, not identified); `(0.,) * 7` turns it off.
+  and `LatencyCompensation.armature`, defaults to the fitted `ARMATURE_KG_M2` in all three
+  (one chirp per joint; `models/tiago_pro/README.md`); `(0.,) * 7` turns it off.
   These plant choices do not qualify
   friction-enabled MPC or tracking.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`

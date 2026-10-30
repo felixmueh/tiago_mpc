@@ -39,23 +39,25 @@ Q_START = np.array([-0.39, -1.73, -0.38, -2.33, 0.0, -1.21, 0.04])
 # A nearby posture: the default reach target's, and the model check's second pose.
 Q_REACH = Q_START + np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
 
-# Right arm, native joint order 1–7. Reflected inertia in kg m², supplied on
-# 2026-10-21, not identified. Enable it explicitly in the plant or predictor;
-# it is not part of the URDF and is never folded into link inertia.
-ARMATURE_KG_M2 = (.746, .882, .211, .648, .326, .343, .27)
+# Right arm, native joint order 1–7. Reflected inertia in kg m², fitted on 2026-10-30
+# from one real chirp per joint as total inertia minus the URDF's link inertia
+# (models/tiago_pro/README.md). It is not part of the URDF and is never folded into
+# link inertia.
+ARMATURE_KG_M2 = (.43, .43, .19, .17, .21, .17, .18)
 
 # Stored PD gains: kp in Nm/rad, kd in Nm s/rad, native joint order 1–7.
-# The 2026-10-27 simulation tune used effective inertia at Q_START with the
-# supplied armature, 20 rad/s bandwidth and damping ratio 1.4. These are not
+# Retuned on 2026-10-30 with the recipe of the 2026-10-27 simulation tune: effective
+# inertia at Q_START with ARMATURE_KG_M2 (now the fitted one), 20 rad/s bandwidth and
+# damping ratio 1.4 (util.inertia_gains(20., 1.4, armature=ARMATURE_KG_M2)). These are not
 # hardware-qualified gains. Edit these literals directly; util.inertia_gains
 # provides estimates to copy here, without recalculating defaults at import.
 PD_KP = (
-    437.77012743826697, 510.6232322004456, 140.62973559712063, 363.94911197026863,
-    138.12976415871805, 145.21463447546623, 108.3090348183072,
+    311.37012743826693, 329.82323220044566, 132.22973559712062, 172.74911197026864,
+    91.72976415871804, 76.01463447546624, 72.3090348183072,
 )
 PD_KD = (
-    61.287817841357366, 71.48725250806238, 19.688162983596886, 50.9528756758376,
-    19.338166982220525, 20.33004882656527, 15.163264874563007,
+    43.59181784135736, 46.175252508062385, 18.512162983596884, 24.18487567583761,
+    12.842166982220524, 10.642048826565272, 10.123264874563008,
 )
 
 

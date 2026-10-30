@@ -24,7 +24,7 @@ class LatencyCompensation:
     latency_s is a fixed forecast, or 'previous': the last completed request-to-result
     delay, bootstrapped by initial_latency_s. It never uses the current solve's duration.
     The physical propagation model is independent of the MPC and plant settings; by default
-    loss-free with the supplied armature, as they are.
+    loss-free with the fitted armature, as they are.
     Command publication is modeled as immediate; actuator/network delays are not known.
     Future feedback-dependent commands assume fresh predicted feedback at each tick;
     the current command always uses the actual measured feedback.

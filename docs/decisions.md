@@ -159,9 +159,21 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   `d86e041`). `/workspace/GATO/TiagoProURDF/tiago_pro.urdf` is outdated. The
   reduced right arm's fixed torso root and gripper inertia summed at zero
   posture are intentional.
+- **2026-10-30: fitted right-arm coefficients, retuned PD gains, predictor width
+  0.1** (Felix). The right arm's Coulomb, viscous and armature values are refit
+  from realtoisaacsim's real single-joint chirps (`models/tiago_pro/README.md`;
+  `research/realtoisaacsim-friction-identification.md` in the thesis workspace)
+  and replace the supplied ones, which are almost certainly Isaac Sim matching
+  values. The left arm keeps the supplied values. `PD_KP` and `PD_KD` are
+  recomputed with the 2026-10-28 recipe for the fitted armature. The predictor's
+  tanh width becomes 0.1 rad/s: with the fitted values its explicit step is
+  stable only up to 5.8 ms at 0.03 and 17 ms at 0.1. Its low-speed accuracy
+  matters little: by default the predictor is loss-free, and feedforward and PD
+  handle friction.
 - **2026-10-21: supplied joint parameters** for both arms (Coulomb, viscous,
   effort, armature) replace earlier midpoints and guesses
-  (`models/tiago_pro/README.md`). The armature is not in the URDF (no loader
+  (`models/tiago_pro/README.md`); the right arm's friction, damping and armature
+  were replaced by fitted values on 2026-10-30. The armature is not in the URDF (no loader
   reads it) and never folded into link inertia. kp/kd are not stored: they
   belong to a different controller.
 - **2026-10-23: the derived URDFs' meshes are cached copies named by their
@@ -216,12 +228,12 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Friction and GATO
 
-- **2026-10-30: the supplied armature is on by default** (Felix). `ARMATURE_KG_M2` is
+- **2026-10-30: the armature is on by default** (Felix). `ARMATURE_KG_M2` is
   the default of the predictor (`MpcParams.armature`), the simulated plant
   (`SimConfig.armature`) and the latency compensation's propagation model
   (`LatencyCompensation.armature`); `(0.,) * 7` turns it off. This supersedes keeping
   armature disabled and explicit (2026-10-23, below; the README since 2026-10-28). The
-  values are still supplied, not identified. Reason: the stored PD gains
+  values were supplied then and are fitted since the same day (above). Reason: the stored PD gains
   (`PlanFeedback()`, now the default law) are tuned with it; on the zero-armature models
   kd·T/I at 2 ms command ticks was 2 on joints 5 and 6 and 39 on joint 7, so the
   sampled PD and the compensation's forecast diverged at the wrist, and every default
@@ -234,7 +246,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   `util.inertia_gains` returns plain float tuples that can be printed as matching
   assignments; it never rewrites files or recalculates defaults at import.
   `PlanFeedback()` uses the tuned simulation gains (20 rad/s, damping ratio 1.4,
-  including supplied armature). This changes the former 30 rad/s link-only
+  including the armature; recomputed for the fitted armature on 2026-10-30). This changes the former 30 rad/s link-only
   default; named `old_pd`/`old_both` tuning candidates explicitly retain their
   previous gains. This is a default selection, not hardware qualification.
 - **2026-10-28: separate friction coefficients from their numerical law**

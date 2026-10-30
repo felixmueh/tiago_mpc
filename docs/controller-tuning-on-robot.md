@@ -118,8 +118,8 @@ on two simulation tasks; the lower initial physical gains below are deliberate.
    `armature` tuple: `tm.inertia_gains(omega, damping_ratio=zeta, armature=values)`.
    Its zero-armature default preserves the old link-only gains. Pinocchio's
    `model.armature` already enters CRBA; do not add it a second time. The
-   [supplied armature](../models/tiago_pro/README.md) is still an assumption,
-   not an identified transmission model.
+   [fitted armature](../models/tiago_pro/README.md) is total inertia minus link inertia from
+   one chirp per joint, not an identified transmission model.
 
    As a conservative **starting heuristic**, consider omega=3 rad/s (about
    0.48 Hz), zeta=1, then 5 rad/s only if timing, noise, torque and observed

@@ -45,7 +45,7 @@ class AdmmLimits:
 
 @dataclass(frozen=True)
 class MpcParams:
-    """Everything the solver needs. The defaults are TIAGo reaching, loss-free, with the supplied armature."""
+    """Everything the solver needs. The defaults are TIAGo reaching, loss-free, with the fitted armature."""
     N: int = 32
     dt_s: float = .03
     solver: SolverParams = SolverParams(
@@ -66,7 +66,10 @@ class MpcParams:
     velocity_fraction: float = .6
     effort_fraction: float = .85
     friction: Friction | None = None  # predictor friction; None is loss-free
-    friction_law: Tanh = Tanh(.03)  # GATO's differentiable Coulomb evaluation
+    # GATO's differentiable Coulomb evaluation. Its explicit velocity update needs
+    # dt < 2/lambda_max(M^-1 diag(b + c/w)): with the fitted coefficients and armature,
+    # 17 ms at w = 0.1 (5.8 ms at 0.03), over 500 poses; w = 0.2 gives 30 ms.
+    friction_law: Tanh = Tanh(.1)
     armature: tuple[float, ...] = ARMATURE_KG_M2  # reflected joint inertia, kg m²; never link inertia
     # Wall time for a solve's SQP iterations (MPCController.step's budget_s), within
     # solver.max_sqp_iters; None: no time limit. run_experiment, when it builds the MPC, keeps
@@ -116,7 +119,7 @@ def plant_name(
     gpu_urdf_path: Path,
     friction: Friction | None = None,
     armature: tuple[float, ...] = (0.,) * 7,
-    friction_law: Tanh = Tanh(.03),
+    friction_law: Tanh = Tanh(.1),
 ) -> str:
     """tiago_right_<hash> over the installed GATO version, the GPU URDF bytes,
     grasp frame, predictor friction (coefficients and Tanh width), and nonzero
@@ -240,7 +243,7 @@ def check_model(
     model,
     data,
     friction: Friction | None = None,
-    friction_law: Tanh = Tanh(.03),
+    friction_law: Tanh = Tanh(.1),
 ):
     """The GPU model against Pinocchio's native one at two poses: FK; moving and at rest
     (the steepest tanh slope), one step of 1 ms and of dt against GATO's constant-
