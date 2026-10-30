@@ -8,8 +8,9 @@ Copyright (c) 2024 PAL Robotics S.L. All rights reserved. Licensed under the Apa
 http://www.apache.org/licenses/LICENSE-2.0
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License. -->
 <!-- Modified for tiago_mpc (Apache-2.0, section 4b): the friction and damping of
-     both arms' seven joints are questionable values supplied on 2026-10-21, not
-     PAL's 1.0. Origin and values: models/tiago_pro/README.md. -->
+     both arms' seven joints are not PAL's 1.0: the right arm's are fitted from real
+     chirps (2026-10-30), the left arm's are questionable values supplied on
+     2026-10-21. Origin and values: models/tiago_pro/README.md. -->
 <robot name="tiago_pro">
   <!-- ARGUMENTS -->
   <!-- PROPERTIES -->
