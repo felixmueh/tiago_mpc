@@ -89,8 +89,8 @@ interval equals the control-update or command period.
   PD gains are literal values in `tiago.py`, edited manually (Felix, 2026-10-28).
   The gain calculation is in `util.py`; it returns pasteable tuples and never
   rewrites the model. `PlanFeedback()` uses the chosen stored tuned gains.
-- Native TIAGo coordinates everywhere (ROS, plants, records). Joint 6's sign map
-  lives only at the GPU boundary; do not remove it on GRiD-only evidence.
+- Native TIAGo coordinates everywhere (ROS, plants, records, the GPU model): the GPU
+  URDF keeps joint 6's -z axis, which GATO's fixed-base adapter supports since 0.1.4.
 - Do not modify generic GRiD code or generated headers; select frames through
   GATO's `ee_frame`.
 

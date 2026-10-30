@@ -8,9 +8,8 @@ at run time and written to the cache (util.cache_root): the reduced arm (arm_urd
 GPU copy (runtime_urdf) and the safety collision model (safety.py). Nothing derived
 is committed, so nothing derived can go stale.
 
-The native
-URDFs stay in ROS coordinates. Only the GPU URDF and the solver's state/control
-boundary normalize negative joint axes.
+Every URDF, the GPU copy included, keeps the native joint axes (joint 6 turns about -z):
+the solver works in native TIAGo coordinates.
 """
 from __future__ import annotations
 
@@ -197,46 +196,26 @@ def ee_velocity(q: np.ndarray, qd: np.ndarray) -> np.ndarray:
     return jacobian[:3] @ np.asarray(qd, dtype=float)
 
 
-def runtime_urdf(friction=None):
-    """The GPU URDF and the GPU coordinate signs.
-
-    A copy of the reduced arm with friction's coefficients, if given, whose negative joint
-    axes are turned positive, with their limits; in the cache, by its content (cached).
-    GATO reads only its collision meshes, so the visuals are left out."""
+def runtime_urdf(friction: Friction | None = None) -> Path:
+    """The GPU URDF: a copy of the reduced arm with friction's coefficients, if given, in the
+    cache by its content (cached). GATO reads only its collision meshes, so the visuals are
+    left out."""
     tree = ET.parse(arm_urdf())
     for link in tree.iter("link"):
         for visual in link.findall("visual"):
             link.remove(visual)
-    joints = [joint for joint in tree.iter("joint") if joint.get("type") != "fixed"]
-    if friction is not None:  # the coefficients survive the axis flips below
+    if friction is not None:
+        joints = [joint for joint in tree.iter("joint") if joint.get("type") != "fixed"]
         for joint, c, b in zip(joints, friction.coulomb_nm, friction.viscous_nm_s_per_rad):
             dynamics = joint.find("dynamics")
             if dynamics is None:
                 dynamics = ET.SubElement(joint, "dynamics")
             dynamics.set("friction", repr(float(c)))
             dynamics.set("damping", repr(float(b)))
-    signs = []
-    for joint in joints:
-        axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
-        if not (np.array_equal(axis, [0, 0, 1]) or np.array_equal(axis, [0, 0, -1])):
-            raise ValueError(f"Unsupported arm axis: {axis}")
-        sign = float(axis[2])
-        signs.append(sign)
-        if sign < 0:
-            joint.find("axis").set("xyz", "0 0 1")
-            limit = joint.find("limit")
-            lo, hi = float(limit.get("lower")), float(limit.get("upper"))
-            limit.set("lower", repr(-hi))
-            limit.set("upper", repr(-lo))
-            safety = joint.find("safety_controller")
-            if safety is not None:
-                lo, hi = float(safety.get("soft_lower_limit")), float(safety.get("soft_upper_limit"))
-                safety.set("soft_lower_limit", repr(-hi))
-                safety.set("soft_upper_limit", repr(-lo))
     payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-    return cached("tiago_right_grid.urdf", payload), np.asarray(signs)
+    return cached("tiago_right_grid.urdf", payload)
 
 
 if __name__ == "__main__":  # the derived files' paths, for debugging
     print(arm_urdf())
-    print(runtime_urdf()[0])
+    print(runtime_urdf())

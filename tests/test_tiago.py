@@ -1,5 +1,5 @@
 """The derived URDFs: content-addressed in the cache; the GPU model's URDF keeps the
-native model and maps joint 6's sign (CPU only)."""
+native model, joint 6's -z axis included (CPU only)."""
 import subprocess
 import xml.etree.ElementTree as ET
 
@@ -11,17 +11,18 @@ from tiago_mpc import tiago, util
 from tiago_mpc.dynamics import Friction
 
 
-def test_gpu_urdf_maps_joint_6s_sign_and_keeps_only_the_collision_meshes(monkeypatch, tmp_path):
+def test_gpu_urdf_keeps_the_native_axes_and_limits_and_only_the_collision_meshes(monkeypatch, tmp_path):
     monkeypatch.setenv("GATO_CACHE_DIR", str(tmp_path))
-    gpu, signs = tiago.runtime_urdf()
+    gpu = tiago.runtime_urdf()
     assert gpu.is_relative_to(tmp_path)
-    np.testing.assert_array_equal(signs, [1, 1, 1, 1, 1, -1, 1])
     original = pin.buildModelFromUrdf(str(tiago.arm_urdf()))
     gpu_model = pin.buildModelFromUrdf(str(gpu))
-    np.testing.assert_array_equal(gpu_model.lowerPositionLimit,
-                                  np.minimum(original.lowerPositionLimit * signs,
-                                             original.upperPositionLimit * signs))
+    for limit in ("lowerPositionLimit", "upperPositionLimit", "velocityLimit", "effortLimit"):
+        np.testing.assert_array_equal(getattr(gpu_model, limit), getattr(original, limit))
     tree = ET.parse(gpu)
+    axes = [joint.find("axis").get("xyz") for joint in tree.iter("joint") if joint.get("type") != "fixed"]
+    assert axes[5] == "0 0 -1" and axes == [joint.find("axis").get("xyz") for joint in ET.parse(
+        tiago.arm_urdf()).iter("joint") if joint.get("type") != "fixed"]
     assert not tree.findall("link/visual") and tree.findall("link/collision/geometry/mesh")
     for mesh in tree.iter("mesh"):  # cached copies, relative to the URDF
         assert (gpu.parent / mesh.get("filename")).is_file()
@@ -38,13 +39,13 @@ def test_mesh_copies_reject_git_lfs_pointers(monkeypatch, tmp_path):
 
 def test_derived_files_are_written_once_by_content(monkeypatch, tmp_path):
     monkeypatch.setenv("GATO_CACHE_DIR", str(tmp_path))
-    arm, gpu = tiago.arm_urdf(), tiago.runtime_urdf()[0]
+    arm, gpu = tiago.arm_urdf(), tiago.runtime_urdf()
     assert arm.parent.name == util.digest(arm.read_bytes())
     before = arm.stat().st_mtime_ns, gpu.stat().st_mtime_ns
-    assert (tiago.arm_urdf(), tiago.runtime_urdf()[0]) == (arm, gpu)
+    assert (tiago.arm_urdf(), tiago.runtime_urdf()) == (arm, gpu)
     assert (arm.stat().st_mtime_ns, gpu.stat().st_mtime_ns) == before
     friction = Friction((1.,) * 7, (2.,) * 7)
-    assert tiago.runtime_urdf(friction)[0] != gpu  # other coefficients, another path
+    assert tiago.runtime_urdf(friction) != gpu  # other coefficients, another path
 
 
 def test_worktrees_share_the_main_checkouts_cache(tmp_path):

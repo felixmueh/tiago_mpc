@@ -58,15 +58,12 @@ def gpu_step(mpc):
     runs one step of the solver's device integrator, the constant-acceleration
     (trapezoidal) step its transcription uses (check_model's step), in float32, with the
     predictor's friction and knot 0's external wrench. It reads only the model and writes
-    only its own output buffer: the solver's warm start, duals and rho are untouched. It
-    works in GPU coordinates, so the sign map mpc.signs applies.
+    only its own output buffer: the solver's warm start, duals and rho are untouched.
 
     The step is explicit: with the URDF's friction in the predictor, one 2 ms step makes
     joint 7 diverge (0.0008 kg m^2 against 2.95 N m s/rad plus the tanh slope of about 19:
     a time constant of about 36 us), unless split into substeps below twice that."""
-    ss, signs = np.tile(mpc.signs, 2), mpc.signs
-    return lambda x, u, h: ss * np.asarray(mpc.controller.solver.sim_forward(
-        (x * ss)[None], (u * signs)[None], h), dtype=float)[0]
+    return lambda x, u, h: np.asarray(mpc.controller.solver.sim_forward(x[None], u[None], h), dtype=float)[0]
 
 
 # TODO: implicit_step ignores the external_force solver update (mpc.UPDATES), which
@@ -116,7 +113,7 @@ def run_compensated(
     prediction_substep_s: the longest prediction step (None: one step per command tick);
     predictor: "implicit" (implicit_step, the default) or "gpu" (gpu_step).
     Virtual time only (it starts the plant with VirtualClock(), which RosPlant refuses);
-    compensating needs the in-process Mpc (its solver and signs). solve_latency_s is
+    compensating needs the in-process Mpc (its solver). solve_latency_s is
     declared seconds only (finite, >= 0), else a ValueError before the plant starts.
     Returns an Outcome.
 

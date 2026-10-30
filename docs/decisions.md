@@ -189,11 +189,14 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (losses or armature in the plant only), as on the real robot. Enable it
   explicitly and record both models. This replaced the rule against armature in
   only one model.
-- **2026-10-21: the joint-6 conversion stays.** The pinned GATO fixed-arm adapter
-  needs joint 6's axis and limits normalized in a generated GPU URDF and the
-  q, qd, u signs mapped at the GPU boundary; everything else is native. The
-  upstream native-axes PR was not in the pin. 2026-10-24: GATO 0.1.5 contains
-  it (PR #21); the conversion stays until its removal is evaluated separately.
+- **2026-10-30: the GPU model keeps joint 6's native axis** (Felix). GATO's
+  fixed-base adapter supports axes other than +z since 0.1.4 (PR #21), so
+  `runtime_urdf` no longer flips joint 6 and the solver works in native
+  coordinates; the joint-6 sign map is gone. Flipped and native modules gave
+  bitwise identical float32 results after the sign map (device step, KKT
+  linearization, reach and figure-eight plans, runs at joint 6's limits) with
+  GATO `72c9d14` and GRiD `417a30d` at N = 32
+  (`research/joint6-sign-conversion-removal.md` in the thesis workspace).
 - **2026-10-21: grasp-center frame.** Tasks track `arm_right_grasp_joint`, a
   massless frame 0.139 m along the flange's +z: the nominal midpoint of the
   finger pads at zero gripper posture, not a calibrated TCP. Summaries and

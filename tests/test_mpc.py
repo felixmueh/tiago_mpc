@@ -54,7 +54,7 @@ def no_compile(monkeypatch, tmp_path):
 
 def fake_binary(directory, params, plant=None):
     """An importable Python file named as GATO's module for params."""
-    path = Path(directory) / f"bsqpN{params.N}_{plant or mpc._plant(params)[3]}.py"
+    path = Path(directory) / f"bsqpN{params.N}_{plant or mpc._plant(params)[2]}.py"
     path.write_text("")
     return path
 
@@ -216,11 +216,10 @@ def test_smooth_model_check_uses_the_grasp_frame():
     # Stop after FK: this regression tests the frame, not CUDA dynamics.
     reached_dynamics = RuntimeError("FK check passed")
     solver = Mock()
-    solver.ee_pos.side_effect = lambda q: fk(q, GRASP_FRAME)  # signs are ones
+    solver.ee_pos.side_effect = lambda q: fk(q, GRASP_FRAME)
     solver.sim_forward.side_effect = reached_dynamics
     with pytest.raises(RuntimeError, match="FK check passed"):
-        mpc.check_model(solver, model, model.createData(), np.ones(7),
-                        Friction([1.] * 7, [1.] * 7), Tanh(.03))
+        mpc.check_model(solver, model, model.createData(), Friction([1.] * 7, [1.] * 7), Tanh(.03))
     solver.sim_forward.assert_called_once()
 
 
@@ -229,9 +228,9 @@ def test_selected_current_bounds_map_native_joint_box_and_limit_fractions():
     solver = NS(set_row_group_bounds=lambda group, lo, hi: rows.update({group: (lo, hi)}))
     model = NS(lowerPositionLimit=np.full(7, -2.), upperPositionLimit=np.full(7, 3.),
                velocityLimit=np.arange(7) + 1., effortLimit=np.arange(7) + 10.)
-    mpc.set_bounds(solver, model, SIGNS, replace(TIAGO, joint_margin_rad=.1, velocity_fraction=.8, effort_fraction=.85))
-    assert rows[0][0][5] == -2.9 and rows[0][1][5] == 1.9
-    assert rows[0][0][0] == -1.9 and rows[0][1][0] == 2.9
+    mpc.set_bounds(solver, model, replace(TIAGO, joint_margin_rad=.1, velocity_fraction=.8, effort_fraction=.85))
+    np.testing.assert_array_equal(rows[0][0], np.full(7, -1.9))
+    np.testing.assert_array_equal(rows[0][1], np.full(7, 2.9))
     np.testing.assert_allclose(rows[1][1], .8 * model.velocityLimit)
     np.testing.assert_allclose(rows[2][1], .85 * model.effortLimit)
 
@@ -251,7 +250,6 @@ def test_invalid_params_are_refused(change):
 
 
 # Both Mpc twins around a fake GATO controller: N = 3 knots, 10 ms.
-SIGNS = np.array([1., 1., 1., 1., 1., -1., 1.])
 N, DT = 3, .01
 PARAMS = replace(TIAGO, N=N, dt_s=DT, max_sqp_time_s=.004)
 BINARY = Path("bsqpN3_fake.so")  # load_controller is faked
@@ -259,7 +257,7 @@ REFERENCE = np.tile([.3, -.2, .1, 0., 0., 0.], (N, 1)).astype(np.float32)
 
 
 class Controller:
-    """Plans x_k = (k + 1) x and u_k = torque + k, in GPU coordinates."""
+    """Plans x_k = (k + 1) x and u_k = torque + k."""
 
     def __init__(self):
         self.events, self.torque, self.gate = [], np.arange(7, dtype=float), None
@@ -290,7 +288,7 @@ class Controller:
 def controller(monkeypatch):
     """Every Mpc built in this process (also MpcProcess on threads) gets this controller."""
     controller = Controller()
-    monkeypatch.setattr(mpc, "load_controller", lambda params, binary: (controller, SIGNS))
+    monkeypatch.setattr(mpc, "load_controller", lambda params, binary: controller)
     return controller
 
 
@@ -298,7 +296,7 @@ def state(t=1., scale=1.):
     return State(t, scale * np.arange(7) * .1, scale * np.arange(7) * -.02)
 
 
-def test_native_coordinates_cross_only_the_gpu_boundary(controller):
+def test_the_solver_gets_and_returns_native_coordinates(controller):
     item = state()
     m = Mpc(PARAMS, BINARY)
     assert m.step is None
@@ -306,11 +304,10 @@ def test_native_coordinates_cross_only_the_gpu_boundary(controller):
     plan = m.result()
     assert m.step.iterations == 2  # the raw GATO step result
     x = np.r_[item.q, item.qd]
-    gpu = x * np.tile(SIGNS, 2)
-    np.testing.assert_array_equal(controller.events[-1][1], gpu)
+    np.testing.assert_array_equal(controller.events[-1][1], x)
     assert plan.t0 == item.t and plan.dt == DT
     np.testing.assert_array_equal(plan.states, [(k + 1) * x for k in range(N)])
-    np.testing.assert_array_equal(plan.torques, [(np.arange(7.) + k) * SIGNS for k in range(N - 1)])
+    np.testing.assert_array_equal(plan.torques, [np.arange(7.) + k for k in range(N - 1)])
     assert plan.stats["sqp"] == 2 and plan.stats["pcg"] == 3 and plan.stats["zero_pcg_rows"] == 1
     assert m.result() is None  # one plan per request
 
@@ -342,7 +339,7 @@ def test_after_a_warmup_requests_never_reset_and_dt_elapsed_follows_state_times(
     kinds = [event[0] for event in controller.events]
     assert kinds == ["reset", "warmup", "step", "step", "step"]
     for event in controller.events[:2]:
-        np.testing.assert_array_equal(event[1][:7], state(scale=2.).q * SIGNS)
+        np.testing.assert_array_equal(event[1][:7], state(scale=2.).q)
     steps = [event for event in controller.events if event[0] == "step"]
     assert [event[3] for event in steps] == [None, pytest.approx(.013), pytest.approx(.007)]
     assert all(event[4] == .004 for event in steps)  # max_sqp_time_s
@@ -354,7 +351,7 @@ def test_a_disabled_warmup_does_nothing_and_the_first_request_resets(controller)
     assert not controller.events
     m.request(state(), REFERENCE)
     assert [event[0] for event in controller.events] == ["reset", "step"]
-    np.testing.assert_array_equal(controller.events[0][1][:7], state().q * SIGNS)
+    np.testing.assert_array_equal(controller.events[0][1][:7], state().q)
 
 
 def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller):
@@ -364,7 +361,7 @@ def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller
     names = [event[0] for event in controller.events]
     assert names == ["set_cost_weights", "set_q_pos_cost", "set_q_nom", "reset", "step"]
     assert controller.events[0][2] == dict(q_cost=2.)
-    np.testing.assert_array_equal(controller.events[2][1][0], q_nom * SIGNS)
+    np.testing.assert_array_equal(controller.events[2][1][0], q_nom)
     with pytest.raises(KeyError, match="posture_cost"):
         m.request(state(2.), REFERENCE, {"posture_cost": 1.})
     assert len(controller.events) == 5
@@ -518,14 +515,13 @@ def test_a_spawned_process_reports_a_failed_load(tmp_path):
         MpcProcess(TIAGO, tmp_path / "missing.so")
 
 
-def test_armature_has_its_own_model_identity_and_is_forwarded_without_axis_flips(monkeypatch, tmp_path):
+def test_armature_has_its_own_model_identity_and_is_forwarded(monkeypatch, tmp_path):
     values = (.746, .882, .211, .648, .326, .343, .27)
     params = replace(TIAGO, armature=values)
     assert params == TIAGO  # the supplied armature is the default
-    model, path, signs, name = mpc._plant(params)
+    model, path, name = mpc._plant(params)
     np.testing.assert_array_equal(model.armature, values)
-    assert signs[5] == -1 and values[5] > 0
-    assert name != mpc._plant(replace(TIAGO, armature=(0.,) * 7))[3]
+    assert name != mpc._plant(replace(TIAGO, armature=(0.,) * 7))[2]
     assert mpc.plant_name(path, None, (0.,)*7) == mpc.plant_name(path)
     seen = {}
     monkeypatch.setattr(gato, 'register_robot', lambda name, path, **kw: seen.update(kw))

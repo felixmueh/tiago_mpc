@@ -78,8 +78,7 @@ class Moving(Plant):
 
 
 class Predicting(Mpc):
-    """test_loops' Mpc with the solver's sim_forward (the plant's model) and a sign map."""
-    signs = np.array([1., 1., 1., 1., 1., -1., 1.])
+    """test_loops' Mpc with the solver's sim_forward (the plant's model)."""
 
     class controller:
         class solver:

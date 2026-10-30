@@ -93,15 +93,13 @@ class MpcParams:
 TIAGO = MpcParams()
 
 
-def set_bounds(solver, model, signs, params):
-    """Install the planning limits in GPU coordinates."""
+def set_bounds(solver, model, params):
+    """Install the planning limits."""
     margin = float(params.joint_margin_rad)
     if (not math.isfinite(margin) or margin < 0
             or margin >= .5 * np.min(model.upperPositionLimit - model.lowerPositionLimit)):
         raise ValueError("Invalid joint margin")
-    lo = (model.lowerPositionLimit + margin) * signs
-    hi = (model.upperPositionLimit - margin) * signs
-    solver.set_row_group_bounds(0, np.minimum(lo, hi), np.maximum(lo, hi))
+    solver.set_row_group_bounds(0, model.lowerPositionLimit + margin, model.upperPositionLimit - margin)
     for group, fraction, raw in ((1, params.velocity_fraction, model.velocityLimit),
                                  (2, params.effort_fraction, model.effortLimit)):
         fraction = float(fraction)
@@ -133,7 +131,7 @@ def plant_name(
 
 
 def _plant(params: MpcParams):
-    """The Pinocchio arm, GPU URDF, GPU coordinate signs and GATO plant name for params.
+    """The Pinocchio arm, GPU URDF and GATO plant name for params.
     Exports GATO_CACHE_DIR (cache_root) and puts this environment's cmake first on PATH:
     GATO's module key includes the cmake it finds."""
     import pinocchio as pin
@@ -146,8 +144,8 @@ def _plant(params: MpcParams):
     bin_dir = str(Path(sys.executable).parent)
     if os.environ["PATH"].split(os.pathsep)[0] != bin_dir:
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
-    gpu_path, signs = runtime_urdf(params.friction)
-    return model, gpu_path, signs, plant_name(gpu_path, params.friction, params.armature, params.friction_law)
+    gpu_path = runtime_urdf(params.friction)
+    return model, gpu_path, plant_name(gpu_path, params.friction, params.armature, params.friction_law)
 
 
 def _register(params: MpcParams, gpu_path: Path, plant: str) -> None:
@@ -169,7 +167,7 @@ def find_binary(params: MpcParams) -> Path | None:
     registered. Never registers or compiles."""
     from gato import _cache
 
-    plant = _plant(params)[3]
+    plant = _plant(params)[2]
     return _cache.find_module(plant, params.N)
 
 
@@ -180,7 +178,7 @@ def compile_binary(params: MpcParams, use_cache: bool = True, jobs: int = 2) -> 
     compile jobs."""
     from gato import _cache
 
-    _, gpu_path, _, plant = _plant(params)
+    _, gpu_path, plant = _plant(params)
     _register(params, gpu_path, plant)
     if not use_cache:
         with _cache._locked(_cache.cache_dir()):  # not while another process compiles it
@@ -192,13 +190,13 @@ def compile_binary(params: MpcParams, use_cache: bool = True, jobs: int = 2) -> 
 
 def load_controller(params: MpcParams, binary: Path | None):
     """Load exactly binary as GATO's module for params (never compiles), then build and
-    check the controller; returns it and the GPU coordinate signs."""
+    check the controller; returns it."""
     import importlib.util
 
     import gato
     from gato import _cache
 
-    model, gpu_path, signs, plant = _plant(params)
+    model, gpu_path, plant = _plant(params)
     name = f"bsqpN{params.N}_{plant}"
     if binary is None or not Path(binary).is_file():
         raise FileNotFoundError(f"No GATO module for these params{f' at {binary}' if binary else ''}; "
@@ -228,20 +226,19 @@ def load_controller(params: MpcParams, binary: Path | None):
         _register(params, gpu_path, plant)
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,
                        params=params.solver)
-    check_model(solver, model, model.createData(), signs, params.friction, params.friction_law)
+    check_model(solver, model, model.createData(), params.friction, params.friction_law)
     controller = gato.MPCController(
         solver, limits="admm", linsys="pcg", warm_start=params.warm_start,
         reset_rho_each_step=params.reset_rho_each_step, admm_linsys=params.admm_linsys,
         limits_kw=asdict(params.admm))
-    set_bounds(solver, model, signs, params)
-    return controller, signs
+    set_bounds(solver, model, params)
+    return controller
 
 
 def check_model(
     solver,
     model,
     data,
-    signs,
     friction: Friction | None = None,
     friction_law: Tanh = Tanh(.03),
 ):
@@ -256,17 +253,16 @@ def check_model(
         a = pin.aba(model, data, q, v, u - passive_torque(v, friction, friction_law)).copy()
         return np.r_[q + v*h + .5*a*h*h, v + a*h]
 
-    ss = np.tile(signs, 2)
     for q in (Q_START, Q_REACH):
-        np.testing.assert_allclose(solver.ee_pos(q*signs), fk(q, GRASP_FRAME), atol=1e-5, rtol=1e-4)
+        np.testing.assert_allclose(solver.ee_pos(q), fk(q, GRASP_FRAME), atol=1e-5, rtol=1e-4)
         for v in (np.array([.3, -.35, .4, -.45, .5, -.55, .6]), np.zeros(7)):
             x, u = np.r_[q, v], pin.rnea(model, data, q, v, np.zeros(7)) + passive_torque(v, friction, friction_law)
             for h in (.001, solver.dt):
-                gpu = np.asarray(solver.sim_forward((x*ss)[None], (u*signs)[None], h))[0]*ss
+                gpu = np.asarray(solver.sim_forward(x[None], u[None], h))[0]
                 np.testing.assert_allclose(gpu, step(x, u, h), atol=2e-3, rtol=1e-3)
-            xu = np.tile(np.r_[x*ss, u*signs], solver.N)[:-7]
-            kkt = solver.debug_setup_kkt(xu[None], (x*ss)[None], np.zeros((1, solver.N*6)))
-            a_block = ss[:, None]*np.asarray(kkt["A"])[0].reshape(solver.N, 14, 14)[0].T*ss
+            xu = np.tile(np.r_[x, u], solver.N)[:-7]
+            kkt = solver.debug_setup_kkt(xu[None], x[None], np.zeros((1, solver.N*6)))
+            a_block = np.asarray(kkt["A"])[0].reshape(solver.N, 14, 14)[0].T
             fd = np.array([step(x + d, u, solver.dt) - step(x - d, u, solver.dt)
                            for d in np.eye(14)*1e-5]).T / 2e-5
             np.testing.assert_allclose(a_block, fd, atol=2e-3, rtol=1e-2)
@@ -286,9 +282,9 @@ UPDATES = {
     "cost_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights(**weights),
     # (N, 3) [ee, qd, u] weights per knot; None returns to the scalar weights
     "knot_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights_per_knot(weights),
-    # (weight, q_nom): running posture cost toward the native posture q_nom
+    # (weight, q_nom): running posture cost toward the posture q_nom
     "posture": lambda mpc, value: (mpc.controller.solver.set_q_pos_cost(value[0]),
-                                   mpc.controller.solver.set_q_nom(np.asarray(value[1]) * mpc.signs)),
+                                   mpc.controller.solver.set_q_nom(np.asarray(value[1]))),
     # external wrench in GATO's layout (BSQP.set_f_ext_B)
     "external_force": lambda mpc, wrench: mpc.controller.solver.set_f_ext_B(wrench),
 }
@@ -326,7 +322,7 @@ class Mpc:
     """
 
     def __init__(self, params: MpcParams, binary: Path | None):
-        self.controller, self.signs = load_controller(params, binary)
+        self.controller = load_controller(params, binary)
         self.params, self.N, self.dt = params, params.N, params.dt_s
         self.step: Any = None
         self._reset = False  # the controller has been reset from a state
@@ -370,11 +366,11 @@ class Mpc:
         pass
 
     def _x(self, state):
-        """The native state in GPU coordinates."""
+        """The solver's state vector."""
         q, qd = np.asarray(state.q, dtype=float), np.asarray(state.qd, dtype=float)
         if q.shape != (7,) or qd.shape != (7,) or not np.isfinite(np.r_[q, qd]).all():
             raise ValueError("Measured state must contain seven finite native positions/velocities")
-        return np.r_[q, qd] * np.tile(self.signs, 2)
+        return np.r_[q, qd]
 
     def _solve(self, state: State | Prediction, reference, updates):
         x = self._x(state)
@@ -407,9 +403,8 @@ class Mpc:
             admm_linsys=int(np.sum(raw.admm_linsys_iters)) if raw.admm_linsys_iters is not None else 0,
             admm_linsys_mode=step.admm_linsys,
             row_viol=None if step.row_viol is None else np.array(step.row_viol))
-        states = knots[:, :14] * np.tile(self.signs, 2)
         measured_t = state.measured_t if isinstance(state, Prediction) else state.t
-        return Plan(state.t, self.dt, states, knots[:-1, 14:] * self.signs, stats, measured_t=measured_t)
+        return Plan(state.t, self.dt, knots[:, :14], knots[:-1, 14:], stats, measured_t=measured_t)
 
 
 _SPAWN = mp.get_context("spawn")
