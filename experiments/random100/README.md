@@ -11,6 +11,13 @@ runner only checks for the inputs' consistency.
 positions, so their results are not comparable with grasp-frame runs. They keep
 their labels; never relabel them as grasp-frame results.
 
+**New protocol (2026-10-30):** runs from this date use the new defaults (30 ms
+knots, planning speeds at 60 %, 50 Hz control updates, a declared 20 ms solve
+latency, latency compensation, `PlanFeedback()`, and the supplied armature in the
+predictor, the plant and the compensation); earlier runs used 10 ms knots, 80 %,
+`VirtualTime.ideal()`, `SampleKnot` and no armature, another model. They keep
+their labels.
+
 ```bash
 .venv/bin/python -m experiments.random100.run --dry-run     # parameters only
 .venv/bin/python -m experiments.random100.run               # all 100 cases
@@ -20,11 +27,12 @@ their labels; never relabel them as grasp-frame results.
 
 - **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`, grasp
   frame) with no solve-time limit (`PARAMS` in `run.py`), 3 ms RK4 substeps and
-  `VirtualTime.ideal()`. The study is two frozen dataclasses: `Random100Config`
-  (the ids, the sha256 of `manifest.json`, which pins the inputs, and those pieces)
-  and one `Case` per input pair (its name, start state and grasp-frame target),
+  the simulation of the real MPC's timing, `VirtualTime.like(RealTime())`. The
+  study is two frozen dataclasses: `Random100Config` (the ids, the sha256 of
+  `manifest.json`, which pins the inputs, and those pieces) and one `Case` per input
+  pair (its name, start state and grasp-frame target),
   written with the provenance to `study.json` once, before the first run.
-  Each case runs once, in order: `run_experiment` with `Reach` and `SampleKnot`, then
+  Each case runs once, in order: `run_experiment` with `Reach` and `PlanFeedback()`, then
   `evaluate` from `experiments/reach.py`, with its own
   `MpcProcess` on the GATO module compiled once at the start (`compile_binary`);
   its run record is `runs/<name>/` (`case` in its config) in a fresh directory

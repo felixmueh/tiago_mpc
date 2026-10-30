@@ -7,9 +7,10 @@ simulation, and the same experiments on the robot or in Gazebo through ROS 2.
 
 A command loop runs at the command rate. At each command tick it reads the
 plant's state, requests a control update when one is due, turns the latest plan
-into a torque command with a control law (by default `SampleKnot()`: the knot due
-at time t, counted from the time of the plan's state) and sends it to the plant,
-which holds it until the next tick.
+into a torque command with a control law (the mains' default `PlanFeedback()`: the
+planned torque as feedforward plus PD about the plan at time t, counted from the time
+of the plan's state; `SampleKnot()` commands the knot due at t) and sends it to the
+plant, which holds it until the next tick.
 
 There are two loops (`tiago_mpc/loops.py`), named after their time.
 `run_real_time` runs on wall time (`WallClock`, `tiago_mpc/clock.py`): solves take as
@@ -32,7 +33,8 @@ than the tick and repeat. On the robot the safety check runs in its own process.
 Both loops support optional [latency compensation](docs/latency-compensation.md):
 predict the state at the next plan's intended start under the ongoing commands,
 then solve from that prediction. The measured state and its age remain separate.
-Pass `compensation=LatencyCompensation(...)` in the timing; it defaults off.
+The timing holds it: `RealTime()`, the real MPC's timing, turns it on by default with a
+fixed forecast of one control period (20 ms); `compensation=None` turns it off.
 Its physical friction and armature model is independent of the optimizer's model.
 
 A run ends without an exception: the task done, the time up, a fault (a plan or
@@ -182,9 +184,11 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
 ```
 
 - **Timing.** `--plant sim` (the default) runs `run_virtual_time` with an in-process
-  `Mpc`, on the main's `VirtualTime` (`VirtualTime.ideal()` for reach and
-  figure8). `--solve-latency` says how long a solve lasts on the timeline: declared
-  seconds (the preset's 0, the explicit ideal) or `measured`, the solve's own wall time
+  `Mpc`, on the main's `VirtualTime` (`VirtualTime.like(RealTime())` for reach, figure8
+  and random100: the real MPC's defaults, 500 Hz commands, 50 Hz control updates and
+  latency compensation, each solve declared, not measured, to last one control period,
+  20 ms). `--solve-latency` says how long a solve lasts on the timeline: declared
+  seconds (0: the ideal) or `measured`, the solve's own wall time
   (`plan.stats["wall_s"]`). A plan takes effect at the first command tick at or
   after its request plus that latency; no new request is made while a solve is
   outstanding. A solve that really took longer than a declared latency above 0 is
@@ -215,7 +219,7 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   solve's wall time is the latency (`RealTime`: the rehearsal and the robot;
   `VirtualTime` with `measured`) and sets None for every other timing (a declared
   `--solve-latency`, `Compensated`: the solve's wall time is irrelevant by
-  assumption); random100 (a declared 0) and the latency study build their own MPC
+  assumption); random100 (a declared latency) and the latency study build their own MPC
   with None.
   Before the first tick, both loops call `mpc.warmup` with the started plant's
   state, the arm still held: with `MpcParams.warmup` (default), GATO's warm-up
@@ -232,12 +236,14 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   `late_plan` event ([docs/robot.md](docs/robot.md#latency)).
 - **Rates:** `--command-period` sets the command rate (default 2 ms, 500 Hz,
   in simulation and on the robot), `--update-period` the control rate (default
-  10 ms, the knot interval of TIAGO and FIGURE8; 0: back to back, a request at the tick
+  20 ms, 50 Hz; TIAGO's knot interval is 30 ms, FIGURE8's 10 ms; 0: back to back, a request at the tick
   the previous plan takes effect); either may differ from the knot interval. Only
   the options given replace the timing's values. `--duration S` ends a run after at
   most S seconds. In code, a period written as a rate is `tm.hz_to_s(hz)`
   (`hz_to_s(500) == .002`).
-- **reach:** `TIAGO` defaults, loss-free, 3 ms RK4 substeps, from `Q_START`
+- **reach:** `TIAGO` defaults (32 knots of 30 ms, planning speeds at 60 % of the raw
+  limits), loss-free with the supplied armature, 3 ms RK4 substeps, `PlanFeedback()` on
+  `VirtualTime.like(RealTime())`, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm with the grasp point slower than 2 cm/s, timeout 8 s.
 - **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, `StickSlip`
@@ -324,8 +330,9 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   likewise covers `Tanh` and `Sign` only, as a separate third argument.
   `MpcParams.friction_law` takes `Tanh` only. Numerical choices are recorded on
   their consumer by type name (`{"type": "StickSlip"}`), independently of coefficients.
-  Armature defaults to zero; this experiment branch also accepts an explicit
-  seven-joint reflected-inertia tuple in `SimConfig.armature` and `MpcParams.armature`.
+  Armature, a seven-joint reflected-inertia tuple in `MpcParams.armature`, `SimConfig.armature`
+  and `LatencyCompensation.armature`, defaults to the supplied `ARMATURE_KG_M2` in all three
+  (supplied, not identified); `(0.,) * 7` turns it off.
   These plant choices do not qualify
   friction-enabled MPC or tracking.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
@@ -351,7 +358,7 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   `q`). The helper lives in `util.py` and keeps zero armature as its calculation
   default. `tm.PlanFeedback()` reads the checked-in `PD_KP` and `PD_KD` tuples in
   `tiago.py`: the chosen 20 rad/s, damping-ratio-1.4 simulation tune with armature.
-  `ARMATURE_KG_M2` is stored there too; enabling it in plant/predictor remains explicit.
+  `ARMATURE_KG_M2` is stored there too, the default armature of predictor, plant and compensation.
   Edit these literals manually. To calculate replacement values without writing files:
 
   ```python

@@ -85,11 +85,11 @@ def main(argv=None):
     args = arguments(__doc__, argv)
     task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
     plant = tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")
-    pieces = setup(args, plant, tm.VirtualTime.ideal())
+    pieces = setup(args, plant, tm.VirtualTime.like(tm.RealTime()))
     if isinstance(pieces, int):  # the robot's checks, or a cancelled execution
         return pieces
     plant, timing = pieces
-    record = run_experiment(plant, FIGURE8, task, tm.SampleKnot(), timing,
+    record = run_experiment(plant, FIGURE8, task, tm.PlanFeedback(), timing,
                             duration=args.duration, out=args.output)
     evaluate(record)
     print(json.dumps(record.metadata, indent=2, default=str))

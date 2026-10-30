@@ -67,11 +67,11 @@ def main(argv=None):
     handle_stop_signals()
     args = arguments(__doc__, argv)
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    pieces = setup(args, tm.SimConfig(substep=.003), tm.VirtualTime.ideal())
+    pieces = setup(args, tm.SimConfig(substep=.003), tm.VirtualTime.like(tm.RealTime()))
     if isinstance(pieces, int):  # the robot's checks, or a cancelled execution
         return pieces
     plant, timing = pieces
-    record = run_experiment(plant, tm.TIAGO, task, tm.SampleKnot(), timing,
+    record = run_experiment(plant, tm.TIAGO, task, tm.PlanFeedback(), timing,
                             duration=args.duration, out=args.output)
     evaluate(record)
     print(json.dumps(record.metadata, indent=2, default=str))

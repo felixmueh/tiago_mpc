@@ -158,8 +158,8 @@ def run_real_time(
     Time is the computer's monotonic clock (WallClock), and everything takes its real time:
     the solve, the plant, the tick callbacks. MpcProcess solves concurrently while the loop
     keeps ticking, and a plan is used at the first tick after it arrives; on the robot
-    a state's own age adds to the delay. RealTime(), update_period=.01; the solves took
-    3.5 and 4.5 ms:
+    a state's own age adds to the delay. RealTime(update_period=.01, compensation=None);
+    the solves took 3.5 and 4.5 ms:
 
       wall time (ms)  0   2   4   6   8   10  12  14  16  18
       command ticks   |   |   |   |   |   |   |   |   |   |
@@ -541,6 +541,12 @@ class VirtualTime:
         """A request every period, its plan in effect a period later."""
         return cls(command_period, period, period)
 
+    @classmethod
+    def like(cls, real: RealTime) -> VirtualTime:
+        """The simulation of real: its periods and compensation, each solve declared to last one
+        control period. VirtualTime.like(RealTime()) simulates the real MPC's defaults."""
+        return cls(real.command_period, real.update_period, real.update_period, real.compensation)
+
     def run(
         self,
         plant: PlantInterface,
@@ -558,10 +564,12 @@ class VirtualTime:
 
 @dataclass(frozen=True)
 class RealTime:
-    """run_real_time's timing."""
+    """run_real_time's timing. Its defaults are the real MPC's, which the simulation takes with
+    VirtualTime.like (Felix, 2026-10-30): 500 Hz commands, 50 Hz control updates and latency
+    compensation with a fixed forecast of one control period."""
     command_period: float = hz_to_s(500)
-    update_period: float = hz_to_s(100)
-    compensation: LatencyCompensation | None = None
+    update_period: float = hz_to_s(50)
+    compensation: LatencyCompensation | None = LatencyCompensation(latency_s=hz_to_s(50))
 
     def run(
         self,

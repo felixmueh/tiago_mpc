@@ -147,7 +147,7 @@ def arguments(
                         help="sim: seconds from a request to its plan, or 'measured' (default: the experiment's timing)")
     parser.add_argument("--command-period", type=float, help="seconds (default: the timing's, 0.002, 500 Hz)")
     parser.add_argument("--update-period", type=float,
-                        help="seconds between control updates (default: the timing's, 0.01; 0: back to back)")
+                        help="seconds between control updates (default: the timing's, 0.02; 0: back to back)")
     parser.add_argument("--duration", type=float, help="seconds: cap the task's own duration")
     parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/<task>/)")
     args = parser.parse_args(argv)

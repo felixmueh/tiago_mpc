@@ -25,7 +25,7 @@ from experiments.reach import Reach, evaluate
 import tiago_mpc as tm
 
 HERE = Path(__file__).resolve().parent
-PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # a declared latency (0): no wall-time budget
+PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # a declared latency: no wall-time budget
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class Random100Config:
     inputs_sha256: str
     params: tm.MpcParams = PARAMS
     plant: tm.SimConfig = tm.SimConfig(substep=.003)
-    timing: tm.VirtualTime = tm.VirtualTime.ideal()
+    timing: tm.VirtualTime = tm.VirtualTime.like(tm.RealTime())
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ def main(argv=None):
         try:
             mpc = tm.MpcProcess(config.params, binary)  # one process per case
             plant = replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:])
-            record = run_experiment(plant, mpc, Reach(case.target_m), tm.SampleKnot(), config.timing,
+            record = run_experiment(plant, mpc, Reach(case.target_m), tm.PlanFeedback(), config.timing,
                                     out=out / "runs" / case.name, case=case.name)
             evaluate(record)
         except Exception:  # an error is a result: run_experiment saved it; the other cases continue

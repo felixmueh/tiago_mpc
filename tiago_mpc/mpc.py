@@ -27,7 +27,7 @@ import numpy as np
 
 from tiago_mpc.dynamics import Friction, Tanh, passive_torque
 from tiago_mpc.interfaces import Plan, Prediction, State
-from tiago_mpc.tiago import GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
+from tiago_mpc.tiago import ARMATURE_KG_M2, GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
 from tiago_mpc.util import cache_root, digest
 
 
@@ -45,9 +45,9 @@ class AdmmLimits:
 
 @dataclass(frozen=True)
 class MpcParams:
-    """Everything the solver needs. The defaults are TIAGo reaching, loss-free."""
+    """Everything the solver needs. The defaults are TIAGo reaching, loss-free, with the supplied armature."""
     N: int = 32
-    dt_s: float = .01
+    dt_s: float = .03
     solver: SolverParams = SolverParams(
         max_sqp_iters=5, max_pcg_iters=120, pcg_tol=1e-3, mu=10., rho=.01,
         # ======================================================================
@@ -63,11 +63,11 @@ class MpcParams:
     admm: AdmmLimits = AdmmLimits()
     # Planning limits: joint box shrunk by the margin; speed and effort fractions of the raw limits.
     joint_margin_rad: float = .1
-    velocity_fraction: float = .8
+    velocity_fraction: float = .6
     effort_fraction: float = .85
     friction: Friction | None = None  # predictor friction; None is loss-free
     friction_law: Tanh = Tanh(.03)  # GATO's differentiable Coulomb evaluation
-    armature: tuple[float, ...] = (0.,) * 7  # reflected joint inertia, kg m²; never link inertia
+    armature: tuple[float, ...] = ARMATURE_KG_M2  # reflected joint inertia, kg m²; never link inertia
     # Wall time for a solve's SQP iterations (MPCController.step's budget_s), within
     # solver.max_sqp_iters; None: no time limit. run_experiment, when it builds the MPC, keeps
     # it only where the solve's wall time is the latency (RealTime, VirtualTime "measured").

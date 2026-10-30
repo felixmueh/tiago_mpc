@@ -22,7 +22,7 @@ from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
 from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, to_dict
-from tiago_mpc.tiago import GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
+from tiago_mpc.tiago import ARMATURE_KG_M2, GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
 LOSSES = Friction([1.] * 7, [.5] * 7)
@@ -84,10 +84,11 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
     assert (seen["N"], seen["dt"], seen["solver"]) == (params.N, params.dt_s, params.solver.asdict())
     assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
     assert seen["module"] == str(binary)
-    # Smooth predictor friction is registered, with its width, only when the params have one.
+    # Smooth predictor friction is registered, with its width, only when the params have one; the
+    # supplied armature is the default.
     friction = {} if params.friction is None else dict(joint_dynamics=True,
                                                          friction_width=params.friction_law.width_rad_s)
-    assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, **friction)
+    assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, joint_armature=ARMATURE_KG_M2, **friction)
 
 
 def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no_compile, tmp_path):
@@ -520,10 +521,11 @@ def test_a_spawned_process_reports_a_failed_load(tmp_path):
 def test_armature_has_its_own_model_identity_and_is_forwarded_without_axis_flips(monkeypatch, tmp_path):
     values = (.746, .882, .211, .648, .326, .343, .27)
     params = replace(TIAGO, armature=values)
+    assert params == TIAGO  # the supplied armature is the default
     model, path, signs, name = mpc._plant(params)
     np.testing.assert_array_equal(model.armature, values)
     assert signs[5] == -1 and values[5] > 0
-    assert name != mpc._plant(TIAGO)[3]
+    assert name != mpc._plant(replace(TIAGO, armature=(0.,) * 7))[3]
     assert mpc.plant_name(path, None, (0.,)*7) == mpc.plant_name(path)
     seen = {}
     monkeypatch.setattr(gato, 'register_robot', lambda name, path, **kw: seen.update(kw))

@@ -3,8 +3,10 @@
 Both package loops accept optional `LatencyCompensation`. It predicts the arm state
 at the intended start of the next plan while the previous plan continues running.
 MPC solves from that prediction, with the reference window starting at the same
-future time. Compensation defaults off and does not change the command rate,
-control-update schedule or MPC knot interval.
+future time. `RealTime()` turns it on by default, `LatencyCompensation(latency_s=.02)`:
+a fixed forecast of one 50 Hz control period, otherwise this class's defaults; the
+simulation takes it with `VirtualTime.like(RealTime())`. It does not change the
+command rate, control-update schedule or MPC knot interval.
 
 ```python
 from dataclasses import replace
@@ -63,8 +65,9 @@ one is waiting to activate.
 
 Propagation has its own friction coefficients, Coulomb law, armature and maximum
 Euler substep. It reuses the coupled dynamics step from the simulator, assigning
-armature to the Pinocchio model once. The defaults are loss-free with zero
-armature; enable the physical terms explicitly, as above. The optimizer's model
+armature to the Pinocchio model once. The defaults are loss-free with the supplied
+armature (`ARMATURE_KG_M2`), as are the predictor's and the simulated plant's; enable
+friction explicitly, as above. The optimizer's model
 and the real/simulated plant remain separately configured.
 
 From an older measurement to the request time, propagation replays the commands

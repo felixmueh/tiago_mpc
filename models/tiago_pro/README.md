@@ -27,8 +27,8 @@ The right-arm tuple is checked in as `ARMATURE_KG_M2` in
 `PD_KP` and `PD_KD` gains. The stored PD default is the 20 rad/s, damping-ratio-1.4
 simulation tune with armature; it is not hardware-qualified. `util.inertia_gains`
 returns literal float tuples to copy into these assignments, without writing them.
-`SimConfig.armature` and `MpcParams.armature` enable inertia explicitly, with zero
-defaults. Pinocchio receives its
+`MpcParams.armature`, `SimConfig.armature` and `LatencyCompensation.armature` default
+to it (2026-10-30); `(0.,) * 7` turns it off. Pinocchio receives its
 `model.armature` property; the predictor requires the local GRiD/GATO armature
 extensions. Nothing is added to the XML or folded into link inertias.
 

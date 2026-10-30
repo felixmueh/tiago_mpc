@@ -38,7 +38,7 @@ planned velocity, not the measured velocity.
 | `kp`, `kd` | Nm/rad; Nm s/rad | `tm.PlanFeedback(kp=seven_values, kd=seven_values)`; scalars also work |
 | Sliding `c_ff`, viscous `b_ff` | Nm; Nm s/rad | `Friction(coulomb_nm=..., viscous_nm_s_per_rad=...)` |
 | `w_ff` | rad/s | `FrictionFeedforward(..., evaluation=Tanh(w_ff))`; smooths reversals |
-| Reflected armature | kg m² | Explicit `MpcParams.armature`; the simulation also has `SimConfig.armature` |
+| Reflected armature | kg m² | `MpcParams.armature`, `SimConfig.armature`, `LatencyCompensation.armature`; all default to `ARMATURE_KG_M2` |
 | Command / control-update periods | s | `RealTime(command_period=.002, update_period=.02)` for 500/50 Hz requests |
 
 For a PD-plus-feedforward candidate use

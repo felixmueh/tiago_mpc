@@ -12,18 +12,19 @@ import pinocchio as pin
 
 from tiago_mpc.dynamics import CoulombLaw, Friction, StickSlip, plant_euler
 from tiago_mpc.interfaces import ControlLaw, Plan, Prediction, State
-from tiago_mpc.tiago import arm_urdf
+from tiago_mpc.tiago import ARMATURE_KG_M2, arm_urdf
 
 _TOLERANCE = 1e-9
 
 
 @dataclass(frozen=True)
 class LatencyCompensation:
-    """Prediction settings; enable explicitly on RealTime or VirtualTime.
+    """Prediction settings, on by default in RealTime() (and VirtualTime.like(RealTime())).
 
     latency_s is a fixed forecast, or 'previous': the last completed request-to-result
     delay, bootstrapped by initial_latency_s. It never uses the current solve's duration.
-    The physical propagation model is independent of the MPC and plant settings.
+    The physical propagation model is independent of the MPC and plant settings; by default
+    loss-free with the supplied armature, as they are.
     Command publication is modeled as immediate; actuator/network delays are not known.
     Future feedback-dependent commands assume fresh predicted feedback at each tick;
     the current command always uses the actual measured feedback.
@@ -32,7 +33,7 @@ class LatencyCompensation:
     initial_latency_s: float = .005
     friction: Friction | None = None
     friction_law: CoulombLaw = StickSlip()
-    armature: tuple[float, ...] = (0.,) * 7
+    armature: tuple[float, ...] = ARMATURE_KG_M2
     substep: float = .001
 
     def __post_init__(self) -> None:

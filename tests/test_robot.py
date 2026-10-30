@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from experiments import common, figure8 as f8, reach as rc
+from test_experiments import Mpc as HoldingMpc
 from test_loops import Mpc, Task
 import tiago_mpc as tm
 from tiago_mpc import clock as clock_module, robot
@@ -329,7 +330,7 @@ def test_confirmed_execution_runs_on_the_robot_and_records_the_handback(rig, mon
     closed = []
 
     def compile(params):
-        mpc = Mpc(N=32)  # the fake's 10 ms knots, as TIAGO's and FIGURE8's
+        mpc = HoldingMpc(params)  # gravity-holding plans: the mains' PlanFeedback and its forecast stay at rest
         mpc.params, mpc.close = params, lambda: closed.append("mpc")
         return mpc
 

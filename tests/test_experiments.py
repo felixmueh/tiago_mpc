@@ -15,6 +15,7 @@ from experiments.latency_compensation import Compensated
 from tiago_mpc import record as rec
 from tiago_mpc.laws import SampleKnot
 from tiago_mpc.loops import STOP, RealTime, VirtualTime
+from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, load_run
 from tiago_mpc.sim import SimConfig
@@ -81,8 +82,8 @@ class Mpc:
 def test_experiment_records_its_run_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05)
-        record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), task, SampleKnot(),
-                                       VirtualTime(.01, .01, .01), out=tmp_path / name)
+        record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, dt_s=.01)), task,
+                                       SampleKnot(), VirtualTime(.01, .01, .01), out=tmp_path / name)
         rc.evaluate(record)
     else:
         task = f8.Figure8(period_s=.05)
@@ -205,8 +206,9 @@ def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
     # The faulting plan is saved, the last row, though no tick's plan index points at it.
     np.testing.assert_array_equal(run.ticks["plan"], [-1])
     assert len(run.plans["t0"]) == 1 and run.plans["update_t"][0] == 0. and run.plans["torques"][0, -1, 6] > 26.
-    record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4)), rc.Reach(), SampleKnot(),
-                                   VirtualTime(.01, .01, .05), out=tmp_path / "late")  # a 30 ms plan, 50 ms late
+    # a 30 ms plan, 50 ms late
+    record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, dt_s=.01)), rc.Reach(),
+                                   SampleKnot(), VirtualTime(.01, .01, .05), out=tmp_path / "late")
     assert record.metadata["status"] == "fault" and record.metadata["reason"] == "lease_expired"
     assert (record.out / "replay.npz").exists() and len(record.ticks["t"]) == 6
 
@@ -307,10 +309,13 @@ def test_setup_replaces_the_options_in_an_experiments_own_timing():
     assert common.setup(args, plant, Compensated()) == (plant, Compensated(.03, .004))
 
 
+FORECAST = LatencyCompensation(latency_s=.02)  # the defaults: one 50 Hz control period
+
+
 @pytest.mark.parametrize("argv, solver, timing, budget", [
-    ([], "Mpc", VirtualTime.ideal(), None),
-    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTime(.01, .01, .005), None),
-    (["--solve-latency", "measured"], "Mpc", VirtualTime(.002, .01, "measured"), .01),
+    ([], "Mpc", VirtualTime(.002, .02, .02, FORECAST), None),
+    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTime(.01, .02, .005, FORECAST), None),
+    (["--solve-latency", "measured"], "Mpc", VirtualTime(.002, .02, "measured", FORECAST), .01),
     (["--plant", "rehearsal", "--update-period", "0"], "MpcProcess", RealTime(.002, 0.), .01)])
 def test_the_main_runs_on_the_mpc_run_experiment_builds(monkeypatch, tmp_path, argv, solver, timing, budget):
     """reach's main end to end on a fake MPC: run_experiment builds it for the timing, with

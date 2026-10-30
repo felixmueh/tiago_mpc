@@ -101,11 +101,16 @@ of `Checks` in `robot.py`.
 
 ## Latency
 
-Optional [latency compensation](latency-compensation.md) predicts a separate MPC
-initial state for a future plan origin. Actual feedback remains measured, including
-for PD. A fixed estimate or a previous completed solve's delay sets the forecast;
-the current solve's duration is unknown beforehand. Early results wait for their
-origin; late results retain that origin and run at their actual age. The original
+[Latency compensation](latency-compensation.md), on by default in `RealTime()`,
+predicts a separate MPC initial state for a future plan origin. Actual feedback
+remains measured, including for PD. A fixed estimate (the default, one 20 ms control
+period) or a previous completed solve's delay sets the forecast; the current solve's
+duration is unknown beforehand. Early results wait for their origin; late results
+retain that origin and run at their actual age. On wall time the origin is the first
+command tick at or after the request plus the forecast, and the request goes out after
+the tick's work, so the default 20 ms forecast starts each plan 22 ms after its control
+update, which therefore come every 22 ms rather than 20 (a rehearsal, 2026-10-30);
+the simulation's `VirtualTime.like(RealTime())` keeps exactly 20 ms. The original
 measurement still bounds the lease to 100 ms. This adds no physical qualification
 or changes to the robot's startup and safety checks.
 

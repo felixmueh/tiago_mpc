@@ -23,7 +23,7 @@ from gato.common import rk4
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.dynamics import CoulombLaw, Friction, StickSlip, plant_euler, plant_rk4
 from tiago_mpc.interfaces import Event, State
-from tiago_mpc.tiago import Q_START, arm_urdf
+from tiago_mpc.tiago import ARMATURE_KG_M2, Q_START, arm_urdf
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class SimConfig:
     lists and arrays are converted), by default the comfortable pose at rest; substep:
     the longest integration step; friction: the plant's losses (None: loss-free);
     friction_law: their Coulomb evaluation or coupled stick/slip integration;
-    armature: constant reflected joint inertia, passed to Pinocchio once;
+    armature: constant reflected joint inertia, passed to Pinocchio once, by default the supplied one;
     integrator: 'rk4' or 'euler' (the module docstring); sync_real_time: pace a
     virtual-time run for watching (SimPlant). SimPlant checks the values."""
     q: tuple[float, ...] = tuple(map(float, Q_START))
@@ -42,7 +42,7 @@ class SimConfig:
     friction_law: CoulombLaw = StickSlip()
     integrator: Literal["rk4", "euler"] = "rk4"
     sync_real_time: bool = False
-    armature: tuple[float, ...] = (0.,) * 7  # reflected joint inertia, kg m²
+    armature: tuple[float, ...] = ARMATURE_KG_M2  # reflected joint inertia, kg m²
 
     def __post_init__(self):
         object.__setattr__(self, "q", tuple(map(float, self.q)))

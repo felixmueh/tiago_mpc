@@ -213,6 +213,18 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Friction and GATO
 
+- **2026-10-30: the supplied armature is on by default** (Felix). `ARMATURE_KG_M2` is
+  the default of the predictor (`MpcParams.armature`), the simulated plant
+  (`SimConfig.armature`) and the latency compensation's propagation model
+  (`LatencyCompensation.armature`); `(0.,) * 7` turns it off. This supersedes keeping
+  armature disabled and explicit (2026-10-23, below; the README since 2026-10-28). The
+  values are still supplied, not identified. Reason: the stored PD gains
+  (`PlanFeedback()`, now the default law) are tuned with it; on the zero-armature models
+  kd·T/I at 2 ms command ticks was 2 on joints 5 and 6 and 39 on joint 7, so the
+  sampled PD and the compensation's forecast diverged at the wrist, and every default
+  reach faulted. Results with armature come from another model than earlier
+  armature-free runs; compare them only with that said.
+
 - **2026-10-28: model-side armature and PD values; gain calculation is a utility**
   (Felix; implemented in the friction worktree after WIP `f66172f`). The literal
   `ARMATURE_KG_M2`, `PD_KP` and `PD_KD` tuples are manually editable in `tiago.py`.
@@ -293,7 +305,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   semi-implicit Euler with implicit damping and a default 1 ms maximum step;
   Coulomb is either sign(v_old), or a coupled constraint solve allowing sticking
   at zero (the proposed default). No MPC tuning or predictor changes. Reaching
-  stays loss-free by default; armature stays disabled.
+  stays loss-free by default; armature stays disabled (on by default since 2026-10-30).
 - **2026-10-23: the plant's Coulomb law and integrator are choices** (Felix):
   `coulomb_law` is `"tanh"` (with the `Friction`'s width, explicit in the old
   velocity), `"sign"` or `"constraint"` (default); `integrator` is `"rk4"`
@@ -373,9 +385,25 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   Euler step with explicit independent friction/law/armature and actual sent-command
   history for old measurements. Early replies wait; late replies retain their
   predicted origin. `Plan.measured_t` preserves the measurement-age lease while
-  `Plan.t0` defines trajectory time. Compensation defaults off; no solver,
+  `Plan.t0` defines trajectory time. Compensation defaults off (on since
+  2026-10-30, the next entry); no solver,
   saturation-policy or visualizer change in this pass. See
   [latency compensation](latency-compensation.md).
+
+- **2026-10-30: new defaults for the real MPC, which the simulation takes from it**
+  (Felix). The real MPC's timing, `RealTime()`: 500 Hz commands, control updates at
+  50 Hz (20 ms) and latency compensation on, `LatencyCompensation(latency_s=.02)`, a
+  fixed forecast of one control period. The simulation's timing is
+  `VirtualTime.like(RealTime())`: the same periods and compensation, each solve
+  declared, not measured, to last one control period. `MpcParams`: 30 ms knots
+  (`dt_s`, N stays 32: a 0.93 s horizon) and planning speeds at 60 % of the raw limits
+  (`velocity_fraction`). The mains (reach, figure8, random100) use `PlanFeedback()`,
+  the planned torque as feedforward plus PD about the plan, with its stored gains, which
+  need the supplied armature, now on by default (Friction and GATO). Unchanged: the cost weights
+  4/8, `FIGURE8`'s explicit 10 ms knots, the presets `ideal`, `constant_latency`,
+  `constant_rate` and `as_fast_as_possible`, and the bare loops' parameter defaults
+  (`law=SampleKnot()`, `compensation=None`). random100 runs from this date are a new
+  protocol ([its README](../experiments/random100/README.md)).
 
 - **2026-10-22: plans are sampled by knot.** The execution controller commands
   the torque of knot k = floor((t − t₀)/dt) from the time t₀ of the state the
@@ -441,7 +469,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   GATO's ADMM defaults except `rho_u` 5e-4 for reaching (ratio 5 to its control
   cost; GATO's 1e-5 made 46 of random100's first plans exceed the raw effort
   limit), the figure eight keeps 1e-5; default command period 2 ms, control
-  updates at dt. `max_sqp_time_s` 0.01 s caps a solve on the wall clock;
+  updates at dt (at 50 Hz since 2026-10-30). `max_sqp_time_s` 0.01 s caps a solve on the wall clock;
   simulations set None (a wall-time budget is wrong on a simulated clock).
   `run` warns once when a plan is first commanded from its second knot; the
   remedies, feedback around the plan or latency compensation, are named there.

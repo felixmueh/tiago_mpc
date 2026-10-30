@@ -560,8 +560,11 @@ def test_the_timings_run_their_loops_with_their_settings(wall):
     assert VirtualTime.constant_latency() == VirtualTime(.002, .01, .05)
     assert VirtualTime.constant_latency(.02, update_period=.02) == VirtualTime(.002, .02, .02)
     assert VirtualTime.as_fast_as_possible() == VirtualTime(.002, 0., "measured")
-    assert VirtualTime.constant_rate() == VirtualTime(.002, .01, .01) and RealTime() == RealTime(.002, .01)
-    for timing, clock in ((VirtualTime(.01, .01, .025), "VirtualClock"), (RealTime(.01, .01), "WallClock")):
+    assert VirtualTime.constant_rate() == VirtualTime(.002, .01, .01)
+    forecast = LatencyCompensation(latency_s=.02)  # the real MPC's defaults, and their simulation
+    assert RealTime() == RealTime(.002, .02, forecast)
+    assert VirtualTime.like(RealTime()) == VirtualTime(.002, .02, .02, forecast)
+    for timing, clock in ((VirtualTime(.01, .01, .025), "VirtualClock"), (RealTime(.01, .01, None), "WallClock")):
         plant, ticks = Plant(), []
         outcome = timing.run(plant, Mpc(delay=2), Task(), HoldFirst(), [ticks.append], duration=.08)
         assert outcome.status == "timeout" and len(ticks) == 9 and type(plant.clock).__name__ == clock
