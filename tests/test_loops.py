@@ -1,6 +1,7 @@
 """The two loops on a fake plant and a fake Mpc (CPU only); run_real_time on faked wall time."""
 from dataclasses import dataclass, replace
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -10,6 +11,7 @@ from tiago_mpc import loops
 from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
 from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO
+from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.loops import (STOP, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
                              run_real_time, run_virtual_time)
 from tiago_mpc.interfaces import Plan, Prediction, State
@@ -170,6 +172,39 @@ def test_valid_compensation_choices_still_execute(loop, mode, wall):
     outcome = loop(plant, mpc, Task(), law, **settings)
     assert outcome.status == 'timeout' and plant.applied
     assert plant.calls == ['start', 'stop'] and mpc.requests
+
+
+@pytest.mark.parametrize("loop", [run_real_time, run_virtual_time])
+@pytest.mark.parametrize("feedforward", [False, True])
+def test_plan_feedback_without_latency_compensation_warns(loop, feedforward, wall):
+    mpc = Mpc(wall=.004)
+    mpc.params = TIAGO
+    law = FrictionFeedforward(Friction((1.,)*7, (.5,)*7), PlanFeedback()) if feedforward else PlanFeedback()
+    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    if loop is run_virtual_time:
+        settings['solve_latency_s'] = .004
+    with pytest.warns(RuntimeWarning, match="PlanFeedback without latency compensation"):
+        outcome = loop(Plant(), mpc, Task(), law, **settings)
+    assert outcome.status == 'timeout'  # a warning, not a rejection
+
+
+@pytest.mark.parametrize("loop", [run_real_time, run_virtual_time])
+@pytest.mark.parametrize("case", ["sample_knot", "feedforward", "compensated_pd", "compensated_both"])
+def test_no_feedback_warning_without_plan_feedback_or_with_compensation(loop, case, wall):
+    mpc = Mpc(wall=.004)
+    mpc.params = TIAGO
+    friction = Friction((1.,)*7, (.5,)*7)
+    law = {"sample_knot": SampleKnot(), "feedforward": FrictionFeedforward(friction),
+           "compensated_pd": PlanFeedback(), "compensated_both": FrictionFeedforward(friction, PlanFeedback())}[case]
+    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    if loop is run_virtual_time:
+        settings['solve_latency_s'] = .004
+    if case.startswith("compensated"):
+        settings['compensation'] = LatencyCompensation(initial_latency_s=.004)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        outcome = loop(Plant(), mpc, Task(), law, **settings)
+    assert outcome.status == 'timeout'
 
 
 @pytest.mark.parametrize("loop", [run_real_time, run_virtual_time])

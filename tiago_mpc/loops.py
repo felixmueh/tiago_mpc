@@ -24,11 +24,12 @@ import gc
 import math
 import threading
 from typing import Literal
+import warnings
 
 import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
-from tiago_mpc.laws import FrictionFeedforward, SampleKnot
+from tiago_mpc.laws import FrictionFeedforward, PlanFeedback, SampleKnot
 from tiago_mpc.interfaces import (Callback, ControlLaw, Event, MpcInterface, Plan, PlantInterface, TaskInterface,
                                   Tick)
 from tiago_mpc.prediction import LatencyCompensation, _Predictor, _tick_at_or_after
@@ -113,17 +114,23 @@ def command_fault(command: np.ndarray) -> str | None:
     return "effort_limit" if np.any(np.abs(command) > effort) else None
 
 
-def _check_compensation(mpc: MpcInterface, law: ControlLaw) -> None:
-    """Reject duplicate compensation in the built-in law composition before startup.
-
-    Plant/propagation losses describe resistance and are independent of this
-    actuator check. Arbitrary user callables remain the caller's responsibility.
-    """
+def _check_setup(mpc: MpcInterface, law: ControlLaw, compensation: LatencyCompensation | None) -> None:
+    """Check the run's configuration before startup: raise on invalid configurations, warn
+    about known problems. Covers the built-in law composition; arbitrary user callables
+    remain the caller's responsibility."""
+    base = law
     if isinstance(law, FrictionFeedforward):
         if isinstance(law.base_law, FrictionFeedforward):
             raise ValueError("Friction feedforward cannot wrap another friction feedforward law")
         if mpc.params.friction is not None:
             raise ValueError("Friction feedforward requires predictor friction=None to avoid double compensation")
+        base = law.base_law
+    if isinstance(base, PlanFeedback) and compensation is None:
+        warnings.warn("PlanFeedback without latency compensation: when the first plan takes effect after its "
+                      "solve latency, the arm is still held, and the D term can push the command beyond the "
+                      "effort limit at the start of a fast motion. Pass compensation=LatencyCompensation(...) "
+                      "with an initial_latency_s that covers the first solve (docs/latency-compensation.md).",
+                      RuntimeWarning, stacklevel=3)
 
 
 def _late_plan(plan: Plan, t: float, index: int) -> Event:
@@ -198,7 +205,7 @@ def run_real_time(
 
     if duration > 60 * MAX_RUNTIME_MIN:
         raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
-    _check_compensation(mpc, law)
+    _check_setup(mpc, law, compensation)
     clock, due = WallClock(), Schedule(update_period)
     plan, solving, start, deadline = None, False, None, None
     predictor = None if compensation is None else _Predictor(compensation, LEASE_S, command_fault)
@@ -395,7 +402,7 @@ def run_virtual_time(
                          f"not {solve_latency_s!r}")
     if duration > 60 * MAX_RUNTIME_MIN:
         raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
-    _check_compensation(mpc, law)
+    _check_setup(mpc, law, compensation)
     clock, due = VirtualClock(), Schedule(update_period)
     plan, pending, available, start = None, None, 0., None  # pending: the solved plan
     predictor = None if compensation is None else _Predictor(compensation, LEASE_S, command_fault)

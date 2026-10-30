@@ -347,6 +347,14 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Execution
 
+- **2026-10-30: warn about PD feedback without latency compensation** (Felix).
+  The loops' setup check, renamed from `_check_compensation` to `_check_setup`,
+  also warns (`RuntimeWarning`, no rejection) when `PlanFeedback`, alone or under
+  `FrictionFeedforward`, runs without `LatencyCompensation`. Reason: simulated far
+  reaches exceeded the raw effort limit at the first plan's takeover from the held
+  arm, the D term reacting to the plan's velocity after the first solve's latency
+  ([latency compensation](latency-compensation.md)).
+
 - **2026-10-28: simplify prediction inputs and keep execution data off plans**
   (Felix). `request` and `_solve` take one `State | Prediction`; a prediction
   includes its original `measured_t`, while its `t` denotes the future initial

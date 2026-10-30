@@ -81,6 +81,16 @@ one adds actuator torque and the other models opposing resistance. The existing
 guard still rejects external FF combined with optimizer friction, or nested FF.
 This change adds no effort saturation or velocity-limiting policy.
 
+Both loops warn when `PlanFeedback` runs without compensation. Without it, the
+first plan starts at its state's time while the arm is still held, so when it
+takes effect after the first solve's latency L, its velocity is already about
+a₀·L ahead of the arm, where a₀ is the planned initial acceleration. The D term
+adds about kd·a₀·L to the first knot's torque, which a far reach plans at the
+effort bound. In simulated far reaches (2026-10-30) this exceeded the raw effort
+limit, while compensation whose `initial_latency_s` covered the first solve
+removed the excess. A forecast shorter than the actual first solve leaves the
+part due to the shortfall.
+
 ## Timestamps, leases and records
 
 The measured `State` remains unchanged. `Mpc.request` and `MpcProcess.request`

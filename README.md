@@ -361,8 +361,13 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
 
   Both package loops reject external friction feedforward with predictor friction
   enabled, or nested external feedforward, before starting the plant. Physical
-  plant losses do not count as actuator compensation. The check covers the built-in
-  composition; custom callable laws remain the caller's responsibility.
+  plant losses do not count as actuator compensation. They also warn
+  (`RuntimeWarning`) when `PlanFeedback`, alone or under feedforward, runs without
+  [latency compensation](docs/latency-compensation.md): the arm is held until the
+  first plan takes effect, so the D term sees the plan's velocity after the first
+  solve's latency as an error and can push the command beyond the effort limit at
+  the start of a fast motion. The check covers the built-in composition; custom
+  callable laws remain the caller's responsibility.
 - **Examples, two remedies for solve latency:** `experiments/plan_feedback.py` uses
   the package PD law, and `experiments/latency_compensation.py` provides its own loop
   (solve from the predicted state) behind the timing `Compensated`;
