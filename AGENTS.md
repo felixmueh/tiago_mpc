@@ -63,6 +63,14 @@ the guide documents partial patches, version checks and completion status.
   for older saved runs or legacy defaults. The one exception: if the recording format changes,
   port the recordings of the original real-world TIAGo tests to the new format. Remove
   compatibility code that remains.
+- Docstrings and comments (Felix, 2026-11-03):
+  - The first line says what the object is or does, in this project's terms, in one sentence.
+  - Then only what is not obvious: rules a caller must know, and why.
+  - Field meanings go in comments next to the fields, not in a list in the docstring.
+  - A deliberate omission gets one sentence with its reason.
+  - Full sentences, at most one reference per sentence, placed at its end; no chains of
+    parentheses.
+  - A measurement or date only where it is the reason for a value, written at that value.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)
 

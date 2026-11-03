@@ -228,6 +228,43 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Friction and GATO
 
+- **2026-11-02: GATO 0.1.7, and the solver settings follow GATO's defaults** (Felix).
+  - **GATO 0.1.7 and grid-rbd 0.6.0**, with the armature commits rebased onto them
+    (`experiment/tiago-armature-017`, `experiment/tiago-armature-060`). On `pcg`, every
+    run of the default reach, ten random100 pairs and the figure eight is bitwise equal
+    to 0.1.5 (GTX 1070); 0.1.7 fixes `bdsv_factor`, which on 0.1.5 reached no target.
+  - **Every setting with a GATO default follows it** unless a preset sets a value: the
+    unset `SolverParams` fields, and `None` in `AdmmLimits` and the controller settings
+    `warm_start`, `reset_rho_each_step`, `admm_linsys` (GATO's choice by horizon: `pcg`
+    at N32, not `auto`), `admm_threshold`, `linsys`, `bdsv_threshold` (both unused under
+    ADMM) and `reseed_threshold`. Only set values reach GATO. Reason: during
+    development, take GATO's improvements without copying values.
+  - **Records hold what GATO resolved and ran, not our inputs** (Felix, 2026-11-03):
+    the MPC's `params` are read back from GATO once the controller is built
+    (`MpcParams.resolved`: the solver's `SolverParams`, the controller's attributes, and
+    the ADMM settings the solver runs: its `admm_*` properties and the limit rows'
+    penalties; `BSQP.admm_iters` is our GATO commit for an upstream PR), so a
+    recorded run re-runs the same after a GATO update. GATO's shared ADMM `rho`, which
+    every box overrides, is not recorded. Study files keep the study's definition, the
+    inputs; the records hold what ran. `tests/test_record.py`
+    checks that every field of every recorded configuration class (the package's and the
+    experiments') survives the record.
+  - **Build first, record once** (Felix, 2026-11-03): `run_experiment` builds the MPC
+    before it creates the record, which takes the MPC's resolved params; nothing is
+    overwritten later. A failed compile or model check is a setup error that leaves no run
+    directory, which reverses the saved compile error of the `run_experiment` entry
+    below; a failed plant build is still a saved error.
+  - **Nothing changes silently:** `tests/gato_defaults.json` holds GATO's defaults and
+    `tests/test_gato_defaults.py` fails when they change, naming each changed setting
+    as followed or overridden; `python tests/test_gato_defaults.py` rewrites it. The
+    same test lists the deviations of `TIAGO` and `FIGURE8` (the set values) and fails
+    on an unlisted one.
+  - **Pending:** validate the deviations (SQP iterations, PCG budget, cost weights,
+    `rho_u`, the figure eight's `mu`) against all of GATO's defaults.
+  - `admm_linsys="auto"` was compared on 0.1.7 (GTX 1070, 1 November): the same
+    arrivals as `pcg`, a figure-eight RMSE 0.1 mm higher, and a longer solve-time
+    tail (p99 10.1 against 8.2 ms with the 10 ms budget).
+
 - **2026-10-30: the armature is on by default** (Felix). `ARMATURE_KG_M2` is
   the default of the predictor (`MpcParams.armature`), the simulated plant
   (`SimConfig.armature`) and the latency compensation's propagation model

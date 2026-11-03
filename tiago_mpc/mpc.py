@@ -10,7 +10,7 @@ params and close().
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import importlib.metadata
 import json
 import math
@@ -33,34 +33,76 @@ from tiago_mpc.util import cache_root, digest
 
 @dataclass(frozen=True)
 class AdmmLimits:
-    """MPCController limits_kw for the ADMM limit rows; the defaults are GATO's
-    (MPCController.LIMIT_DEFAULTS) except rho_u: at most iters inner iterations per SQP iteration."""
-    rho: float = .01
-    iters: int = 10
-    eps_rel: float = 1e-2
-    rho_q: float = .1
-    rho_qd: float = .03
-    rho_u: float = 5e-4  # GATO's 1e-5 fits its control cost 2e-6; 5e-4 keeps that ratio of 5 to TIAGO's 1e-4
+    """Settings of GATO's ADMM limit rows, which keep the plan within the joint limits.
+
+    None follows GATO's default. GATO's shared rho is left out because every box sets its own,
+    and its torque-box options u_scale and u_clip because effort_fraction sets the torque box."""
+    iters: int | None = None          # inner iterations per SQP iteration, at most
+    eps_abs: float | None = None      # residual exit: absolute tolerance
+    eps_rel: float | None = None      # residual exit: relative tolerance
+    check_every: int | None = None    # inner iterations between exit checks
+    rho_q: float | None = None        # penalty of the joint position rows
+    rho_qd: float | None = None       # penalty of the joint velocity rows
+    rho_u: float | None = None        # penalty of the torque rows
+
+    @classmethod
+    def resolved(cls, solver) -> AdmmLimits:
+        """The settings GATO's solver runs, read from the solver itself.
+
+        The penalties come back in float32. Each is written as its shortest decimal, which
+        gives the same float32 again when a record is replayed."""
+        from gato.rowkinds import KIND_BOX_Q, KIND_BOX_QD, KIND_BOX_U
+
+        rho = {int(group["kind"]): group["rho"] for group in solver.get_row_groups()}
+        boxes = dict(rho_q=KIND_BOX_Q, rho_qd=KIND_BOX_QD, rho_u=KIND_BOX_U)
+        if not set(boxes.values()) <= set(rho):
+            raise RuntimeError("the solver has no joint limit rows")
+        return cls(iters=solver.admm_iters, eps_abs=solver.admm_eps_abs, eps_rel=solver.admm_eps_rel,
+                   check_every=solver.admm_check_every,
+                   **{name: float(str(np.float32(rho[kind]))) for name, kind in boxes.items()})
+
+
+# The MpcParams fields that are MPCController settings: passed only when set, and read back
+# from the controller once it is built.
+CONTROLLER_SETTINGS = ("warm_start", "reset_rho_each_step", "admm_linsys", "admm_threshold", "linsys",
+                       "bdsv_threshold", "reseed_threshold")
 
 
 @dataclass(frozen=True)
 class MpcParams:
-    """Everything the solver needs. The defaults are TIAGo reaching, loss-free, with the fitted armature."""
+    """Everything the solver needs. The defaults are TIAGo reaching, loss-free, with the fitted armature.
+
+    A setting that GATO has a default for follows it unless a value is set here: a
+    SolverParams field that is not given, or None in AdmmLimits or a controller setting. A
+    set value deviates from GATO, and tests/test_gato_defaults.py lists the deviations of
+    TIAGO and FIGURE8. An MPC's params, and so a record's, are the values GATO resolved and
+    ran (see resolved)."""
     N: int = 32
     dt_s: float = .03
     solver: SolverParams = SolverParams(
-        max_sqp_iters=5, max_pcg_iters=120, pcg_tol=1e-3, mu=10., rho=.01,
+        max_sqp_iters=5, max_pcg_iters=120, pcg_tol=1e-3,
         # ======================================================================
         # TODO(cost menu): GATO 0.1.5's cost menu (gato.cost_menu) will replace these cost fields
         # (docs/decisions.md, 2026-10-24). Then q_cost/N_cost are frame_pos weights (running, knot N-1),
         # qd_cost the state term's velocity weight, u_cost the input weight; *_lim_cost stays here.
         # ======================================================================
         q_cost=4., qd_cost=.05, u_cost=1e-4, N_cost=8.,
-        q_lim_cost=0., vel_lim_cost=0., ctrl_lim_cost=0.)
-    warm_start: str = "shift"
-    reset_rho_each_step: bool = True
-    admm_linsys: str = "pcg"
-    admm: AdmmLimits = AdmmLimits()
+        q_lim_cost=0.)  # limits through ADMM only
+    # Controller settings (CONTROLLER_SETTINGS); None follows GATO.
+    warm_start: str | None = None             # "shift" or "hold"
+    reset_rho_each_step: bool | None = None
+    # The ADMM inner loop's linear solver: "pcg", "bdsv_factor" or "auto". Under "auto", a solve
+    # uses bdsv_factor when its pred_err (measured minus predicted state) exceeds admm_threshold
+    # or the previous solve hit the PCG cap, and pcg otherwise. GATO's default picks by N.
+    admm_linsys: str | None = None
+    admm_threshold: float | None = None
+    # The SQP solve's linear solver and its threshold under "auto". The solve does not use them
+    # while ADMM limit rows are active; they are recorded for completeness.
+    linsys: str | None = None
+    bdsv_threshold: float | None = None
+    reseed_threshold: float | None = None     # pred_err above which GATO re-seeds the warm start
+    # GATO's rho_u suits its own control cost; 5e-4 is five times TIAGO's u_cost of 1e-4.
+    admm: AdmmLimits = AdmmLimits(rho_u=5e-4)
     # Planning limits: joint box shrunk by the margin; speed and effort fractions of the raw limits.
     joint_margin_rad: float = .1
     velocity_fraction: float = .6
@@ -91,6 +133,14 @@ class MpcParams:
             raise ValueError("max_sqp_time_s must be finite and positive, or None")
         if not isinstance(self.friction_law, Tanh):
             raise ValueError("GATO predicts Tanh Coulomb friction only")
+
+    def resolved(self, controller) -> MpcParams:
+        """These params with the values GATO resolved and runs, read from controller.
+
+        The fields GATO does not know, such as N and the friction, stay as they are. The
+        controller is load_controller's."""
+        return replace(self, solver=controller.solver.params, admm=AdmmLimits.resolved(controller.solver),
+                       **{name: getattr(controller, name) for name in CONTROLLER_SETTINGS})
 
 
 TIAGO = MpcParams()
@@ -230,10 +280,12 @@ def load_controller(params: MpcParams, binary: Path | None):
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,
                        params=params.solver)
     check_model(solver, model, model.createData(), params.friction, params.friction_law)
+    given = {name: getattr(params, name) for name in CONTROLLER_SETTINGS if getattr(params, name) is not None}
     controller = gato.MPCController(
-        solver, limits="admm", linsys="pcg", warm_start=params.warm_start,
-        reset_rho_each_step=params.reset_rho_each_step, admm_linsys=params.admm_linsys,
-        limits_kw=asdict(params.admm))
+        solver, limits="admm", limits_kw={key: value for key, value in asdict(params.admm).items()
+                                          if value is not None}, **given)
+    if controller.limits != "admm":
+        raise RuntimeError(f"GATO installed the {controller.limits!r} limit rows, not ADMM")
     set_bounds(solver, model, params)
     return controller
 
@@ -326,7 +378,8 @@ class Mpc:
 
     def __init__(self, params: MpcParams, binary: Path | None):
         self.controller = load_controller(params, binary)
-        self.params, self.N, self.dt = params, params.N, params.dt_s
+        self.params = params.resolved(self.controller)
+        self.N, self.dt = params.N, params.dt_s
         self.step: Any = None
         self._reset = False  # the controller has been reset from a state
         self._previous_t: float | None = None
@@ -404,7 +457,7 @@ class Mpc:
             zero_pcg_rows=int(np.sum(np.asarray(raw.pcg_iters) == 0)),
             admm=int(np.sum(raw.admm_iters)) if raw.admm_iters is not None else 0,
             admm_linsys=int(np.sum(raw.admm_linsys_iters)) if raw.admm_linsys_iters is not None else 0,
-            admm_linsys_mode=step.admm_linsys,
+            admm_linsys_mode=step.admm_linsys, pred_err=float(step.pred_err),
             row_viol=None if step.row_viol is None else np.array(step.row_viol))
         measured_t = state.measured_t if isinstance(state, Prediction) else state.t
         return Plan(state.t, self.dt, knots[:, :14], knots[:-1, 14:], stats, measured_t=measured_t)
@@ -422,14 +475,14 @@ class MpcProcess:
     """
 
     def __init__(self, params: MpcParams, binary: Path | None):
-        self.params, self.N, self.dt = params, params.N, params.dt_s
+        self.params, self.N, self.dt = params, params.N, params.dt_s  # resolved once loaded
         self._requests, self._replies = _SPAWN.Queue(), _SPAWN.Queue()
         self._process = _SPAWN.Process(target=_serve, args=(params, binary, self._requests, self._replies),
                                        daemon=True)
         self._process.start()
         self._pending: tuple[float, float] | None = None  # predicted origin and measured time
         try:
-            self._reply(block=True)  # ready
+            self.params = self._reply(block=True)  # ready: the resolved params
         except BaseException:
             self.close()
             raise
@@ -495,13 +548,13 @@ class MpcProcess:
 
 
 def _serve(params, binary, requests, replies):
-    """The process: load, reply None when ready (or the error), then one reply per
+    """The process: load, reply the resolved params when ready (or the error), then one reply per
     request: a plan, or None after the warm-up. It ignores SIGINT: Ctrl-C reaches the whole
     foreground process group, and the parent stops the run and closes this process."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         mpc = Mpc(params, binary)
-        replies.put(None)
+        replies.put(mpc.params)
         while (item := requests.get()) is not None:
             method, *args = item
             replies.put(getattr(mpc, method)(*args))

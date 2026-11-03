@@ -1,19 +1,26 @@
 """The run format (tiago_mpc/record.py): configurations to and from dicts, and a run written
 by RunRecord and read back by load_run (CPU only)."""
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass
 import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from experiments.figure8 import Figure8
+from experiments.friction_compensation import SampledSimConfig
+from experiments.latency_compensation import Compensated
+from experiments.random100.run import Case, Random100Config, Random100Study
+from experiments.reach import Reach
+from gato import SolverParams
 from test_loops import Mpc, Plant, Task
-from tiago_mpc.dynamics import Tanh
-from tiago_mpc.laws import SampleKnot
-from tiago_mpc.loops import VirtualTime, run_virtual_time
-from tiago_mpc.mpc import TIAGO
-from tiago_mpc.record import FORMAT, Event, RunRecord, from_dict, load_run, to_dict
-from tiago_mpc.robot import RobotConfig
+from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
+from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
+from tiago_mpc.loops import RealTime, VirtualTime, run_virtual_time
+from tiago_mpc.mpc import TIAGO, AdmmLimits, MpcParams
+from tiago_mpc.prediction import LatencyCompensation
+from tiago_mpc.record import CLASSES, FORMAT, Event, RunRecord, from_dict, load_run, to_dict
+from tiago_mpc.robot import Checks, RobotConfig
 from tiago_mpc.safety import CollisionSafetySettings
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import urdf_friction
@@ -119,3 +126,88 @@ def test_the_robot_configs_round_trip_with_their_paths(config):
     assert rebuilt == config
     safety = rebuilt.safety if isinstance(rebuilt, RobotConfig) else rebuilt
     assert isinstance(safety.blacklist_path, Path)
+
+
+# One instance of each class the record rebuilds, with every field away from its default. A
+# field that the serializer drops or rebuilds wrongly then fails the round trip below.
+FRICTION = Friction([1.] * 7, [.5] * 7)
+LATENCY = LatencyCompensation(latency_s=.03, initial_latency_s=.01, friction=FRICTION, friction_law=Tanh(.05),
+                              armature=(.1,) * 7, substep=.002)
+SAMPLES = [
+    SolverParams(max_sqp_iters=3, max_pcg_iters=50, pcg_tol=1e-5, solve_ratio=.5, mu=2., rho=.02,
+                 adapt_rho=False, linsys="bdsv", q_cost=3., qd_cost=.02, u_cost=1e-5, N_cost=9.,
+                 q_lim_cost=.1, vel_lim_cost=.1, ctrl_lim_cost=.1, exact_hessian=True,
+                 cost_curvature=True, defect_telemetry=True, defect_exit=.1),
+    AdmmLimits(iters=4, eps_abs=1e-4, eps_rel=1e-3, check_every=2, rho_q=.2, rho_qd=.04, rho_u=2e-5),
+    MpcParams(N=8, dt_s=.02, solver=SolverParams(max_sqp_iters=2), warm_start="hold",
+              reset_rho_each_step=False, admm_linsys="auto", admm_threshold=.2, admm=AdmmLimits(iters=4),
+              linsys="bdsv", bdsv_threshold=.3, reseed_threshold=.5, joint_margin_rad=.05,
+              velocity_fraction=.5, effort_fraction=.8, friction=FRICTION, friction_law=Tanh(.05),
+              armature=(.1,) * 7, max_sqp_time_s=None, warmup=False),
+    FRICTION, Tanh(.05), Sign(), StickSlip(), SampleKnot(), HoldFirst(),
+    PlanFeedback(kp=(1.,) * 7, kd=(2.,) * 7),
+    FrictionFeedforward(friction=FRICTION, base_law=HoldFirst(), evaluation=Tanh(.05)),
+    VirtualTime(.01, .02, .01, compensation=LATENCY),
+    RealTime(command_period=.004, update_period=.04, compensation=None),
+    LATENCY,
+    SimConfig(q=(.1,) * 7, qd=(.2,) * 7, substep=.002, friction=FRICTION, friction_law=Sign(),
+              integrator="euler", sync_real_time=True, armature=(.1,) * 7),
+    RobotConfig(execute=True, sea_absolute=True,
+                checks=Checks(state_age_s=.2, first_state_s=10., service_s=1., start_rad=.1,
+                              start_speed_l1_rad_s=2., body_drift_rad=.03, torso_drift_m=.01),
+                safety=CollisionSafetySettings(enabled=False)),
+    Checks(state_age_s=.2, first_state_s=10., service_s=1., start_rad=.1, start_speed_l1_rad_s=2.,
+           body_drift_rad=.03, torso_drift_m=.01),
+    CollisionSafetySettings(enabled=False, urdf_path=Path("/tmp/arm.urdf"), blacklist_path=Path("/tmp/b.yaml"),
+                            controlled_joint_names=("a", "b"), min_distance_m=.05, check_timeout_sec=.1,
+                            max_monitored_geometry_speed_m_s=2., joint_position_margin_rad=.01,
+                            joint_velocity_scale=.5),
+]
+
+SAMPLE = {type(sample).__name__: sample for sample in SAMPLES}
+
+# The experiments' classes that their records hold. load_run rebuilds them when given them.
+REACH = Reach(target_m=(.4, -.2, .9), position_tol_m=.03, speed_tol_m_s=.01, timeout_s=5.)
+CASE = Case(name="c", initial_state=(.1,) * 14, target_m=(.4, -.2, .9))
+RANDOM100 = Random100Config(ids=(1, 2), inputs_sha256="ab", params=SAMPLE["MpcParams"], plant=SAMPLE["SimConfig"],
+                            timing=SAMPLE["VirtualTime"])
+EXPERIMENT_SAMPLES = [
+    REACH, Figure8(start_m=(.4, -.2, .9), x_span_m=.2, y_amplitude_m=.05, edge_clearance_m=.01, period_s=12.),
+    Compensated(solve_latency_s=.03, command_period=.004, update_period=.02, compensate=False,
+                prediction_substep_s=.001, predictor="gpu"),
+    SampledSimConfig(physical=SAMPLE["SimConfig"], feedback_period_s=.005),
+    CASE, RANDOM100, Random100Study(config=RANDOM100, cases=(CASE,)),
+]
+EXPERIMENT_CLASSES = [type(sample) for sample in EXPERIMENT_SAMPLES]
+
+
+def nested(obj):
+    """obj and every dataclass in its fields and their tuples, at any depth."""
+    yield obj
+    for field in fields(obj):
+        value = getattr(obj, field.name)
+        for part in value if isinstance(value, tuple) else (value,):
+            if is_dataclass(part):
+                yield from nested(part)
+
+
+def test_the_samples_cover_every_recorded_class_and_field():
+    """A class added to CLASSES, or a field added to a sampled class, needs a sample value here."""
+    assert sorted(type(sample).__name__ for sample in SAMPLES) == sorted(cls.__name__ for cls in CLASSES)
+    for sample in SAMPLES + EXPERIMENT_SAMPLES:
+        for field in fields(sample):
+            default = (field.default if field.default is not MISSING
+                       else field.default_factory() if field.default_factory is not MISSING else MISSING)
+            assert getattr(sample, field.name) != default, f"{type(sample).__name__}.{field.name} is its default"
+
+
+@pytest.mark.parametrize("sample", SAMPLES + EXPERIMENT_SAMPLES, ids=lambda sample: type(sample).__name__)
+def test_every_field_of_every_recorded_class_survives_the_record(sample):
+    """Every field survives the record.
+
+    to_dict writes every field, from_dict rebuilds an equal object through JSON, and every
+    dataclass inside is one that from_dict knows."""
+    data = to_dict(sample)
+    assert set(data) == {"type"} | {field.name for field in fields(sample)}
+    assert from_dict(json.loads(json.dumps(data)), EXPERIMENT_CLASSES) == sample
+    assert {type(part) for part in nested(sample)} <= {*CLASSES, *EXPERIMENT_CLASSES}

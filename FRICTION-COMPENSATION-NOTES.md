@@ -9,19 +9,22 @@ remain local; no upstream publication or hardware qualification is implied.
 
 Two local dependency worktrees carry the narrow extension:
 
-- `/workspace/GRiD-tiago-armature`, branch `experiment/tiago-armature-055`,
-  upstream v0.5.5 `23b64f1`. Generated ABA/Minv/CRBA/RNEA support explicit
+- `/workspace/GRiD-tiago-armature-060`, branch `experiment/tiago-armature-060`,
+  upstream v0.6.0 `712df1c`. Generated ABA/Minv/CRBA/RNEA support explicit
   `JOINT_ARMATURE`. Pinned peers stay unchanged. Only fixed-base, scalar,
   cardinal-axis revolute joints are supported; unsupported models are rejected.
-- `/workspace/GATO-tiago-armature`, branch `experiment/tiago-armature-015`,
-  upstream v0.1.5 `4d5f8c2`. Registration/build/codegen forward and record
+- `/workspace/GATO-tiago-armature-017`, branch `experiment/tiago-armature-017`,
+  upstream v0.1.7 `c9da6a5`. Registration/build/codegen forward and record
   `joint_armature`; cache identity includes its values and actual emitter bytes.
+  On top, `BSQP.admm_iters` (the ADMM inner budget, read from the native
+  solver), cherry-picked from `feat/admm-iters-readback` (`17405d0`, worktree
+  `GATO-admm-iters-readback`, for an upstream PR).
 
 The TIAGo branch's uv sources select local GATO editable and a normal local
 GRiD wheel. The wheel build stages GRiD's validated resources/peer provenance;
 editable GRiD does not stage that bundle. No provenance gate was disabled.
-The local dependency checkpoints are GRiD `417a30db4960722916128a88071e4aa06433a957`
-and GATO `72c9d1427b89b1dff14cdacd401fc85d61655926`. They have not been pushed or
+The local dependency checkpoints are GRiD `4497ebe84237c8294e511b7477b556e5b9844ef0`
+and GATO `69bd8d86d37eaf0439b8331cfe92b4449d7a5c5b`. They have not been pushed or
 merged. The source overrides still use local paths, not portable remote revision
 pins; package version labels remain the upstream base versions.
 

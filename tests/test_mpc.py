@@ -1,6 +1,6 @@
 """MpcParams, plant names, loading GATO's module, the settings GATO receives, and both Mpc
 twins on fakes (CPU only)."""
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, replace
 import json
 from pathlib import Path
 import pickle
@@ -11,7 +11,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import Mock
 
 import gato
-from gato import _cache
+from gato import MPCController, _cache
 import numpy as np
 import pinocchio as pin
 import pytest
@@ -19,7 +19,8 @@ import pytest
 from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
+from tiago_mpc.mpc import (CONTROLLER_SETTINGS, TIAGO, AdmmLimits, Mpc, MpcParams, MpcProcess, compile_binary,
+                           find_binary)
 from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, to_dict
 from tiago_mpc.tiago import ARMATURE_KG_M2, GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
@@ -33,12 +34,6 @@ def test_to_dict_round_trips_also_through_json_and_pickle(params):
     assert from_dict(to_dict(params)) == params
     assert from_dict(json.loads(json.dumps(to_dict(params)))) == params
     assert pickle.loads(pickle.dumps(params)) == params
-
-
-def test_the_admm_limits_are_gatos_defaults_except_rho_u():
-    ours, gatos = asdict(TIAGO.admm), gato.MPCController.LIMIT_DEFAULTS["admm"]
-    assert {k: v for k, v in ours.items() if k != "rho_u"} == {k: v for k, v in gatos.items() if k != "rho_u"}
-    assert ours["rho_u"] == 5e-4
 
 
 @pytest.fixture
@@ -72,23 +67,112 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
         def set_row_group_bounds(self, group, lo, hi):
             seen.setdefault("bounds", []).append(group)
 
+    def controller(solver, **kwargs):
+        seen.update(controller=kwargs)
+        return NS(limits=seen.get("installs", "admm"))  # the mechanism GATO reports in force
+
     monkeypatch.setattr(gato, "register_robot", lambda name, path, **kwargs: seen.update(register=kwargs))
     monkeypatch.setattr(gato, "BSQP", Solver)
-    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: seen.update(controller=kwargs),
-                        raising=False)
+    monkeypatch.setattr(gato, "MPCController", controller, raising=False)
     monkeypatch.setattr(mpc, "check_model", lambda *args: None)
     try:
         mpc.load_controller(params, binary)
+        seen["installs"] = "barrier"
+        with pytest.raises(RuntimeError, match="barrier"):
+            mpc.load_controller(params, binary)
     finally:
         sys.modules.pop(name, None)
     assert (seen["N"], seen["dt"], seen["solver"]) == (params.N, params.dt_s, params.solver.asdict())
-    assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
+    # only the values the params set reach GATO; None follows GATO's default
+    given = {name: getattr(params, name) for name in CONTROLLER_SETTINGS if getattr(params, name) is not None}
+    limits_kw = {key: value for key, value in asdict(params.admm).items() if value is not None}
+    assert seen["controller"] == dict(limits="admm", limits_kw=limits_kw, **given) and seen["bounds"] == [0, 1, 2]
     assert seen["module"] == str(binary)
     # Smooth predictor friction is registered, with its width, only when the params have one; the
     # fitted armature is the default.
     friction = {} if params.friction is None else dict(joint_dynamics=True,
                                                          friction_width=params.friction_law.width_rad_s)
     assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, joint_armature=ARMATURE_KG_M2, **friction)
+
+
+class AdmmSolver:
+    """A fake of GATO's BSQP that keeps the ADMM limit rows' state as BSQP does.
+
+    The penalties are stored in float32, and enable_limit_admm resolves the residual exit as
+    BSQP's does, so the state read back differs from the requested values."""
+    nx, nu, n_actuated, n_fc, nq, nv, row_mech = 14, 7, 7, 0, 7, 7, None
+    admm_iters, admm_eps_abs, admm_eps_rel, admm_check_every = 10, 0., 0., 1
+
+    def __init__(self, urdf=None, *, batch_size=1, N=32, dt=.03, plant_type=None, params=TIAGO.solver):
+        self.params, self.N, self.batch_size = params.replace(linsys="pcg"), N, batch_size  # as BSQP
+        self.groups, self.enabled = [], {}
+
+    def get_row_groups(self):
+        return self.groups
+
+    def enable_limit_admm(self, rho=.01, iters=10, *, rho_q=None, rho_qd=None, rho_u=None, eps_abs=None,
+                          eps_rel=None, check_every=1):
+        self.enabled.update(rho=rho, iters=iters, rho_q=rho_q, rho_qd=rho_qd, rho_u=rho_u, eps_rel=eps_rel)
+        self.groups = [dict(kind=kind, rho=np.float32(rho if box is None else box))
+                       for kind, box in ((0, rho_q), (1, rho_qd), (2, rho_u))]
+        self.admm_iters = int(iters)
+        if eps_abs is not None or eps_rel is not None:
+            self.admm_eps_abs, self.admm_eps_rel, self.admm_check_every = eps_abs or 0., eps_rel or 0., check_every
+
+    def set_admm_linsys(self, mode):
+        self.enabled.update(admm_linsys=mode)
+
+    def set_row_group_bounds(self, group, lo, hi):
+        pass
+
+
+@pytest.mark.parametrize("N", [32, 64])
+def test_the_mpcs_params_are_the_values_gatos_controller_resolved(monkeypatch, no_compile, tmp_path, N):
+    """The resolved params are what GATO's MPCController and the solver run.
+
+    The controller is GATO's own, on a fake solver. The solver's SolverParams has the linsys
+    BSQP sets, every None is GATO's choice (the ADMM linear solver depends on N), and the ADMM
+    settings are the solver's state. Replaying the record gives the same solver state."""
+    params, solvers = replace(TIAGO, N=N), []
+    binary = fake_binary(tmp_path, params)
+    monkeypatch.setattr(gato, "register_robot", lambda name, path, **kwargs: None)
+    monkeypatch.setattr(gato, "BSQP", lambda *args, **kwargs: solvers.append(AdmmSolver(*args, **kwargs))
+                        or solvers[-1])
+    monkeypatch.setattr(mpc, "check_model", lambda *args: None)
+    try:
+        resolved = params.resolved(mpc.load_controller(params, binary))
+        replayed = resolved.resolved(mpc.load_controller(resolved, binary))
+    finally:
+        sys.modules.pop("gato." + binary.stem, None)
+
+    defaults, gatos = MPCController.__init__.__kwdefaults__, MPCController.LIMIT_DEFAULTS["admm"]
+    assert resolved == replace(params, solver=params.solver.replace(linsys="pcg"), warm_start=defaults["warm_start"],
+                               reset_rho_each_step=defaults["reset_rho_each_step"],
+                               admm_linsys="bdsv_factor" if N >= 64 else "pcg", admm_threshold=None,
+                               linsys="auto", bdsv_threshold=.1, reseed_threshold=None,
+                               admm=AdmmLimits(iters=gatos["iters"], eps_abs=0., eps_rel=gatos["eps_rel"],
+                                               check_every=1, rho_q=gatos["rho_q"], rho_qd=gatos["rho_qd"],
+                                               rho_u=params.admm.rho_u))
+    assert from_dict(json.loads(json.dumps(to_dict(resolved)))) == resolved
+    # the record replays the same solver state
+    assert replayed == resolved
+    assert [g["rho"] for g in solvers[1].groups] == [g["rho"] for g in solvers[0].groups]
+
+
+def test_the_resolved_admm_limits_read_every_field_and_need_the_joint_limit_rows():
+    """A field added to AdmmLimits without its read-back stays None and fails here."""
+    solver = AdmmSolver()
+    with pytest.raises(RuntimeError, match="limit rows"):
+        AdmmLimits.resolved(solver)
+    solver.enable_limit_admm(rho_q=.1, rho_qd=.03, rho_u=1e-5)
+    assert None not in asdict(AdmmLimits.resolved(solver)).values()
+
+
+def test_every_controller_setting_of_mpcparams_is_read_back():
+    """The MpcParams fields that are MPCController arguments are exactly CONTROLLER_SETTINGS,
+    so a new controller setting cannot miss its read-back."""
+    controller_arguments = set(MPCController.__init__.__kwdefaults__)
+    assert {field.name for field in fields(MpcParams)} & controller_arguments == set(CONTROLLER_SETTINGS)
 
 
 def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no_compile, tmp_path):
@@ -109,7 +193,7 @@ def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no
 
     monkeypatch.setattr(gato, "register_robot", register)
     monkeypatch.setattr(gato, "BSQP", lambda *args, **kwargs: NS(set_row_group_bounds=lambda *a: None))
-    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: None, raising=False)
+    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: NS(limits="admm"), raising=False)
     monkeypatch.setattr(mpc, "check_model", lambda *args: None)
     try:
         mpc.load_controller(params, binary)  # missing entry: registers
@@ -261,9 +345,15 @@ class Controller:
 
     def __init__(self):
         self.events, self.torque, self.gate = [], np.arange(7, dtype=float), None
-        self.solver = NS(**{name: (lambda *a, name=name, **k: self.events.append((name, a, k)))
+        self.solver = NS(params=PARAMS.solver, admm_iters=10, admm_eps_abs=0., admm_eps_rel=.01, admm_check_every=1,
+                         get_row_groups=lambda: [dict(kind=k, rho=np.float32(r)) for k, r in enumerate((.1, .03, 5e-4))],
+                         **{name: (lambda *a, name=name, **k: self.events.append((name, a, k)))
                             for name in ("set_cost_weights", "set_cost_weights_per_knot",
                                          "set_q_pos_cost", "set_q_nom", "set_f_ext_B")})
+        # what GATO's controller resolved (MpcParams.resolved reads it)
+        self.warm_start, self.reset_rho_each_step, self.admm_linsys, self.admm_threshold = "hold", True, "auto", .2
+        self.linsys, self.bdsv_threshold, self.reseed_threshold = "auto", .1, .5
+        self.limits = "admm"
 
     def reset(self, x):
         self.events.append(("reset", x.copy()))
@@ -281,7 +371,7 @@ class Controller:
         raw = NS(sqp_iters=np.array([2]), pcg_iters=np.array([[3], [0]]),
                  admm_iters=np.array([5]), admm_linsys_iters=np.array([20]))
         return NS(xu_best=xu, solve=NS(stats=raw, solve_time_us=1234.), wall_s=.002, iterations=2,
-                  budget_hit=False, row_viol=np.array([.01, .02]), admm_linsys="pcg")
+                  budget_hit=False, row_viol=np.array([.01, .02]), admm_linsys="pcg", pred_err=.01)
 
 
 @pytest.fixture
@@ -441,6 +531,16 @@ def process(controller, monkeypatch):
     yield make
     for item in processes:
         item.close()
+
+
+RESOLVED = replace(PARAMS, warm_start="hold", reset_rho_each_step=True, admm_linsys="auto", admm_threshold=.2,
+                   linsys="auto", bdsv_threshold=.1, reseed_threshold=.5,
+                   admm=AdmmLimits(iters=10, eps_abs=0., eps_rel=.01, check_every=1, rho_q=.1, rho_qd=.03, rho_u=5e-4))
+
+
+def test_both_twins_report_the_params_their_controller_resolved(process, controller):
+    assert Mpc(PARAMS, BINARY).params == RESOLVED
+    assert process().params == RESOLVED  # the worker's, from its ready reply
 
 
 def test_process_result_waits_for_its_reply(process, controller):

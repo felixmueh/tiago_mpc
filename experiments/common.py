@@ -68,57 +68,61 @@ def run_experiment(
     duration (task.duration_s) or at most duration seconds, and return the RunRecord (in
     out, default _expr_data/<task>/<UTC time>/).
 
-    mpc is parameters or a built MPC. Given MpcParams, run_experiment compiles and builds
-    the MPC, which may take minutes unless GATO's module is cached (compile_binary): after
-    creating the record and before building the plant, MpcProcess on RealTime (it solves
-    concurrently, as on the robot), else the in-process Mpc; it closes it, also after an
-    error. The wall-time budget (max_sqp_time_s) stays only where the solve's wall time is
-    the latency, RealTime and VirtualTime with "measured"; every other timing gets None.
-    A built MPC (a fake, or one MpcProcess per case from one compiled binary) is the
-    caller's, which closes it.
+    mpc is parameters or a built MPC. Given MpcParams, run_experiment first compiles and
+    builds the MPC, which may take minutes unless GATO's module is cached (compile_binary):
+    MpcProcess on RealTime (it solves concurrently, as on the robot), else the in-process
+    Mpc. It closes that MPC, also after an error. A failed compile or model check is a setup
+    error: it is raised before the record exists, so it leaves no run directory. The
+    wall-time budget (max_sqp_time_s) stays only where the solve's wall time is the latency,
+    RealTime and VirtualTime with "measured"; every other timing gets None. A built MPC (a
+    fake, or one MpcProcess per case from one compiled binary) is the caller's, which
+    closes it.
 
-    The record holds the pieces as the run's configuration: task, params (what the MPC
-    loaded), plant, law, timing, duration (the one the run got) and the extra keyword
-    pieces. Its status is the loop's Outcome ("done", "timeout", "fault", "interrupted")
-    with its reason and end time, and the common results; a real error is "error" with the
-    traceback (the hard abort, a second Ctrl-C, "interrupted") and is raised again after
-    saving. The plant's events after the loop (the handback) and its run_state are
-    recorded, the plant is closed, the run saved and its replay exported, also after a
-    fault or an error. The experiment's evaluate adds its results and saves again.
+    The record holds the pieces as the run's configuration: task, params (the MPC's, which
+    are the values GATO resolved), plant, law, timing, duration (the one the run got) and
+    the extra keyword pieces. Its status is the loop's Outcome ("done", "timeout", "fault",
+    "interrupted") with its reason and end time, and the common results; a real error is
+    "error" with the traceback (the hard abort, a second Ctrl-C, "interrupted") and is
+    raised again after saving. The plant's events after the loop (the handback) and its
+    run_state are recorded, the plant is closed, the run saved and its replay exported,
+    also after a fault or an error. The experiment's evaluate adds its results and saves
+    again.
     """
+    owned: tm.Mpc | tm.MpcProcess | None = None  # built here, so closed here
     if isinstance(mpc, tm.MpcParams):
         measured = isinstance(timing, tm.VirtualTime) and timing.solve_latency_s == "measured"
         params = mpc if isinstance(timing, tm.RealTime) or measured else replace(mpc, max_sqp_time_s=None)
+        owned = (tm.MpcProcess.compile(params) if isinstance(timing, tm.RealTime)  # concurrent, as on the robot
+                 else tm.Mpc.compile(params))
+        solver: tm.MpcInterface = owned
     else:
-        params = mpc.params
+        solver = mpc
     duration = task.duration_s if duration is None else min(task.duration_s, duration)
-    record = tm.RunRecord(out, task=task, params=params, plant=plant, law=law, timing=timing,
-                          duration=duration, **pieces)
-    console, built = tm.Console(), None
-    solver = None if isinstance(mpc, tm.MpcParams) else mpc
+    console, built, record = tm.Console(), None, None
     try:
-        if solver is None:  # inside the try: a failed compile is a saved error
-            solver = (tm.MpcProcess.compile(params) if isinstance(timing, tm.RealTime)  # concurrent, as on the robot
-                      else tm.Mpc.compile(params))
+        record = tm.RunRecord(out, task=task, params=solver.params, plant=plant, law=law, timing=timing,
+                              duration=duration, **pieces)
         built = plant.build()  # inside the try: a failed build is a saved error
         outcome = timing.run(built, solver, task, law, [record, console], duration=duration)
         record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t,
                                results=common_results(record))
     except BaseException as exc:  # a real error, or the hard abort
-        record.metadata.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
-                               error=traceback.format_exc())
+        if record is not None:
+            record.metadata.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
+                                   error=traceback.format_exc())
         raise
     finally:
-        if built is not None:
+        if built is not None and record is not None:
             late = built.take_events()  # the handback, after the last tick
             record.add_events(late)
             console.add_events(late)
             record.metadata["plant"] = built.run_state
             built.close()
-        if isinstance(mpc, tm.MpcParams) and solver is not None:  # built here; a passed one is the caller's
-            solver.close()
-        record.save()  # a faulted or failed run is never lost
-        export_replay(record)  # so a faulted run keeps its replay
+        if owned is not None:  # a passed MPC is the caller's
+            owned.close()
+        if record is not None:
+            record.save()  # a faulted or failed run is never lost
+            export_replay(record)  # so a faulted run keeps its replay
     return record
 
 

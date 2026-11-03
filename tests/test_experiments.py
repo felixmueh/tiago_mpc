@@ -231,7 +231,7 @@ def test_an_interrupted_run_is_saved_as_interrupted(tmp_path):
     assert load_run(record.out).metadata == record.metadata and len(record.ticks["t"]) == 1
 
 
-def test_a_failed_build_or_compile_is_a_saved_error_closing_an_mpc_built_there(monkeypatch, tmp_path):
+def test_a_failed_build_is_a_saved_error_and_a_failed_compile_leaves_no_run(monkeypatch, tmp_path):
     closed = []
     mpc = Mpc(replace(rc.tm.TIAGO, N=4))
     mpc.close = lambda: closed.append("mpc")
@@ -251,8 +251,7 @@ def test_a_failed_build_or_compile_is_a_saved_error_closing_an_mpc_built_there(m
     with pytest.raises(RuntimeError, match="compile"):
         common.run_experiment(SimConfig(substep=.003), rc.tm.TIAGO, rc.Reach(), SampleKnot(), VirtualTime.ideal(),
                               out=tmp_path / "compile")
-    metadata = load_run(tmp_path / "compile").metadata
-    assert metadata["status"] == "error" and "the compile failed" in metadata["error"]
+    assert not (tmp_path / "compile").exists()  # a setup error, not a run
 
 
 def test_update_period_0_stays_back_to_back(tmp_path):
@@ -319,12 +318,14 @@ FORECAST = LatencyCompensation(latency_s=.02)  # the defaults: one 50 Hz control
     (["--plant", "rehearsal", "--update-period", "0"], "MpcProcess", RealTime(.002, 0.), .01)])
 def test_the_main_runs_on_the_mpc_run_experiment_builds(monkeypatch, tmp_path, argv, solver, timing, budget):
     """reach's main end to end on a fake MPC: run_experiment builds it for the timing, with
-    the wall-time budget only where the solve's wall time is the latency, and closes it."""
+    the wall-time budget only where the solve's wall time is the latency, and closes it. The
+    record holds the params the MPC resolved, here GATO's warm start."""
     built = []
 
     def compile(name):
         def build(params):
-            mpc = Mpc(params)
+            assert params.warm_start is None  # the main follows GATO's
+            mpc = Mpc(replace(params, warm_start="shift"))  # as MpcParams.resolved
             mpc.kind, mpc.close = name, lambda: built.append("closed")
             built.append(mpc)
             return mpc
@@ -336,7 +337,7 @@ def test_the_main_runs_on_the_mpc_run_experiment_builds(monkeypatch, tmp_path, a
     assert rc.main([*argv, "--duration", ".02", "--output", str(tmp_path / "r")]) == 1  # the capped reach times out
     run = load_run(tmp_path / "r", classes=[rc.Reach])
     assert built[0].kind == solver and built[1:] == ["closed"]
-    assert run.config["params"] == built[0].params == replace(rc.tm.TIAGO, max_sqp_time_s=budget)
+    assert run.config["params"] == built[0].params == replace(rc.tm.TIAGO, max_sqp_time_s=budget, warm_start="shift")
     assert run.config["timing"] == timing and run.config["plant"] == SimConfig(substep=.003)
     assert run.config["duration"] == .02 and "distance_m" in run.ticks
 

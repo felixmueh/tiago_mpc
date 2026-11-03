@@ -55,7 +55,7 @@ class Figure8:
 # weights; mu, rho_u and the predictor friction are not costs and stay.
 # ======================================================================
 FIGURE8 = replace(tm.TIAGO, dt_s=.01, solver=tm.TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
-                  admm=replace(tm.TIAGO.admm, rho_u=1e-5),  # GATO's value, for the control cost 1e-6
+                  admm=replace(tm.TIAGO.admm, rho_u=None),  # GATO's, for the control cost 1e-6
                   friction=tm.urdf_friction(), friction_law=tm.Tanh(.1))
 
 

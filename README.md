@@ -1,7 +1,7 @@
 # gato_tiago
 
 Torque MPC for the TIAGo Pro right arm (seven joints, fixed torso root) with
-GATO (`gato-mpc` 0.1.5 from PyPI): reaching and figure-eight tracking of the
+GATO (`gato-mpc` 0.1.7): reaching and figure-eight tracking of the
 grasp-center frame ([models/README.md](models/README.md#end-effector-point)) in
 simulation, and the same experiments on the robot or in Gazebo through ROS 2.
 
@@ -86,7 +86,7 @@ uv run python -m mypy                     # the type check alone (pyproject.toml
   and `python -m experiments.<name>` works from any directory. Change a
   dependency in `pyproject.toml`, then `uv lock` and `uv sync`. `uv run` and
   `uv sync` restore the lock and undo a manual `uv pip install`.
-- **GATO** is `gato-mpc` 0.1.5 from PyPI; it pins `grid-rbd` 0.5.5 and refuses
+- **GATO** is `gato-mpc` 0.1.7; it pins `grid-rbd` 0.6.0 and refuses
   any other installed GRiD. Predictor friction is registered with
   `joint_dynamics=True, friction_width=w`: GRiD generates the GPU URDF's
   damping and tanh Coulomb friction into the dynamics and derivatives, with the
@@ -94,6 +94,12 @@ uv run python -m mypy                     # the type check alone (pyproject.toml
   is not available. Each record's `summary.json` names the GATO it ran
   (`provenance.gato`: version, `direct_url.json`, `gato.__file__`, and an editable
   checkout's commit and source status).
+- **The solver settings follow GATO's defaults** unless a preset sets a value
+  (`MpcParams`' docstring lists them); records hold the values GATO's controller
+  resolved and ran, read back from it.
+  `tests/test_gato_defaults.py` lists the deviations of `TIAGO` and `FIGURE8` and
+  fails when GATO's defaults differ from `tests/gato_defaults.json`; after checking
+  the changes, `python tests/test_gato_defaults.py` rewrites that file.
 - **GATO's module is compiled explicitly.** `compile_binary(params)` generates
   the TIAGo dynamics and compiles one CUDA module per variant (minutes, CPU
   only), `bsqpN<N>_tiago_right_<hash>` with the hash over GATO's version, the
@@ -127,7 +133,7 @@ gato-mpc = { path = "../GATO", editable = true }   # the GATO checkout, relative
 ```
 
 Then `uv lock && uv sync`. GATO compiles the checkout's native sources, whose
-content is part of its module key, so the fork's modules sit beside 0.1.5's in
+content is part of its module key, so the fork's modules sit beside the release's in
 the shared cache, and records name the checkout's commit. The changed
 `pyproject.toml` and `uv.lock` stay on that branch. The fork must pin the same
 `grid-rbd`, or change the pin in its own `pyproject.toml`. A manual
@@ -226,9 +232,8 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   solve (the solver's own iteration limit, no time limit) seeds the first solve,
   and its time counts against no plan's lease.
 - **Limits:** the joint, speed and torque limits are ADMM rows with GATO's
-  default settings except the control box (`AdmmLimits`: at most 10 inner
-  iterations per SQP iteration, eps_rel 1e-2, rho 0.1, 0.03 and 5e-4 for the
-  three boxes; GATO's rho_u is 1e-5, which the figure eight keeps). The
+  default settings (`AdmmLimits`), except `TIAGO`'s rho_u of 5e-4 for the
+  control box (the figure eight keeps GATO's). The
   joint box is the URDF's shrunk by `joint_margin_rad` (0.1 rad); `Q_START`
   (`tiago.py`), where the runs start, lies inside it.
 - **Late plans:** a plan that first takes effect a knot interval or more after
@@ -264,14 +269,15 @@ the metrics of a run without ticks. Reach's turns `done` into `arrived`.
 
 `run_experiment(plant, mpc, task, law, timing, *, duration=None, out=None, **pieces)`
 (`experiments/common.py`) runs one run for the task's duration, or at most
-`duration` seconds. Given `MpcParams` as `mpc`, it compiles and builds the MPC
+`duration` seconds. Given `MpcParams` as `mpc`, it first compiles and builds the MPC
 (minutes, unless GATO's module is cached): `MpcProcess` on `RealTime`, the in-process
 `Mpc` on every other timing, with the wall-time budget only where the solve's wall
 time is the latency (above), and closes it; a built MPC is the caller's, which
-closes it. It records the pieces as the run's configuration (the duration it
-resolved, the parameters the MPC loaded), builds the plant (`plant.build()`), runs
-the timing's loop, sets the status (`done`, `timeout`, `fault`, `interrupted`;
-`error` for a real error, raised again, a failed compile among them), adds the
+closes it. A failed compile is a setup error and leaves no run directory. It then
+records the pieces as the run's configuration (the duration it resolved, the MPC's
+params, which GATO resolved), builds the plant (`plant.build()`), runs the timing's
+loop, sets the status (`done`, `timeout`, `fault`, `interrupted`; `error` for a real
+error, raised again, a failed build among them), adds the
 common results, closes the plant, saves the run and exports the replay, also after
 a fault or an error. Each main defines its defaults once and hands them to
 `setup(args, plant, timing)`, which replaces only what the options name (`--plant`,
