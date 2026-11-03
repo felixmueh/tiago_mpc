@@ -94,7 +94,7 @@ def main():
                     f"{1000*study.config.plant.substep:g} ms Pinocchio RK4, "
                     f"SQP{params.solver.max_sqp_iters}/PCG{params.solver.max_pcg_iters}, "
                     f"{(params.N-1)*params.dt_s:.3g} s preview, "
-                    f"terminal weight {params.solver.N_cost:g}, {timeout_s:g} simulated seconds.")
+                    f"native cost menu, {timeout_s:g} simulated seconds.")
     admm_settings = tm.to_dict(params.admm)
     bound_settings = {k: getattr(params, k) for k in ("joint_margin_rad", "velocity_fraction", "effort_fraction")}
     result = dict(counts=counts, raw_audit_cases=len(audits),

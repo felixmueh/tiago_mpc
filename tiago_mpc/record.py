@@ -6,7 +6,7 @@ this module is the one that writes and reads it. (Small single purpose serializa
   command tick; save() writes the files.
 - load_run reads a saved run back with the same interface.
 - Console prints the first event of each kind as it happens.
-- to_dict and from_dict turn configurations (frozen dataclasses) into JSON and back;
+- to_dict and from_dict turn configurations (dataclasses) into JSON and back;
   they also work on their own, e.g. for a study's configuration.
 
 Usually experiments.common.run_experiment creates the record, runs the loop and saves,
@@ -82,13 +82,13 @@ import urllib.parse
 import urllib.request
 
 import gato
-from gato import SolverParams
+from gato.cost_menu import CostMenu, LinearTerm, Term
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
 from tiago_mpc.loops import RealTime, VirtualTime
-from tiago_mpc.mpc import AdmmLimits, MpcParams
+from tiago_mpc.mpc import AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.interfaces import Event, Tick
 from tiago_mpc.robot import Checks, RobotConfig
@@ -98,7 +98,8 @@ from tiago_mpc.tiago import ROOT
 
 FORMAT = 3
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
-    SolverParams, MpcParams, AdmmLimits, Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
+    SolverSettings, MpcParams, AdmmLimits, CostMenu, Term, LinearTerm,
+    Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
     PlanFeedback, FrictionFeedforward,
     VirtualTime, RealTime, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
 )
@@ -195,7 +196,7 @@ class Console:
 class RunRecord:
     """RunRecord(out, **pieces): a tick callback that buffers each command tick and its events;
     save() writes the run. out=None is _expr_data/<task type>/<UTC time>/ ("run" without a
-    task piece). The pieces are the run's configuration, frozen dataclasses or JSON values;
+    task piece). The pieces are the run's configuration, dataclasses or JSON values;
     the record writes provenance() and to_dict of each at once, with status "running".
 
     The read interface, which load_run gives a saved run too: config (the pieces as

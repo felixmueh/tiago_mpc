@@ -1,6 +1,6 @@
 """The run format (tiago_mpc/record.py): configurations to and from dicts, and a run written
 by RunRecord and read back by load_run (CPU only)."""
-from dataclasses import MISSING, dataclass, fields, is_dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
 import json
 from pathlib import Path
 
@@ -12,12 +12,12 @@ from experiments.friction_compensation import SampledSimConfig
 from experiments.latency_compensation import Compensated
 from experiments.random100.run import Case, Random100Config, Random100Study
 from experiments.reach import Reach
-from gato import SolverParams
+from gato.cost_menu import CostMenu, LinearTerm, Term
 from test_loops import Mpc, Plant, Task
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
 from tiago_mpc.loops import RealTime, VirtualTime, run_virtual_time
-from tiago_mpc.mpc import TIAGO, AdmmLimits, MpcParams
+from tiago_mpc.mpc import TIAGO, AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.record import CLASSES, FORMAT, Event, RunRecord, from_dict, load_run, to_dict
 from tiago_mpc.robot import Checks, RobotConfig
@@ -128,22 +128,63 @@ def test_the_robot_configs_round_trip_with_their_paths(config):
     assert isinstance(safety.blacklist_path, Path)
 
 
+def test_a_native_cost_menu_survives_a_saved_run(tmp_path):
+    """Native terms, per-knot arrays, rotations, gravity targets and infinite bounds reload."""
+    n = 4
+    menu = CostMenu(
+        frame_pos=Term(weight=np.ones((n, 3), dtype=np.float32), target=np.arange(n * 3).reshape(n, 3)),
+        state=Term(weight=np.ones(14), activation=("quadratic_barrier",) * n,
+                   lower=np.full(14, -np.inf), upper=np.ones(14)),
+        input=Term(weight=.1, target="gravity"), q_ref=np.full((n, 7), .2),
+        orientation=Term(weight=np.full((n, 3), .5), target=np.repeat(np.eye(3)[None], n, axis=0)),
+        linear_u=LinearTerm(weight=.2, target=np.zeros((n, 7)), A=np.eye(7), b=np.arange(7),
+                            activation="pseudo_huber", eps=np.full(n, .03)))
+    params = replace(TIAGO, N=n, cost=menu)
+    record = RunRecord(tmp_path / "menu", params=params)
+    written = json.loads((record.out / "summary.json").read_text())
+    assert written["config"]["params"]["cost"] == to_dict(menu)
+    record.save()
+
+    run = load_run(record.out)
+    rebuilt = run.config["params"]
+    assert isinstance(rebuilt, MpcParams) and isinstance(rebuilt.cost, CostMenu)
+    assert isinstance(rebuilt.cost.frame_pos, Term)
+    assert isinstance(rebuilt.cost.linear_u, LinearTerm)
+    assert rebuilt.cost.input.target == "gravity"
+    assert to_dict(rebuilt) == to_dict(params)
+    np.testing.assert_array_equal(rebuilt.cost.state.lower, np.full(14, -np.inf))
+    np.testing.assert_array_equal(rebuilt.cost.orientation.target, menu.orientation.target)
+    run.save()
+    assert to_dict(load_run(record.out).config["params"]) == to_dict(params)
+
+
 # One instance of each class the record rebuilds, with every field away from its default. A
 # field that the serializer drops or rebuilds wrongly then fails the round trip below.
 FRICTION = Friction([1.] * 7, [.5] * 7)
 LATENCY = LatencyCompensation(latency_s=.03, initial_latency_s=.01, friction=FRICTION, friction_law=Tanh(.05),
                               armature=(.1,) * 7, substep=.002)
+TERM = Term(weight=(1., 2., 3.), target=(.1, .2, .3), activation="smooth_hinge", eps=.03,
+            lower=(-1.,) * 3, upper=(1.,) * 3)
+LINEAR = LinearTerm(weight=.2, target=(.1,) * 7, activation="pseudo_huber", eps=.05,
+                    lower=(-2.,) * 7, upper=(2.,) * 7,
+                    A=tuple(tuple(row) for row in np.eye(7)), b=(.2,) * 7)
+COST_MENU = CostMenu(
+    frame_pos=TERM, state=Term(weight=(0.,) * 7 + (.1,) * 7), input=Term(weight=.01, target="gravity"),
+    linear_x=LinearTerm(weight=.3, A=tuple(tuple(row) for row in np.eye(14))), linear_u=LINEAR,
+    orientation=Term(weight=.4, target=tuple(tuple(row) for row in np.eye(3))),
+    velocity=Term(weight=.2, target=(.1,) * 6), frame_pos_2=TERM, q_ref=((.1,) * 7,) * 8)
 SAMPLES = [
-    SolverParams(max_sqp_iters=3, max_pcg_iters=50, pcg_tol=1e-5, solve_ratio=.5, mu=2., rho=.02,
-                 adapt_rho=False, linsys="bdsv", q_cost=3., qd_cost=.02, u_cost=1e-5, N_cost=9.,
+    SolverSettings(max_sqp_iters=3, max_pcg_iters=50, pcg_tol=1e-5, solve_ratio=.5, mu=2., rho=.02,
+                 adapt_rho=False, linsys="bdsv",
                  q_lim_cost=.1, vel_lim_cost=.1, ctrl_lim_cost=.1, exact_hessian=True,
                  cost_curvature=True, defect_telemetry=True, defect_exit=.1),
     AdmmLimits(iters=4, eps_abs=1e-4, eps_rel=1e-3, check_every=2, rho_q=.2, rho_qd=.04, rho_u=2e-5),
-    MpcParams(N=8, dt_s=.02, solver=SolverParams(max_sqp_iters=2), warm_start="hold",
+    MpcParams(N=8, dt_s=.02, solver=SolverSettings(max_sqp_iters=2), warm_start="hold",
               reset_rho_each_step=False, admm_linsys="auto", admm_threshold=.2, admm=AdmmLimits(iters=4),
               linsys="bdsv", bdsv_threshold=.3, reseed_threshold=.5, joint_margin_rad=.05,
               velocity_fraction=.5, effort_fraction=.8, friction=FRICTION, friction_law=Tanh(.05),
-              armature=(.1,) * 7, max_sqp_time_s=None, warmup=False),
+              armature=(.1,) * 7, max_sqp_time_s=None, warmup=False, cost=COST_MENU),
+    COST_MENU, TERM, LINEAR,
     FRICTION, Tanh(.05), Sign(), StickSlip(), SampleKnot(), HoldFirst(),
     PlanFeedback(kp=(1.,) * 7, kd=(2.,) * 7),
     FrictionFeedforward(friction=FRICTION, base_law=HoldFirst(), evaluation=Tanh(.05)),
@@ -167,12 +208,14 @@ SAMPLES = [
 SAMPLE = {type(sample).__name__: sample for sample in SAMPLES}
 
 # The experiments' classes that their records hold. load_run rebuilds them when given them.
-REACH = Reach(target_m=(.4, -.2, .9), position_tol_m=.03, speed_tol_m_s=.01, timeout_s=5.)
+REACH = Reach(target_m=(.4, -.2, .9), position_tol_m=.03, speed_tol_m_s=.01, timeout_s=5.,
+              orientation_rad=(.1, .2, .3))
 CASE = Case(name="c", initial_state=(.1,) * 14, target_m=(.4, -.2, .9))
 RANDOM100 = Random100Config(ids=(1, 2), inputs_sha256="ab", params=SAMPLE["MpcParams"], plant=SAMPLE["SimConfig"],
                             timing=SAMPLE["VirtualTime"])
 EXPERIMENT_SAMPLES = [
-    REACH, Figure8(start_m=(.4, -.2, .9), x_span_m=.2, y_amplitude_m=.05, edge_clearance_m=.01, period_s=12.),
+    REACH, Figure8(start_m=(.4, -.2, .9), x_span_m=.2, y_amplitude_m=.05, edge_clearance_m=.01, period_s=12.,
+                   orientation_rad=(.2, .1, -.2)),
     Compensated(solve_latency_s=.03, command_period=.004, update_period=.02, compensate=False,
                 prediction_substep_s=.001, predictor="gpu"),
     SampledSimConfig(physical=SAMPLE["SimConfig"], feedback_period_s=.005),

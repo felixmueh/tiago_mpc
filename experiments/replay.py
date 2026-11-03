@@ -25,9 +25,10 @@ VERSION = 1
 def export_replay(record):
     """Write <record.out>/replay.npz on the run's time from the record's read interface (a
     RunRecord, or load_run's with the task's class): the state and command at each tick,
-    the task's reference, every plan and the MpcParams (provenance.params); nothing for
-    fewer than two ticks. The time basis follows the timing's type: RealTime is wall time,
-    every other timing virtual time ("simulation")."""
+    the task's reference (with its orientation when the task has one at some tick), every
+    plan and the MpcParams (provenance.params); nothing for fewer than two ticks. The time
+    basis follows the timing's type: RealTime is wall time, every other timing virtual time
+    ("simulation")."""
     ticks, plans, params, task = record.ticks, record.plans, record.config["params"], record.config["task"]
     time_s, command = ticks["t"], ticks["command"]
     if len(time_s) < 2:
@@ -39,11 +40,13 @@ def export_replay(record):
                    for t0, states, torques in zip(plans["t0"], plans["states"], plans["torques"])]
     timing = record.config["timing"]
     wall = (timing["type"] if isinstance(timing, dict) else type(timing).__name__) == "RealTime"
+    reference = np.array([task.at(t, 2, dt)[0][0] for t in time_s], dtype=float)
+    rotation = reference[:, 3:] if np.isfinite(reference[:, 3:]).any() else None  # NaN rows: none
     return save_replay(record.out / "replay.npz", time_s=time_s, q=ticks["q"], qd_rad_s=ticks["qd"],
                        joint_names=RIGHT_ARM_JOINTS, time_basis="wall" if wall else "simulation",
                        torque_nm=command[sent] if sent.any() else None,
                        torque_time_s=time_s[sent] if sent.any() else None,
-                       reference_xyz_m=np.array([task.at(t, 2, dt)[0][0, :3] for t in time_s]),
+                       reference_xyz_m=reference[:, :3], reference_rotvec_rad=rotation,
                        reference_time_s=time_s, reference_frame=ROOT_FRAME, plans=predictions,
                        end_effector_frame=GRASP_FRAME, label=record.out.name,
                        provenance=dict(params=to_dict(params)))
@@ -70,11 +73,17 @@ def _series(time_s, q, name):
         raise ValueError(f"{name} q must be a finite real (T, 7) native-coordinate array")
 
 
-def _reference(xyz, times, frame):
+def _reference(xyz, times, frame, rotvec=None):
     if xyz is None:
-        if times is not None:
-            raise ValueError("Reference times require reference positions")
+        if times is not None or rotvec is not None:
+            raise ValueError("Reference times and orientations require reference positions")
         return
+    if rotvec is not None:
+        rotation = np.asarray(rotvec)
+        if (rotation.dtype.kind not in "fiu" or rotation.shape != np.shape(xyz) or
+                not (np.isfinite(rotation).all(axis=-1) | np.isnan(rotation).all(axis=-1)).all()):
+            raise ValueError("Reference orientations must match the positions' shape, each three finite "
+                             "values or three NaN (no orientation target)")
     if frame not in ("base_footprint", ROOT_FRAME):
         raise ValueError(f"Reference positions require reference_frame='base_footprint' or '{ROOT_FRAME}'")
     points = np.asarray(xyz)
@@ -140,6 +149,7 @@ def save_replay(
     reference_xyz_m=None,
     reference_time_s=None,
     reference_frame=None,
+    reference_rotvec_rad=None,
     plans=None,
     provenance=None,
     qd_rad_s=None,
@@ -161,6 +171,9 @@ def save_replay(
     For interval controls pass torque_time_s=time_s[:-1]; at the final state the
     viewer shows the last applied interval. Plans use predicted torque and omit
     the terminal control. Optional joint_limits use the same joint_names order.
+    reference_rotvec_rad (optional, the shape of reference_xyz_m) is the end effector's
+    target orientation at each reference sample, a rotation vector (axis times angle) in
+    reference_frame; a NaN row means no orientation target there.
     end_effector_frame identifies the point tracked by the reference (FLANGE_FRAME or
     GRASP_FRAME), e.g. summary['end_effector_frame'].
     """
@@ -171,7 +184,7 @@ def save_replay(
             len(set(names)) != 7 or set(names) != set(RIGHT_ARM_JOINTS)):
         raise ValueError("joint_names must contain each of the seven native right-arm joints once")
     _series(time_s, q, "Recorded")
-    _reference(reference_xyz_m, reference_time_s, reference_frame)
+    _reference(reference_xyz_m, reference_time_s, reference_frame, reference_rotvec_rad)
     _telemetry(time_s, qd_rad_s, torque_nm, torque_time_s, "Recorded")
     _joint_limits(joint_limits)
     if end_effector_frame not in (FLANGE_FRAME, GRASP_FRAME):
@@ -204,6 +217,8 @@ def save_replay(
         arrays["reference_xyz_m"] = np.asarray(reference_xyz_m)
     if reference_time_s is not None:
         arrays["reference_time_s"] = np.asarray(reference_time_s)
+    if reference_rotvec_rad is not None:
+        arrays["reference_rotvec_rad"] = np.asarray(reference_rotvec_rad)
     if plans is not None:
         metadata["predictions"] = []
         for index, plan in enumerate(plans):

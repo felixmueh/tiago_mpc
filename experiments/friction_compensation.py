@@ -98,7 +98,8 @@ class SampledSim:
 
 
 PARAMS = replace(FIGURE8, dt_s=.03, friction=None, armature=ARMATURE_KG_M2,
-                 solver=FIGURE8.solver.replace(mu=1., qd_cost=.01, u_cost=1e-4, N_cost=80.),
+                 solver=replace(FIGURE8.solver, mu=1.),
+                 cost=tm.default_cost(FIGURE8.N, velocity=.01, torque=1e-4, terminal_position=80.),
                  admm=replace(FIGURE8.admm, rho_u=5e-4))
 TIMING = tm.VirtualTime(command_period=.002, update_period=.02, solve_latency_s=.0055)
 PLANT_COULOMB_J1_4_NM = (2.01, 2.39, 2.03, 1.91)
@@ -216,11 +217,11 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--duration', type=float, default=24.)
     parser.add_argument('--mu', type=float, default=PARAMS.solver.mu)
-    parser.add_argument('--qd-cost', type=float, default=PARAMS.solver.qd_cost)
-    parser.add_argument('--u-cost', type=float, default=PARAMS.solver.u_cost)
+    parser.add_argument('--qd-cost', type=float, default=float(np.asarray(PARAMS.cost.state.weight)[7]))
+    parser.add_argument('--u-cost', type=float, default=float(np.asarray(PARAMS.cost.input.weight)))
     parser.add_argument('--rho-u', type=float, default=PARAMS.admm.rho_u)
     parser.add_argument('--dt', type=float, default=PARAMS.dt_s)
-    parser.add_argument('--terminal-ee-cost', type=float, default=PARAMS.solver.N_cost)
+    parser.add_argument('--terminal-ee-cost', type=float, default=float(np.asarray(PARAMS.cost.frame_pos.weight)[-1, 0]))
     parser.add_argument('--command-period', type=float, default=TIMING.command_period)
     parser.add_argument('--update-period', type=float, default=TIMING.update_period)
     parser.add_argument('--solve-latency', type=parse_solve_latency, default=TIMING.solve_latency_s)
@@ -229,8 +230,9 @@ def main(argv=None):
     parser.add_argument('--cases', nargs='+', choices=tuple(cases()), help='run only the named cases')
     args = parser.parse_args(argv)
     params = replace(PARAMS, dt_s=args.dt,
-                     solver=PARAMS.solver.replace(mu=args.mu, qd_cost=args.qd_cost, u_cost=args.u_cost,
-                                                 N_cost=args.terminal_ee_cost),
+                     solver=replace(PARAMS.solver, mu=args.mu),
+                     cost=tm.default_cost(PARAMS.N, velocity=args.qd_cost, torque=args.u_cost,
+                                          terminal_position=args.terminal_ee_cost),
                      admm=replace(PARAMS.admm, rho_u=args.rho_u))
     plant = plant_config(args.feedback_period)
     timing = tm.VirtualTime(args.command_period, args.update_period, args.solve_latency)

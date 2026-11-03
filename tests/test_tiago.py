@@ -60,6 +60,27 @@ def test_worktrees_share_the_main_checkouts_cache(tmp_path):
 
 
 @pytest.mark.parametrize("q", [tiago.Q_START, tiago.Q_REACH])
+def test_the_gpu_model_places_the_grasp_frame_like_the_native_one(monkeypatch, tmp_path, q):
+    """The derived GPU model has the native grasp-frame pose in native joint coordinates."""
+    monkeypatch.setenv("GATO_CACHE_DIR", str(tmp_path))
+    gpu = tiago.runtime_urdf()
+    model = pin.buildModelFromUrdf(str(gpu))
+    data = model.createData()
+    pin.framesForwardKinematics(model, data, q)
+    placement = data.oMf[model.getFrameId(tiago.GRASP_FRAME)]
+    np.testing.assert_allclose(placement.translation, tiago.ee_position(q), atol=1e-12)
+    np.testing.assert_allclose(pin.log3(placement.rotation), tiago.ee_orientation(q), atol=1e-12)
+
+
+def test_orientation_error_is_the_angle_to_the_target():
+    target = tiago.ee_orientation(tiago.Q_START)
+    assert tiago.orientation_error(tiago.Q_START, target) == pytest.approx(0., abs=1e-9)
+    turned = pin.log3(pin.exp3(np.array([0., 0., .3])) @ pin.exp3(target))
+    assert tiago.orientation_error(tiago.Q_START, turned) == pytest.approx(.3)
+    assert tiago.orientation_error(tiago.Q_REACH, tiago.ee_orientation(tiago.Q_START)) > .1
+
+
+@pytest.mark.parametrize("q", [tiago.Q_START, tiago.Q_REACH])
 def test_ee_velocity_matches_finite_difference(q):
     qd = np.linspace(.1, -.3, 7)
     h = 1e-6

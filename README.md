@@ -47,7 +47,7 @@ solve.
 tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what experiments use),
               util.py (hz_to_s; the cache: cache_root, cached, cache_meshes, digest),
               tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
-              mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary,
+              mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary, SolverSettings,
               Mpc, MpcProcess),
               interfaces.py (State, Plan, Event, Tick; the protocols PlantInterface,
               MpcInterface, TaskInterface, Timing; ControlLaw, Callback),
@@ -294,18 +294,19 @@ import tiago_mpc as tm
 from experiments.common import run_experiment
 from experiments.reach import Reach, evaluate
 
-params = replace(tm.TIAGO, solver=tm.TIAGO.solver.replace(mu=1.))
+params = replace(tm.TIAGO, solver=replace(tm.TIAGO.solver, mu=1.))
 record = run_experiment(tm.SimConfig(substep=.003), params, Reach(position_tol_m=.02), tm.HoldFirst(),
                         tm.VirtualTime.constant_latency(.005))  # an in-process Mpc without the budget
 evaluate(record)
 print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
 ```
 
-- **Every piece is a frozen dataclass,** a value that compares and is recorded by
-  `tm.to_dict` (with its type name) and rebuilt by `tm.from_dict`: the task,
+- **Configuration pieces are dataclasses,** recorded by `tm.to_dict` (with their type
+  name) and rebuilt by `tm.from_dict`: the task,
   `MpcParams`, the plant's `SimConfig` or `RobotConfig` (`build()` makes the
   plant), the law and the timing. Extra keyword pieces of `run_experiment` (e.g.
-  `case="pair_00026"`) are recorded too. Frozen configs hold tuples, not lists.
+  `case="pair_00026"`) are recorded too. The package's configs are frozen and hold tuples;
+  a supplied native cost menu retains its mutable terms and arrays.
 - A **control law** is a frozen dataclass called `law(plan, t, state) -> command`
   (`tm.SampleKnot()`, `tm.HoldFirst()`, `tm.PlanFeedback(kp, kd)`,
   `tm.FrictionFeedforward(friction, base_law)`); a **timing** one whose
@@ -341,6 +342,49 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   (one chirp per joint; `models/tiago_pro/README.md`); `(0.,) * 7` turns it off.
   These plant choices do not qualify
   friction-enabled MPC or tracking.
+- **Costs:** `MpcParams.cost` is always a native GATO `CostMenu`. `default_cost(n, ...)`
+  constructs the default position, terminal position, joint-velocity and torque terms,
+  plus optional orientation. Zero-weight terms are omitted; orientation is off by default.
+  The constructor returns an ordinary menu, with no separate builder configuration.
+
+  ```python
+  task = Reach(orientation_rad=tuple(tm.ee_orientation(tm.Q_START)))
+  params = replace(tm.TIAGO, cost=tm.default_cost(
+      tm.TIAGO.N, orientation=.2, terminal_orientation=4.))
+  ```
+
+  Menu weights can be per knot, so changing the horizon also requires matching menu weights,
+  for example `replace(tm.TIAGO, N=64, cost=tm.default_cost(64))`.
+
+  Reference updates are explicit: `with_reference(menu, reference)` returns a menu with
+  new frame-position and orientation targets. MPC `warmup` and `request` perform that
+  operation when given a reference; pass None to use the menu's existing targets.
+  Standard tasks supply `(n, 6)` references: grasp-frame position and rotation vector in
+  `ROOT_FRAME`. Three NaN orientation values disable that knot's orientation target.
+  Other native terms and targets are preserved. Constant orientations need only one
+  rotation conversion; unchanged menus and references reuse the applied menu. Native
+  menu mutations are detected. `MpcProcess` receives its own copy at startup.
+
+  Custom objectives use the same type:
+
+  ```python
+  from gato.cost_menu import CostMenu, Term
+
+  params = replace(tm.TIAGO, cost=CostMenu(
+      frame_pos=Term(weight=4., target=(.4, -.2, .9)),
+      input=Term(weight=1e-4)))
+  # In your own loop, mpc.request(state, None) retains this menu's targets.
+  ```
+
+  `tm.to_dict`, `tm.from_dict` and run records rebuild native `CostMenu`, `Term`, and
+  `LinearTerm`; NumPy arrays reload as tuples accepted by GATO. Arrival remains based
+  on position and speed; tasks with an orientation target also record angular error.
+- **Solver settings:** `MpcParams.solver` is `SolverSettings`, which follows GATO's
+  numerical defaults and retains its joint-limit barrier weights. Tracking weights live
+  exclusively in `cost`. The wrapper's parity test catches new fields and changed defaults
+  in GATO. Both barrier and ADMM limits continue to apply with a menu. Legacy tracking
+  setters (`cost_weights`, `knot_weights`, `posture`) are unavailable; the `external_force`
+  task update remains available.
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
   the raw GATO `controller` and `step`, the latest solve's result) and starts the
@@ -450,7 +494,8 @@ provenance and configuration at the start and buffers one entry per command tick
 - `events.json`: every event, `{"t", "kind", "message", "data"}`.
 - `replay.npz`: the visualizer replay on the run's time, exported from the record by
   `experiments/replay.py:export_replay` (`../tiago_mpc_visualizer/docs/replay-format.md`),
-  with the `MpcParams` in `provenance.params`.
+  with the `MpcParams` in `provenance.params`; with an orientation target, the reference
+  also has its rotation vectors (`reference_rotvec_rad`, NaN at a tick without one).
 
 `tm.load_run(path, classes=[Reach])` reads a run back with the same interface
 (`run.ticks["q"]`, `run.config["timing"]`, `run.metadata["status"]`, `run.events`):

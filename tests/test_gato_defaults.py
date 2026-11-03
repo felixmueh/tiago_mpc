@@ -5,11 +5,12 @@ differ from them. When the snapshot test fails, check each changed default: a fo
 changes the runs, and an overridden one may make its deviation unnecessary. Then rewrite the
 snapshot with `python tests/test_gato_defaults.py` and adjust DEVIATIONS.
 """
-from dataclasses import asdict
+from dataclasses import asdict, fields, replace
 import json
 from pathlib import Path
 
 import inspect
+from typing import get_type_hints
 
 from gato import MPCController, SolverParams
 from gato.interface import BSQP
@@ -17,16 +18,14 @@ from gato.linsys_autotune import resolve_admm_linsys, resolve_linsys
 import pytest
 
 from experiments.figure8 import FIGURE8
-from tiago_mpc.mpc import CONTROLLER_SETTINGS, TIAGO, MpcParams
+from tiago_mpc.mpc import CONTROLLER_SETTINGS, TIAGO, MpcParams, SolverSettings
 
 SNAPSHOT = Path(__file__).with_name("gato_defaults.json")
 PRESETS = {"TIAGO": TIAGO, "FIGURE8": FIGURE8}
 # Where each preset differs from GATO's defaults; the reasons are at the values.
 DEVIATIONS = {
-    "TIAGO": {"solver.max_sqp_iters", "solver.max_pcg_iters", "solver.pcg_tol", "solver.q_cost",
-              "solver.qd_cost", "solver.u_cost", "solver.N_cost", "solver.q_lim_cost", "admm.rho_u"},
-    "FIGURE8": {"solver.max_sqp_iters", "solver.max_pcg_iters", "solver.pcg_tol", "solver.q_cost",
-                "solver.u_cost", "solver.N_cost", "solver.q_lim_cost", "solver.mu"},
+    "TIAGO": {"solver.max_sqp_iters", "solver.max_pcg_iters", "solver.pcg_tol", "solver.q_lim_cost", "admm.rho_u"},
+    "FIGURE8": {"solver.max_sqp_iters", "solver.max_pcg_iters", "solver.pcg_tol", "solver.q_lim_cost", "solver.mu"},
 }
 
 
@@ -68,6 +67,27 @@ def test_gatos_defaults_are_the_snapshot():
     found = list(changes(json.loads(SNAPSHOT.read_text()), gato_defaults()))
     assert not found, ("GATO's defaults changed: " + "; ".join(found)
                        + ". Check them, then run python tests/test_gato_defaults.py")
+
+
+def test_solver_settings_follow_every_native_field_default_and_type_except_tracking_weights():
+    # Upstream field, default or type changes must fail here so the thin wrapper cannot
+    # silently stop following GATO; only these four weights belong to the menu instead.
+    omitted = {"q_cost", "N_cost", "qd_cost", "u_cost"}
+    native, ours = asdict(SolverParams()), asdict(SolverSettings())
+    assert set(native) - set(ours) == omitted
+    assert set(ours) == {field.name for field in fields(SolverParams)} - omitted
+    assert ours == {name: value for name, value in native.items() if name not in omitted}
+    native_types, our_types = get_type_hints(SolverParams), get_type_hints(SolverSettings)
+    assert our_types == {name: value for name, value in native_types.items() if name not in omitted}
+    assert SolverSettings().native() == SolverParams()
+
+
+def test_solver_settings_native_conversion_and_resolved_readback_preserve_every_exposed_field():
+    settings = SolverSettings(max_sqp_iters=7, max_pcg_iters=83, pcg_tol=.03, solve_ratio=.4, mu=3., rho=.2,
+                              adapt_rho=False, linsys="pcg", q_lim_cost=.9, vel_lim_cost=.8, ctrl_lim_cost=.7,
+                              exact_hessian=True, cost_curvature=True, defect_telemetry=True, defect_exit=.6)
+    assert SolverSettings.resolved(settings.native()) == settings
+    assert replace(settings, mu=4.) == SolverSettings.resolved(replace(settings.native(), mu=4.))
 
 
 @pytest.mark.parametrize("name", PRESETS)

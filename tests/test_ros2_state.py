@@ -179,7 +179,7 @@ def test_bad_durations_and_nonfinite_commands_are_rejected(transport, bad):
 
 
 def test_importing_the_package_loads_no_ros_and_no_compiled_gato():
-    # Importing may load Pinocchio and gato's Python package (MpcParams is gato's SolverParams);
+    # Importing may load Pinocchio and GATO's Python package for solver settings and cost menus;
     # only RosPlant() loads ROS, and only the MPC process loads the compiled CUDA module.
     import subprocess
     from pathlib import Path

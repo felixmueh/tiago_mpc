@@ -7,6 +7,21 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-11-03: use GATO cost menus for every MPC objective** (Felix).
+  `MpcParams.cost` is always a native `gato.cost_menu.CostMenu`. `default_cost(n, ...)`
+  constructs the default position, terminal position, joint-velocity, torque and optional
+  orientation terms. It returns an ordinary menu, with no persistent builder object.
+  `with_reference(menu, reference)` explicitly updates frame-position and orientation
+  targets. Passing a reference to MPC warmup/request performs that update; passing None
+  retains the menu's targets. Separate
+  orientation fields on `MpcParams` and legacy tracking-weight updates are removed.
+  `SolverSettings` wraps GATO's numerical settings and limit-barrier weights, excluding
+  the four tracking weights. A parity test checks every remaining native field and
+  default; its purpose is explained in a source comment. Settings and native menus
+  use the existing dataclass serializer. Local construction skips inactive terms,
+  shares constant rotation targets, and reuses unchanged menus/reference windows while
+  checking for changes to native menu fields. GATO is unchanged.
+
 - **2026-10-27: compare sticking/smoothness and remove plant friction** (Felix).
   Extend the controller-tuning experiment with sustained low-speed episodes
   conditioned on motion requested by the active plan, duration distributions,
@@ -234,14 +249,15 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     run of the default reach, ten random100 pairs and the figure eight is bitwise equal
     to 0.1.5 (GTX 1070); 0.1.7 fixes `bdsv_factor`, which on 0.1.5 reached no target.
   - **Every setting with a GATO default follows it** unless a preset sets a value: the
-    unset `SolverParams` fields, and `None` in `AdmmLimits` and the controller settings
+    `SolverSettings` fields, and `None` in `AdmmLimits` and the controller settings
     `warm_start`, `reset_rho_each_step`, `admm_linsys` (GATO's choice by horizon: `pcg`
     at N32, not `auto`), `admm_threshold`, `linsys`, `bdsv_threshold` (both unused under
     ADMM) and `reseed_threshold`. Only set values reach GATO. Reason: during
-    development, take GATO's improvements without copying values.
+    development, take GATO's improvements. The wrapper's parity test requires reviewing
+    additions or changed defaults when GATO is updated.
   - **Records hold what GATO resolved and ran, not our inputs** (Felix, 2026-11-03):
     the MPC's `params` are read back from GATO once the controller is built
-    (`MpcParams.resolved`: the solver's `SolverParams`, the controller's attributes, and
+    (`MpcParams.resolved`: the exposed fields of the solver's `SolverParams`, the controller's attributes, and
     the ADMM settings the solver runs: its `admm_*` properties and the limit rows'
     penalties; `BSQP.admm_iters` is our GATO commit for an upstream PR), so a
     recorded run re-runs the same after a GATO update. GATO's shared ADMM `rho`, which
@@ -321,8 +337,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     installed editable into each; this supersedes "never installed" (2026-10-23)
     and the worktree `PYTHONPATH` rule. `experiments` stays an undeclared
     package and runs as `python -m experiments.<name>`.
-  - **Costs:** GATO's existing tracking objective stays for this migration.
-    A complete move to GATO's cost menu follows later, as a separate step.
+  - **Costs:** all MPC objectives use GATO's cost menu (2026-11-03, Purpose and shape).
   - **Predictor friction:** upstream's `register_robot(..., joint_dynamics=True,
     friction_width=w)`: GRiD generates the GPU URDF's damping and tanh Coulomb
     friction into the dynamics and derivatives, the width compiled in. `BSQP`
@@ -404,7 +419,10 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   grasp point slower than 2 cm/s, replacing the joint-speed L1 norm of 1 rad/s,
   which let the hand move at up to about 0.4 m/s. Runs before this change used
   the old criterion, and the grasp-frame random100 protocol has no baseline yet.
-- **Orientation is unconstrained** in both tasks.
+- **Orientation is unconstrained** in both tasks by default. An optional orientation
+  cost is available through `default_cost` or a native menu. Task references use rotation
+  vectors in `ROOT_FRAME`, with NaN for no orientation target (README, "Costs").
+  Weight tuning and arrival criteria remain open below.
 - **Limits through ADMM are approximate:** returned plans can exceed the
   planning bounds, so the planning margins and the independent raw-limit checks
   on knots and commands stay. An ADMM return is no feasibility certificate.
@@ -673,10 +691,13 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - The Gazebo check (the ROS container exists, 2026-10-28).
 - Migrating the visualizer off `tiago_mpc_vis_baseline`.
 - Publishing/pinning the armature extensions for main and upstream.
-- Moving the costs completely to GATO's cost menu (2026-10-24: a separate step
-  after the GATO 0.1.5 migration).
 
 ## Open with Felix
+
+- Orientation tracking: the weights (running/terminal, untuned; 0.2/4 and 1/8 were tried once);
+  whether arrival should include an orientation tolerance; the defaults for reach and
+  figure8. All objectives now use a cost menu; orientation weights belong to the
+  native menu, configured directly or through `default_cost`.
 
 - How garbage collection runs between ticks or runs.
 - Per-iteration trajectory capture on GATO 0.1.5 (under discussion, 2026-10-24):

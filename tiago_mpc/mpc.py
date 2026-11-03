@@ -1,7 +1,7 @@
 """MPC parameters with the TIAGo defaults, GATO's solver module for them, and the MPC.
 
 Experiments override the defaults with dataclasses.replace, for example
-replace(TIAGO, solver=TIAGO.solver.replace(mu=1.)). compile_binary compiles GATO's
+replace(TIAGO, solver=replace(TIAGO.solver, mu=1.)). compile_binary compiles GATO's
 module for the params (minutes, once per variant), find_binary finds it, Mpc and
 MpcProcess load it; Mpc.compile(params) does both. They share one interface:
 warmup(state, reference), request(state, reference, updates=None), which raises while
@@ -10,7 +10,8 @@ params and close().
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field, fields, replace
 import importlib.metadata
 import json
 import math
@@ -23,12 +24,43 @@ import sys
 from typing import Any
 
 from gato import SolverParams
+from gato.cost_menu import CostMenu
 import numpy as np
 
+from tiago_mpc.costs import default_cost, with_reference
 from tiago_mpc.dynamics import Friction, Tanh, passive_torque
 from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.tiago import ARMATURE_KG_M2, GRASP_FRAME, Q_REACH, Q_START, arm_urdf, fk, runtime_urdf
 from tiago_mpc.util import cache_root, digest
+
+
+@dataclass(frozen=True)
+class SolverSettings:
+    """GATO's solver settings, with tracking weights owned by the cost menu."""
+    max_sqp_iters: int = 1
+    max_pcg_iters: int = 200
+    pcg_tol: float = 1e-4
+    solve_ratio: float = 1.
+    mu: float = 10.
+    rho: float = .01
+    adapt_rho: bool = True
+    linsys: str | None = None
+    q_lim_cost: float = .01
+    vel_lim_cost: float = 0.
+    ctrl_lim_cost: float = 0.
+    exact_hessian: bool = False
+    cost_curvature: bool = False
+    defect_telemetry: bool = False
+    defect_exit: float = 0.
+
+    def native(self) -> SolverParams:
+        """Return the native solver parameters accepted by GATO."""
+        return SolverParams(**asdict(self))
+
+    @classmethod
+    def resolved(cls, params: SolverParams) -> SolverSettings:
+        """Read the exposed settings back from GATO's native parameters."""
+        return cls(**{field.name: getattr(params, field.name) for field in fields(cls)})
 
 
 @dataclass(frozen=True)
@@ -73,21 +105,19 @@ class MpcParams:
     """Everything the solver needs. The defaults are TIAGo reaching, loss-free, with the fitted armature.
 
     A setting that GATO has a default for follows it unless a value is set here: a
-    SolverParams field that is not given, or None in AdmmLimits or a controller setting. A
+    SolverSettings field that is not given, or None in AdmmLimits or a controller setting. A
     set value deviates from GATO, and tests/test_gato_defaults.py lists the deviations of
     TIAGO and FIGURE8. An MPC's params, and so a record's, are the values GATO resolved and
     ran (see resolved)."""
     N: int = 32
     dt_s: float = .03
-    solver: SolverParams = SolverParams(
+    solver: SolverSettings = SolverSettings(
         max_sqp_iters=5, max_pcg_iters=120, pcg_tol=1e-3,
-        # ======================================================================
-        # TODO(cost menu): GATO 0.1.5's cost menu (gato.cost_menu) will replace these cost fields
-        # (docs/decisions.md, 2026-10-24). Then q_cost/N_cost are frame_pos weights (running, knot N-1),
-        # qd_cost the state term's velocity weight, u_cost the input weight; *_lim_cost stays here.
-        # ======================================================================
-        q_cost=4., qd_cost=.05, u_cost=1e-4, N_cost=8.,
         q_lim_cost=0.)  # limits through ADMM only
+    # All execution uses GATO's native menu. Its direct tracking objective may be faster
+    # for position-only tasks, but cannot supply the orientation cost.
+    # A reference passed to request or warmup explicitly replaces its grasp-frame targets.
+    cost: CostMenu = field(default_factory=default_cost)
     # Controller settings (CONTROLLER_SETTINGS); None follows GATO.
     warm_start: str | None = None             # "shift" or "hold"
     reset_rho_each_step: bool | None = None
@@ -101,7 +131,7 @@ class MpcParams:
     linsys: str | None = None
     bdsv_threshold: float | None = None
     reseed_threshold: float | None = None     # pred_err above which GATO re-seeds the warm start
-    # GATO's rho_u suits its own control cost; 5e-4 is five times TIAGO's u_cost of 1e-4.
+    # GATO's rho_u suits its own control cost; 5e-4 is five times TIAGO's torque weight of 1e-4.
     admm: AdmmLimits = AdmmLimits(rho_u=5e-4)
     # Planning limits: joint box shrunk by the margin; speed and effort fractions of the raw limits.
     joint_margin_rad: float = .1
@@ -119,7 +149,11 @@ class MpcParams:
     max_sqp_time_s: float | None = .01
     warmup: bool = True  # Mpc.warmup runs GATO's warm-up solve before the first plan
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        if not isinstance(self.solver, SolverSettings):
+            raise TypeError("solver must be SolverSettings; tracking weights belong in cost")
+        if not isinstance(self.cost, CostMenu):
+            raise TypeError("cost must be a native gato.cost_menu.CostMenu")
         armature = tuple(float(value) for value in self.armature)
         if len(armature) != 7 or not all(math.isfinite(value) and value >= 0 for value in armature):
             raise ValueError('armature must contain seven finite nonnegative values')
@@ -139,7 +173,8 @@ class MpcParams:
 
         The fields GATO does not know, such as N and the friction, stay as they are. The
         controller is load_controller's."""
-        return replace(self, solver=controller.solver.params, admm=AdmmLimits.resolved(controller.solver),
+        return replace(self, solver=SolverSettings.resolved(controller.solver.params),
+                       admm=AdmmLimits.resolved(controller.solver),
                        **{name: getattr(controller, name) for name in CONTROLLER_SETTINGS})
 
 
@@ -278,7 +313,7 @@ def load_controller(params: MpcParams, binary: Path | None):
     if found is None or not all((found[1] / plant / f).exists() for f in ("grid.cuh", "limits.cuh")):
         _register(params, gpu_path, plant)
     solver = gato.BSQP(str(gpu_path), batch_size=1, N=params.N, dt=params.dt_s, plant_type=plant,
-                       params=params.solver)
+                       params=params.solver.native())
     check_model(solver, model, model.createData(), params.friction, params.friction_law)
     given = {name: getattr(params, name) for name in CONTROLLER_SETTINGS if getattr(params, name) is not None}
     controller = gato.MPCController(
@@ -327,20 +362,7 @@ def check_model(
 # Named solver changes, applied before a solve by Mpc (also in MpcProcess). Each persists
 # in the solver until changed again. Add a name when an experiment needs it.
 UPDATES = {
-    # ======================================================================
-    # TODO(cost menu): GATO 0.1.5's cost menu (gato.cost_menu) will replace the three cost updates
-    # below (docs/decisions.md, 2026-10-24); their setters raise while a menu is applied. Then each
-    # rewrites the menu's frame_pos/state/input weights or state target and re-applies the menu.
-    # external_force is dynamics and stays.
-    # ======================================================================
-    # dict of scalar weights: q_cost, qd_cost, u_cost, N_cost, *_lim_cost
-    "cost_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights(**weights),
-    # (N, 3) [ee, qd, u] weights per knot; None returns to the scalar weights
-    "knot_weights": lambda mpc, weights: mpc.controller.solver.set_cost_weights_per_knot(weights),
-    # (weight, q_nom): running posture cost toward the posture q_nom
-    "posture": lambda mpc, value: (mpc.controller.solver.set_q_pos_cost(value[0]),
-                                   mpc.controller.solver.set_q_nom(np.asarray(value[1]))),
-    # external wrench in GATO's layout (BSQP.set_f_ext_B)
+    # External wrench in GATO's layout (BSQP.set_f_ext_B).
     "external_force": lambda mpc, wrench: mpc.controller.solver.set_f_ext_B(wrench),
 }
 
@@ -349,6 +371,15 @@ def _known(updates):
     unknown = set(updates or ()) - UPDATES.keys()
     if unknown:
         raise KeyError(f"unknown MPC updates: {sorted(unknown)}")
+
+
+def _position(reference: np.ndarray | None, n: int) -> np.ndarray:
+    """Supply GATO's unused reference argument with finite orientation slots."""
+    if reference is None:
+        return np.zeros((n, 6), dtype=np.float32)
+    reference = np.array(reference, dtype=np.float32)
+    reference[:, 3:] = 0.
+    return reference
 
 
 def _checked(mpc, plan, t, measured_t):
@@ -365,6 +396,26 @@ def _checked(mpc, plan, t, measured_t):
     return plan
 
 
+def _same_menu(left: CostMenu, right: CostMenu | None) -> bool:
+    """Compare native menu fields with an owned snapshot, including mutable arrays."""
+    if right is None:
+        return False
+    for item in fields(CostMenu):
+        a, b = getattr(left, item.name), getattr(right, item.name)
+        if item.name == "q_ref":
+            if a is not b and not np.array_equal(a, b):
+                return False
+        elif a is None or b is None:
+            if a is not b:
+                return False
+        elif type(a) is not type(b) or any(
+            getattr(a, f.name) is not getattr(b, f.name)
+            and not np.array_equal(getattr(a, f.name), getattr(b, f.name)) for f in fields(a)
+        ):
+            return False
+    return True
+
+
 class Mpc:
     """The GATO controller in this process: request solves, result returns the plan.
 
@@ -373,7 +424,8 @@ class Mpc:
     warm-up solve; without one, the first request resets it from its state. Later
     requests never reset it. A fresh controller needs a new Mpc, or controller.reset.
     ``controller`` is the raw GATO MPCController, ``step`` the raw GATO result of the
-    latest solve (MPCController.step; None before the first).
+    latest solve (MPCController.step; None before the first). A reference replaces
+    the menu's grasp-frame targets; None uses its native targets unchanged.
     """
 
     def __init__(self, params: MpcParams, binary: Path | None):
@@ -384,29 +436,28 @@ class Mpc:
         self._reset = False  # the controller has been reset from a state
         self._previous_t: float | None = None
         self._plan: Plan | None = None
+        self._cost_template: CostMenu | None = None
+        self._cost_reference: np.ndarray | None = None
 
     @classmethod
     def compile(cls, params: MpcParams, use_cache: bool = True) -> Mpc:
         """Mpc on compile_binary(params, use_cache)."""
         return cls(params, compile_binary(params, use_cache))
 
-    def warmup(self, state: State, reference: np.ndarray) -> None:
+    def warmup(self, state: State, reference: np.ndarray | None = None) -> None:
         """With params.warmup, reset the controller from state and run GATO's warm-up solve
         (MPCController.warmup, the solver's own limits, no time limit); else nothing."""
         if self.params.warmup:
             x = self._x(state)
             self.controller.reset(x)
-            # ======================================================================
-            # TODO(cost menu): under GATO 0.1.5's cost menu (docs/decisions.md, 2026-10-24) the
-            # solve ignores this reference: write it into frame_pos.target and apply the menu first.
-            # ======================================================================
-            self.controller.warmup(x, reference)
+            self._objective(reference)
+            self.controller.warmup(x, _position(reference, self.N))
             self._reset = True
 
     def request(
         self,
         state: State | Prediction,
-        reference: np.ndarray,
+        reference: np.ndarray | None = None,
         updates: dict[str, Any] | None = None,
     ) -> None:
         _known(updates)
@@ -421,6 +472,28 @@ class Mpc:
     def close(self) -> None:
         pass
 
+    def _objective(self, reference: np.ndarray | None) -> None:
+        """Apply changed menu settings or explicitly supplied grasp-frame targets."""
+        if reference is not None:
+            reference = np.asarray(reference)
+            if reference.shape != (self.N, 6):
+                raise ValueError(f"the reference must be ({self.N}, 6)")
+        same_template = _same_menu(self.params.cost, self._cost_template)
+        same_reference = (reference is None and self._cost_reference is None
+                          or reference is not None and self._cost_reference is not None
+                          and np.array_equal(reference, self._cost_reference, equal_nan=True))
+        if same_template and same_reference:
+            return
+        template = self._cost_template if same_template else deepcopy(self.params.cost)
+        assert template is not None
+        menu = template if reference is None else with_reference(template, reference)
+        # GATO may change device fields before an upload raises, so no previous menu stays cached.
+        self._cost_template = None
+        self._cost_reference = None
+        self.controller.solver.set_cost_menu(menu)
+        self._cost_template = template
+        self._cost_reference = None if reference is None else reference.copy()
+
     def _x(self, state):
         """The solver's state vector."""
         q, qd = np.asarray(state.q, dtype=float), np.asarray(state.qd, dtype=float)
@@ -428,7 +501,7 @@ class Mpc:
             raise ValueError("Measured state must contain seven finite native positions/velocities")
         return np.r_[q, qd]
 
-    def _solve(self, state: State | Prediction, reference, updates):
+    def _solve(self, state: State | Prediction, reference: np.ndarray | None, updates):
         x = self._x(state)
         for name, value in (updates or {}).items():
             UPDATES[name](self, value)
@@ -438,12 +511,8 @@ class Mpc:
         # GATO uses dt_elapsed only to score hypotheses (none here).
         dt_elapsed = None if self._previous_t is None else state.t - self._previous_t
         self._previous_t = state.t
-        # ======================================================================
-        # TODO(cost menu): under GATO 0.1.5's cost menu (docs/decisions.md, 2026-10-24) the
-        # solve ignores this reference: before every solve, write the request's (N, 3) window
-        # into frame_pos.target and re-apply the menu (a copy at unchanged shapes).
-        # ======================================================================
-        self.step = step = self.controller.step(x, reference, dt_elapsed=dt_elapsed,
+        self._objective(reference)
+        self.step = step = self.controller.step(x, _position(reference, self.N), dt_elapsed=dt_elapsed,
                                                 budget_s=self.params.max_sqp_time_s)
         xu = np.asarray(step.xu_best, dtype=float).reshape(-1)
         if xu.size != self.N * 21 - 7:
@@ -492,7 +561,7 @@ class MpcProcess:
         """This process compiles (compile_binary), the MPC process loads the module."""
         return cls(params, compile_binary(params, use_cache))
 
-    def warmup(self, state: State, reference: np.ndarray) -> None:
+    def warmup(self, state: State, reference: np.ndarray | None = None) -> None:
         """Mpc.warmup in the MPC process; returns when it is done."""
         if self._pending is not None:
             raise RuntimeError("an MPC request is pending")
@@ -503,7 +572,7 @@ class MpcProcess:
     def request(
         self,
         state: State | Prediction,
-        reference: np.ndarray,
+        reference: np.ndarray | None = None,
         updates: dict[str, Any] | None = None,
     ) -> None:
         _known(updates)

@@ -189,6 +189,26 @@ def ee_position(q: np.ndarray) -> np.ndarray:
     return fk(q, GRASP_FRAME)
 
 
+def ee_orientation(q: np.ndarray) -> np.ndarray:
+    """The grasp frame's orientation in ROOT_FRAME as a rotation vector in radians."""
+    return pin.log3(_ee_rotation(q))
+
+
+def orientation_error(q: np.ndarray, target: np.ndarray) -> float:
+    """The angle in radians between the grasp frame at q and the rotation-vector target.
+
+    The target is in ROOT_FRAME; the error is the norm of log(R_targetᵀ R(q)).
+    """
+    return float(np.linalg.norm(pin.log3(pin.exp3(np.asarray(target, dtype=float)).T @ _ee_rotation(q))))
+
+
+def _ee_rotation(q: np.ndarray) -> np.ndarray:
+    model, data = _arm()
+    pin.forwardKinematics(model, data, np.asarray(q, dtype=float))
+    pin.updateFramePlacements(model, data)
+    return data.oMf[model.getFrameId(GRASP_FRAME)].rotation.copy()
+
+
 def ee_velocity(q: np.ndarray, qd: np.ndarray) -> np.ndarray:
     """Linear velocity of the grasp frame in ROOT_FRAME, m/s."""
     model, data = _arm()

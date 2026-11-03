@@ -150,16 +150,17 @@ class MpcInterface(Protocol):
     params.warmup is off); request raises while the previous plan is unread; result
     returns a plan once, None while it is pending, and raises if the solve failed.
     A request takes the measured State or a Prediction of the future initial condition;
-    either preserves the measurement time that bounds the resulting plan's lease."""
+    either preserves the measurement time that bounds the resulting plan's lease.
+    A reference replaces the menu's grasp-frame targets; None keeps its native targets."""
     params: MpcParams
     N: int
     dt: float
 
-    def warmup(self, state: State, reference: np.ndarray) -> None: ...
+    def warmup(self, state: State, reference: np.ndarray | None = None) -> None: ...
     def request(
         self,
         state: State | Prediction,
-        reference: np.ndarray,
+        reference: np.ndarray | None = None,
         updates: dict[str, Any] | None = None,
     ) -> None: ...
     def result(self, block: bool = False) -> Plan | None: ...
@@ -168,7 +169,9 @@ class MpcInterface(Protocol):
 
 class TaskInterface(Protocol):
     """A frozen dataclass; t counts from the run's first state. at: the (n, 6)
-    end-effector reference at the n knots dt apart from t and the named solver updates
+    end-effector reference at the n knots dt apart from t (per knot the grasp frame's position,
+    then its orientation as a rotation vector, both in ROOT_FRAME; NaN orientation: none at
+    that knot, which only the menu's orientation term reads) and the named solver updates
     (mpc.UPDATES) for the request at t, None when it changes nothing; done: whether
     it is met; duration_s: the task's own duration in seconds, the run's unless the
     caller caps it (experiments.common.run_experiment). The loops never read it: they

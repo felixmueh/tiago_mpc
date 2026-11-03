@@ -120,7 +120,7 @@ def test_saved_metrics_and_portable_motion_use_truth_separately_from_feedback(tm
     config = SampledSimConfig(tm.SimConfig(), .02)
     timing = tm.VirtualTime(.008, .008, .0055)
     mpc = Mpc(N=3, dt=.03, wall=.004)
-    mpc.params = replace(PARAMS, N=3)
+    mpc.params = replace(PARAMS, N=3, cost=tm.default_cost(3, velocity=.01, torque=1e-4, terminal_position=80.))
     record = run_experiment(config, mpc, Figure8(period_s=.048), tm.SampleKnot(), timing, out=tmp_path/'run')
     row = export_and_measure(record, tmp_path/'executed.npz', 'default')
     assert row['status'] == 'done' and row['samples'] == 7

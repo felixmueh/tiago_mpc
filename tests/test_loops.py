@@ -80,13 +80,13 @@ class Mpc:
         self.warmups, self.requests, self.waiting, self.dead = [], [], None, False
         self.predictions, self.requested_states = [], []
 
-    def warmup(self, state, reference):
-        assert not self.requests and reference.shape == (self.N, 6)
+    def warmup(self, state, reference=None):
+        assert not self.requests and (reference is None or reference.shape == (self.N, 6))
         self.warmups.append(state.t)
 
-    def request(self, state, reference, updates=None):
+    def request(self, state, reference=None, updates=None):
         assert self.waiting is None, "a request is pending"
-        assert reference.shape == (self.N, 6)
+        assert reference is None or reference.shape == (self.N, 6)
         self.requests.append((state.t, updates))
         self.predictions.append(state if isinstance(state, Prediction) else None)
         self.requested_states.append(state)
@@ -332,11 +332,11 @@ def test_a_stale_state_cannot_extend_the_lease():
 def test_task_updates_reach_the_request_and_the_schedule_sets_the_control_rate():
     class Updating(Task):
         def at(self, t, n, dt):
-            return np.zeros((n, 6)), {"cost_weights": {"q_cost": t}}
+            return np.zeros((n, 6)), {"external_force": np.full(6, t)}
 
     mpc = Mpc()
     go(mpc, Updating(), duration=.06, update_period=.02, solve_latency_s=0.)
-    assert [(t, u["cost_weights"]["q_cost"]) for t, u in mpc.requests] == pytest.approx(
+    assert [(t, u["external_force"][0]) for t, u in mpc.requests] == pytest.approx(
         [(0., 0.), (.02, .02), (.04, .04)])
 
 
@@ -442,7 +442,7 @@ class Blocking(Mpc):
         super().__init__(**kw)
         self.wall, self.solves = wall, solves
 
-    def request(self, state, reference, updates=None):
+    def request(self, state, reference=None, updates=None):
         super().request(state, reference, updates)
         self.wall.now += self.solves[min(len(self.requests), len(self.solves)) - 1]
 
@@ -485,7 +485,7 @@ def test_update_period_0_on_wall_time_requests_at_the_tick_each_plan_is_used(wal
 def test_the_warmup_runs_once_before_the_first_tick_and_counts_against_no_lease(wall):
     """A 150 ms warm-up on wall time; the first plan starts at the state after it."""
     class Warming(Mpc):
-        def warmup(self, state, reference):
+        def warmup(self, state, reference=None):
             super().warmup(state, reference)
             wall.now += .15
 

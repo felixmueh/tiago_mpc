@@ -34,7 +34,7 @@ class HoldPosition:
     duration_s: float = 6.
 
     def at(self, t, n, dt):
-        out = np.zeros((n, 6), dtype=np.float32)
+        out = np.full((n, 6), np.nan, dtype=np.float32)  # NaN orientation: none
         out[:, :3] = self.target_m
         return out, None
 
