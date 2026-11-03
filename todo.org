@@ -5,6 +5,10 @@
 - Remove or reduce all the random README.md files.
 - Update main Readme.md to say: Prototype developed with agents. Final version hand reviewed / edited.
   - Rebase onto new gato version and new interface design of original TIAGo GATO implementation.
+- Experiments repeat the same pipeline pieces: unify the replay exports (friction_compensation and
+  controller_tuning write their own beside export_replay), the study manifests (controller_tuning,
+  friction_study, friction_compensation, random100) and how MPCs are built (random100's check process,
+  latency_study's own Mpc).
 
 * Experiments
 - Jetson with 60W?
