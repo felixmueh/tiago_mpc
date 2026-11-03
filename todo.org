@@ -6,6 +6,9 @@
 - Update main Readme.md to say: Prototype developed with agents. Final version hand reviewed / edited.
   - Rebase onto new gato version and new interface design of original TIAGo GATO implementation.
 
+* Experiments
+- Jetson with 60W?
+
 * Incoming from upstream (GATO , GRiD)
 - tanh friction.
 - robot axes handling.
@@ -47,6 +50,20 @@ Today run_real_time raises on a late plan lease, an invalid command or a dead MP
 - per-joint wrist weights;
 - an optional per-joint torque slew limit.
 
+* Settings
+- Turn on latency compensation by default.
+- Default TO freq 50hz. Measured solve latency off, declared latency 50 hz (or fitting time)
+- Default execution law. Feedforward + PD.
+
+* Tuning mechanism <-- Modify weights / parameters in the middle of a run.
+--> Decide on tool position cost depending on EE distance and velocity?
+(Same for orientation.)
+
+* Torque vs holding cost <- input holding torque per joint of the last pose (or the predicted pose with latency compensation).
+
+* TODO Real Robot
+** Clip efforts!
+
 * Other
 ** Consider Re-evaluating impact of warm start shifting for coarse trajectories.
 ** Do some TO warmup before starting actual MPC. (A couple of iterations).
@@ -54,4 +71,12 @@ Today run_real_time raises on a late plan lease, an invalid command or a dead MP
 --> Make it easy to add metadata to experiment exports.
 ** Give Plan class q / qd accessors?
 ** Consider changing interface between inprocess and out-of-process MPC.
+** Solver iteration plot. in settings be able to select SQP / PCG / ADMM.
+(Or even better perhaps be able to toggle what is shown by clicking on the legent entry.)
 
+* Bugs:
+Sometimes Arm is not animated when I press play.
+
+* MPC Problems / Bugs
+** When orientation tracking is not IT feasible the MPC will do wild things.
+--> Check feasibility of goal position + orientation with IK (visualizer option!).
