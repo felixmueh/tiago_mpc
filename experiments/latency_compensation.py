@@ -224,9 +224,7 @@ def first_tick_of_each_plan(record):
 
 
 def requested_states(record):
-    """Exact experiment inputs, from current events or the retained older plan column."""
-    if "requested_state" in record.plans:
-        return record.plans["requested_state"]
+    """Exact experiment inputs, from the record's prediction_request events."""
     requests = {e.t: e.data for e in record.events if e.kind == "prediction_request"}
     values = []
     for update_t, t0 in zip(record.plans["update_t"], record.plans["t0"]):

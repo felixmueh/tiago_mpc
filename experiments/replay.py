@@ -146,7 +146,7 @@ def save_replay(
     torque_nm=None,
     torque_time_s=None,
     joint_limits=None,
-    end_effector_frame=FLANGE_FRAME,
+    end_effector_frame,
 ):
     """Export one compressed v1 file using a temporary file and atomic rename.
 
@@ -161,9 +161,8 @@ def save_replay(
     For interval controls pass torque_time_s=time_s[:-1]; at the final state the
     viewer shows the last applied interval. Plans use predicted torque and omit
     the terminal control. Optional joint_limits use the same joint_names order.
-    end_effector_frame identifies the point tracked by the reference. The legacy
-    flange default preserves old exports; new grasp-center runs must pass their
-    recorded frame explicitly (e.g. summary['end_effector_frame']).
+    end_effector_frame identifies the point tracked by the reference (FLANGE_FRAME or
+    GRASP_FRAME), e.g. summary['end_effector_frame'].
     """
     if (not isinstance(time_basis, str) or time_basis not in ("simulation", "wall")):
         raise ValueError("time_basis must be simulation or wall")

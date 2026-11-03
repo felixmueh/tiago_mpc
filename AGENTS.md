@@ -58,6 +58,11 @@ the guide documents partial patches, version checks and completion status.
   timeout, a stop request) end a loop normally and are returned; exceptions are only for
   real errors.
 - Docs describe the current code only; git keeps the history.
+- No backward compatibility during development (Felix, 2026-10-29): when a format or
+  interface changes, change every caller and drop the old one; no portability layers, readers
+  for older saved runs or legacy defaults. The one exception: if the recording format changes,
+  port the recordings of the original real-world TIAGo tests to the new format. Remove
+  compatibility code that remains.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)
 
@@ -161,6 +166,16 @@ without ROS.
   checkout (a host-created worktree inside the container), the default falls
   back to the worktree's own `.cache/gato`.
 - **GPU:** one job at a time; check `nvidia-smi` first.
+- **Memory-heavy commands: one at a time** (Felix, 2026-11-03): parallel builds
+  by several agents exhausted the 15 GiB host and froze the desktop. Run every
+  compile (GATO module/nvcc builds, cmake/make, `uv sync` or `pip install` of
+  large packages), test suite and benchmark under the shared lock, on the host
+  `flock /var/home/felix/_Uni/MasterThesis/impl/.locks/heavy.lock <command>`
+  and in the container `flock /workspace/.locks/heavy.lock <command>` (the same
+  file). `flock` waits for the holder; for long waits run the command in the
+  background. Never launch several subagents that compile at the same time.
+  The container is capped at 10 GiB; an OOM kill there means a too-large job,
+  not a bug to work around.
 - **Agents:** use them for bounded tasks; the root agent coordinates
   interpretation, shared edits and GPU use.
 - **Worktrees:** a worktree and branch that you created and used for
