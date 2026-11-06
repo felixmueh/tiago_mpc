@@ -19,6 +19,10 @@
 
 * Simulation
 - Use separate break-away forces. Tune from real robot.
+** TODO Evaluate whether the latency-compensation predictor should differ from the simulator.
+Consider a simulator-backed predictor that reuses the simulation model and integration
+settings, alongside the independently configured predictor. Compare forecast accuracy,
+runtime and usefulness for model-mismatch experiments before choosing the default.
 
 * Real Robot
 ** 500Hz feed forward control.

@@ -318,7 +318,7 @@ wheels = [
 [[package]]
 name = "gato-mpc"
 version = "0.1.7"
-source = { editable = "../GATO-tiago-armature-017" }
+source = { editable = "../GATO-tiago-armature-collision-cache" }
 dependencies = [
     { name = "beautifulsoup4", marker = "sys_platform == 'linux'" },
     { name = "cmake", marker = "sys_platform == 'linux'" },
@@ -802,7 +802,7 @@ requires-dist = [
     { name = "cmake", specifier = "==3.31.10" },
     { name = "cmeel-tinyxml2", specifier = "==10.0.0" },
     { name = "cmeel-urdfdom", specifier = "==4.0.1" },
-    { name = "gato-mpc", editable = "../GATO-tiago-armature-017" },
+    { name = "gato-mpc", editable = "../GATO-tiago-armature-collision-cache" },
     { name = "grid-rbd", directory = "../GRiD-tiago-armature-060" },
     { name = "matplotlib", specifier = "==3.10.9" },
     { name = "pin", specifier = "==3.9.0" },

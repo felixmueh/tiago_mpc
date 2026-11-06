@@ -7,6 +7,14 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-11-03: retain local GATO armature and collision-cache work until upstream** (Felix).
+  The shared-loop integration selects `../GATO-tiago-armature-collision-cache`
+  and `../GRiD-tiago-armature-060` through `pyproject.toml` and `uv.lock`.
+  Keep the fixed-arm armature support, native ADMM-budget accessor and per-SQP
+  collision-row caching when merging; use these local sources until upstream
+  supplies the required changes. Source identity remains part of the compiled
+  module cache key and each run's provenance.
+
 - **2026-11-03: use GATO cost menus for every MPC objective** (Felix).
   `MpcParams.cost` is always a native `gato.cost_menu.CostMenu`. `default_cost(n, ...)`
   constructs the default position, terminal position, joint-velocity, torque and optional
@@ -21,6 +29,34 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   use the existing dataclass serializer. Local construction skips inactive terms,
   shares constant rotation targets, and reuses unchanged menus/reference windows while
   checking for changes to native menu fields. GATO is unchanged.
+
+- **2026-11-03: control readiness precedes lossless capture readiness** (Felix).
+  Keep the numerical plan handoff independent of capture serialization. The
+  visualizer reserves bounded recording storage and lets its independent
+  consumer wait for publication; the solver retains diagnostic ownership until
+  publication. A pause requested by a Tick observer must quiesce and enter the
+  existing callback gate at the same timestamp before further physics. This
+  includes torque breaches after a new request was submitted.
+
+- **2026-11-03: overlap virtual-time physics with asynchronous MPC** (Felix).
+  Keep solver and plant in separate processes, submitting before the independent
+  integration interval and collecting at a possible activation boundary. Retain
+  declared/measured latency, request/origin timestamps, command laws and the
+  existing virtual clock. `quiesce_at` lets an observer finish pending GPU work
+  before a report/pause callback parks. Cancellation still prevents subsequent
+  commands/physics and the caller finishes outstanding solver work before
+  releasing its lease. Control and lossless recording use separate buffers in
+  the visualizer. Forecast optimization remains deferred.
+
+- **2026-11-03: one virtual-time engine for experiments and the visualizer** (Felix).
+  Reuse `run_virtual_time` with small typed messages and a blocking callback at
+  command boundaries. `SolveCompleted` records completed results independently
+  of activation; existing `Tick` callbacks retain command decisions. Observer
+  callbacks queue detached numerical data; formatting, geometry and delivery run
+  independently. A run-owned cancellation flag is checked after blocking solves
+  and callbacks before another command or plant advance. Cancellation wakes a
+  paused callback and ends that run; reset/reconfiguration reconstructs it. No
+  optimizer checkpoint/restore or general event framework is added.
 
 - **2026-10-27: compare sticking/smoothness and remove plant friction** (Felix).
   Extend the controller-tuning experiment with sustained low-speed episodes
@@ -94,7 +130,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     recordings stay readable only by their own code).
   - **`tick_callbacks`:** the loops', `run_compensated`'s and the timings' `callbacks`
     became `tick_callbacks`, the callbacks that see every `Tick` (the `Callback` alias
-    stays). No plan callbacks (Felix).
+    stays). Interactive execution also offers typed message observers, including
+    solve completion (2026-11-03).
   - **`tiago_mpc/interfaces.py`**, renamed from `plan.py` (Felix's option a): one module
     for the data that crosses the interfaces (`State`, `Plan`, `Event`, `Tick`) and the
     protocols, the leaf of the import graph. `Law` became `ControlLaw` (`tm.ControlLaw`).
@@ -128,8 +165,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (two loops, `VirtualClock` and `WallClock`).
 - **2026-10-23: the effort check belongs to the execution side.** `Mpc` and
   `MpcProcess` return what they planned (`result()` checks only that the plan is
-  well formed and finite); `run` checks every knot of a plan when it arrives and
-  each command before it is sent. Reason: a simulator such as the visualizer must
+  well formed and finite); real-time execution checks every knot of a plan when it
+  arrives and each command before it is sent. Virtual time delegates effort
+  handling to the composed command law (2026-11-03). Reason: a simulator such as the visualizer must
   be able to execute, clip or inspect an over-limit plan. Clipping stays a
   simulation setting: the robot path never clips a torque.
 - **2026-10-24: the root re-exports with plain imports.** Felix chose proposal A: ordinary
@@ -429,6 +467,28 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Execution
 
+- **2026-11-04: simplify the shared loop and separate effort handling** (Felix).
+  Command laws return torque arrays. Virtual time has a separate
+  `effort_handling=EffortClip()` parameter, also when a caller supplies its own law;
+  `RejectOnEffort()` refuses excessive commands and `None` explicitly disables
+  effort handling. The policies accept per-joint limits and act after feedback
+  and feedforward. Invalid commands are refused before clipping. Forecasting uses
+  the same law and effort policy; both must be pure and are not copied. A future
+  refusal makes the forecast unavailable without an actuator event. Unapplied
+  over-limit plan knots are not rejected. Real-time checks remain strict and never
+  clip. Normal finite completion consumes outstanding solves so caller-owned
+  controllers can be reused; cancellation keeps the simple early exit.
+
+- **2026-11-03: configurable age expiry and streaming simulation** (Felix).
+  `VirtualTime.max_plan_age_s` is positive seconds or None; None disables the
+  100 ms observation-age limit, including in forecasting. The finite horizon
+  still bounds the plan; no implicit last-command extension is introduced.
+  Propagation retains its own explicit model, independent of plant and optimizer.
+  `duration=None` permits streaming without a preset end, with caller-owned
+  capacity limits. Finite experiments keep the ten-minute buffered-run guard.
+  Streaming preserves its existing GC policy; finite virtual runs restore the
+  original policy on exit. Special pause-time memory management is deferred.
+
 - **2026-10-30: warn about PD feedback without latency compensation** (Felix).
   The loops' setup check, renamed from `_check_compensation` to `_check_setup`,
   also warns (`RuntimeWarning`, no rejection) when `PlanFeedback`, alone or under
@@ -666,8 +726,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     frozen study classes (random100: `Random100Config`, `Case`, `Random100Study`,
     `study.json` once before the first run, one `RunRecord` per case, stop on
     `interrupted`, `load(path)`).
-  - **Runs are limited to `MAX_RUNTIME_MIN` = 10 minutes** (`loops.py`): both
-    loops raise before the plant starts for a longer duration. Long runs are not
+  - **Finite runs are limited to `MAX_RUNTIME_MIN` = 10 minutes** (`loops.py`): both
+    loops raise before the plant starts for a longer finite duration. Virtual-time
+    streaming may use duration=None with caller-owned recording capacity (2026-11-03). Long buffered runs are not
     validated: the record keeps every tick in memory (about 2 KB per tick in
     simulation) and the loops pause garbage collection for the whole run, which
     stays (a check of 24 October found no cyclic garbage per tick on the CPU

@@ -18,11 +18,11 @@ if TYPE_CHECKING:  # read by mypy only
     from experiments.reach import Reach
     import test_experiments
     import test_loops
-    from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
+    from tiago_mpc.laws import EffortClip, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
     from tiago_mpc.dynamics import Friction, Tanh
     from tiago_mpc.loops import RealTime, VirtualTime
     from tiago_mpc.mpc import Mpc, MpcProcess
-    from tiago_mpc.interfaces import ControlLaw, MpcInterface, PlantInterface, TaskInterface, Timing
+    from tiago_mpc.interfaces import ControlLaw, EffortHandling, MpcInterface, PlantInterface, TaskInterface, Timing
     from tiago_mpc.robot import RosPlant
     from tiago_mpc.sim import SimPlant
 
@@ -31,6 +31,7 @@ if TYPE_CHECKING:  # read by mypy only
     tasks: list[type[TaskInterface]] = [Reach, Figure8, test_loops.Task]
     laws: list[ControlLaw] = [SampleKnot(), HoldFirst(), PlanFeedback(),
                               FrictionFeedforward(Friction((1.,)*7, (0.,)*7), PlanFeedback(), Tanh(.03))]
+    effort_handling: list[EffortHandling] = [EffortClip(), RejectOnEffort()]
     timings: list[Timing] = [VirtualTime.ideal(), RealTime(), Compensated()]
 
 

@@ -115,7 +115,8 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     assert not {"q_cost", "N_cost", "qd_cost", "u_cost"} & config["params"]["solver"].keys()
     assert config["plant"]["type"] == "SimConfig" and config["law"] == dict(type="SampleKnot")
     assert config["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.01,
-                                    solve_latency_s=.01 if name == "reach" else 0., compensation=None)
+                                    solve_latency_s=.01 if name == "reach" else 0., compensation=None,
+                                    max_plan_age_s=.1, effort_handling=rec.to_dict(rc.tm.EffortClip()))
     assert config["duration"] == .05 and results["limits_pass"]
     if name == "figure8":
         assert config["plant"]["substep"] == .001 and config["plant"]["integrator"] == "euler"
@@ -217,15 +218,17 @@ def test_a_run_without_solves_reports_zero_work(tmp_path):
 
 
 def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
-    """The first plan's last knot exceeds joint 7's raw effort limit (26 Nm)."""
+    """An effort refusal is saved without rejecting unapplied planned knots."""
     record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)), extra=30.), rc.Reach(),
-                                   SampleKnot(), VirtualTime(.01, .03, 0.), out=tmp_path / "r")
+                                   SampleKnot(),
+                                   VirtualTime(.01, .03, 0., effort_handling=rc.tm.RejectOnEffort(effort=(.01,)*7)),
+                                   out=tmp_path / "r")
     run = load_run(record.out)
     assert run.metadata["status"] == "fault" and run.metadata["reason"] == "effort_limit"
     assert run.metadata["end_t"] == 0. and run.metadata["error"] is None
     assert len(run.ticks["t"]) == 1 and np.isnan(run.ticks["command"]).all()
-    # The faulting plan is saved, the last row, though no tick's plan index points at it.
-    np.testing.assert_array_equal(run.ticks["plan"], [-1])
+    # The selected prediction is retained, although its first command was refused.
+    np.testing.assert_array_equal(run.ticks["plan"], [0])
     assert len(run.plans["t0"]) == 1 and run.plans["update_t"][0] == 0. and run.plans["torques"][0, -1, 6] > 26.
     # a 30 ms plan, 50 ms late
     record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, dt_s=.01, cost=rc.tm.default_cost(4))), rc.Reach(),
@@ -249,7 +252,8 @@ def test_an_interrupted_run_is_saved_as_interrupted(tmp_path):
     record = common.run_experiment(SimConfig(substep=.003), mpc, rc.Reach(), SampleKnot(), VirtualTime.ideal(),
                                    out=tmp_path / "stopped")
     assert record.metadata["status"] == "interrupted" and record.metadata["reason"] == "stop_requested"
-    assert load_run(record.out).metadata == record.metadata and len(record.ticks["t"]) == 1
+    assert load_run(record.out).metadata == record.metadata
+    assert not np.isfinite(record.ticks["command"]).any()
 
 
 def test_a_failed_build_is_a_saved_error_and_a_failed_compile_leaves_no_run(monkeypatch, tmp_path):

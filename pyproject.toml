@@ -63,6 +63,7 @@ module = ["gato.*", "pinocchio.*", "rclpy.*", "builtin_interfaces.*", "rcl_inter
 ignore_missing_imports = true
 
 # TODO: Move to upstream once they support armature.
+# Local armature support and per-SQP collision-row caching; see README.md.
 [tool.uv.sources]
-gato-mpc = { path = "../GATO-tiago-armature-017", editable = true }
+gato-mpc = { path = "../GATO-tiago-armature-collision-cache", editable = true }
 grid-rbd = { path = "../GRiD-tiago-armature-060" }  # wheel build stages GRiD's validated peer/resources bundle

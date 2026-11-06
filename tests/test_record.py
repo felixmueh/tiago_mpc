@@ -15,7 +15,7 @@ from experiments.reach import Reach
 from gato.cost_menu import CostMenu, LinearTerm, Term
 from test_loops import Mpc, Plant, Task
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
+from tiago_mpc.laws import EffortClip, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
 from tiago_mpc.loops import RealTime, VirtualTime, run_virtual_time
 from tiago_mpc.mpc import TIAGO, AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
@@ -41,7 +41,8 @@ def test_a_run_is_written_and_read_back(tmp_path):
     written = json.loads((tmp_path / "r" / "summary.json").read_text())  # at once
     assert written["format"] == FORMAT and written["metadata"]["status"] == "running"
     assert written["config"]["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.02,
-                                               solve_latency_s=.01, compensation=None)
+                                               solve_latency_s=.01, compensation=None, max_plan_age_s=.1,
+                                               effort_handling=to_dict(EffortClip()))
     outcome = timing.run(plant, mpc, task, SampleKnot(), [record], duration=.05)
     record.add_events([Event(plant.clock.now(), "handback", "handed back", dict(restored=True, errors=[]))])
     record.ticks["distance_m"] = np.arange(len(record.ticks["t"])) * .1
@@ -58,8 +59,8 @@ def test_a_run_is_written_and_read_back(tmp_path):
     np.testing.assert_allclose(plans["t0"], [0., .02, .04], atol=1e-12)  # their states
     assert set(plans) == {"t0", "measured_t", "update_t", "states", "torques", "wall_s", "label"}
     assert [(e.kind, round(e.t, 6)) for e in record.events] == [
-        ("late_plan", .012), ("pacing_behind", .012), ("pacing_behind", .022), ("late_plan", .032),
-        ("pacing_behind", .032), ("pacing_behind", .042), ("pacing_behind", .052), ("handback", .052)]
+        ("pacing_behind", .012), ("late_plan", .012), ("pacing_behind", .022), ("pacing_behind", .032),
+        ("late_plan", .032), ("pacing_behind", .042), ("pacing_behind", .052), ("handback", .052)]
 
     run = load_run(tmp_path / "r", classes=[Task])
     assert run.out == record.out and run.config == record.config and run.config["task"] == task
@@ -188,7 +189,8 @@ SAMPLES = [
     FRICTION, Tanh(.05), Sign(), StickSlip(), SampleKnot(), HoldFirst(),
     PlanFeedback(kp=(1.,) * 7, kd=(2.,) * 7),
     FrictionFeedforward(friction=FRICTION, base_law=HoldFirst(), evaluation=Tanh(.05)),
-    VirtualTime(.01, .02, .01, compensation=LATENCY),
+    EffortClip(effort=(2.,) * 7), RejectOnEffort(effort=(3.,) * 7),
+    VirtualTime(.01, .02, .01, compensation=LATENCY, max_plan_age_s=.2, effort_handling=RejectOnEffort()),
     RealTime(command_period=.004, update_period=.04, compensation=None),
     LATENCY,
     SimConfig(q=(.1,) * 7, qd=(.2,) * 7, substep=.002, friction=FRICTION, friction_law=Sign(),

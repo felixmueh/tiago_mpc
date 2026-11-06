@@ -42,7 +42,7 @@ True
 
 >>> data = tm.to_dict(tm.VirtualTime.ideal())
 >>> data
-{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0, 'compensation': None}
+{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0, 'compensation': None, 'max_plan_age_s': 0.1, 'effort_handling': {'type': 'EffortClip', 'effort': [...]}}
 >>> tm.from_dict(data) == tm.VirtualTime.ideal()
 True
 
@@ -86,7 +86,7 @@ from gato.cost_menu import CostMenu, LinearTerm, Term
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
+from tiago_mpc.laws import EffortClip, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
 from tiago_mpc.loops import RealTime, VirtualTime
 from tiago_mpc.mpc import AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
@@ -100,7 +100,7 @@ FORMAT = 3
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
     SolverSettings, MpcParams, AdmmLimits, CostMenu, Term, LinearTerm,
     Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
-    PlanFeedback, FrictionFeedforward,
+    PlanFeedback, FrictionFeedforward, EffortClip, RejectOnEffort,
     VirtualTime, RealTime, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
 )
 

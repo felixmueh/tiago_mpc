@@ -35,9 +35,10 @@ simulation_timing = tm.VirtualTime(
 )
 ```
 
-Pass the timing to `experiments.common.run_experiment` as usual. `RealTime` uses
-the concurrent `MpcProcess`; simulation uses the in-process `Mpc`. This is a Python
-configuration option, with no new CLI or visualizer control in this change.
+Pass the timing to `experiments.common.run_experiment` as usual. It builds a
+concurrent `MpcProcess` for `RealTime` and an in-process `Mpc` for simulation.
+Interactive callers can pass `MpcProcess` to `run_virtual_time` to overlap solving
+with independent plant integration. Compensation is configured on the timing.
 
 ## Delay estimate and plan activation
 
@@ -82,7 +83,7 @@ tick. Prediction does not replace the measured feedback used by PD or the robot'
 checks. Friction feedforward can be combined with physical propagation friction:
 one adds actuator torque and the other models opposing resistance. The existing
 guard still rejects external FF combined with optimizer friction, or nested FF.
-This change adds no effort saturation or velocity-limiting policy.
+Simulation selects its effort policy separately from the command law, as described below.
 
 Both loops warn when `PlanFeedback` runs without compensation. Without it, the
 first plan starts at its state's time while the arm is still held, so when it
@@ -104,10 +105,15 @@ Its `t` is the future origin and `measured_t` is the original observation time.
 There is no separate optional prediction argument.
 `Plan.t0` is the time represented by its initial coordinates; `Plan.measured_t`
 is a required float retaining the original measurement time. Without prediction,
-callers set it equal to `t0`. The plan expires at the earlier of:
+callers set it equal to `t0`. Real-time execution expires a plan at the earlier of:
 
 - `measured_t + 0.1` seconds, the existing measurement-age allowance;
 - `t0 + len(torques) * dt`, the end of its trajectory.
+
+Virtual-time execution uses `VirtualTime.max_plan_age_s` for the first limit
+(default 0.1 s); None disables that age limit in execution and prediction.
+The plan's finite horizon remains. Forecasting still preserves the original
+measurement time and does not renew an observation's age.
 
 Prediction therefore cannot renew an old measurement's lease. Existing effort,
 state-freshness and robot safety checks remain in force. A non-compensated plan
@@ -115,7 +121,13 @@ uses its original state time for both timestamps.
 
 An unsupported forecast ends the loop with `prediction_unavailable`: for example,
 the observation is outside retained command history, the target is beyond a valid
-lease, or a forecast command would fail the existing effort/validity checks. On
+lease, or a forecast command would fail validity or effort checks. Simulation
+uses the same law and separate effort policy for actual and predicted commands:
+`effort_handling=EffortClip()` means propagation uses the clipped torque, and
+`RejectOnEffort()` makes an excessive future command return prediction_unavailable
+without an actual actuator event. `None` explicitly disables effort handling.
+Forecast-compatible laws and effort policies must be pure; forecasting evaluates
+them directly without copying their state. On
 wall time this preparation happens after the current valid command and callbacks;
 the loop stops and hands back immediately if preparation fails.
 

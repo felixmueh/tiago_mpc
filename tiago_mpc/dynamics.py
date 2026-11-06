@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 from typing import Any
 
@@ -30,6 +31,12 @@ class StickSlip:
 
 
 CoulombLaw = Tanh | Sign | StickSlip  # record.to_dict tells them apart by their type names
+
+
+@lru_cache(maxsize=16)
+def _lower_triangle(size: int) -> tuple[np.ndarray, np.ndarray]:
+    """CRBA's triangle layout is constant across steps of a given model."""
+    return np.tril_indices(size, -1)
 
 
 @dataclass(frozen=True)
@@ -87,8 +94,9 @@ def plant_euler(
     """
     import pinocchio as pin
 
-    mass = pin.crba(model, data, q)
-    mass = np.triu(mass) + np.triu(mass, 1).T
+    mass = pin.crba(model, data, q).copy()
+    lower = _lower_triangle(model.nv)
+    mass[lower] = mass.T[lower]
     bias = pin.rnea(model, data, q, velocity, np.zeros(model.nv))
     momentum = mass @ velocity + dt*(actuator_torque - bias)
     if friction is None:
@@ -150,11 +158,14 @@ def _stick_slip(system: np.ndarray, momentum: np.ndarray, threshold: np.ndarray)
     slipping = (new != 0) | (threshold == 0)
     tolerance = 1e-12 * (1 + np.max(np.abs(momentum)))  # impulse residual
     for _ in range(4*len(new)):
-        new = np.zeros_like(momentum)
         index = np.flatnonzero(slipping)
-        if index.size:
-            new[index] = np.linalg.solve(system[np.ix_(index, index)],
-                                         momentum[index] - threshold[index]*direction[index])
+        if index.size == len(momentum):
+            new = np.linalg.solve(system, momentum - threshold*direction)
+        else:
+            new = np.zeros_like(momentum)
+            if index.size:
+                new[index] = np.linalg.solve(system[index[:, None], index],
+                                             momentum[index] - threshold[index]*direction[index])
         impulse = momentum - system @ new
         reversed_ = slipping & (threshold > 0) & (new*direction <= 0)
         breaking = ~slipping & (np.abs(impulse) > threshold + tolerance)

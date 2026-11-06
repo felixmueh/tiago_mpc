@@ -123,6 +123,23 @@ class Tick:
     events: tuple[Event, ...]
     faulted: Plan | None
     plan_request_t: float | None = None  # update tick that requested the new/faulted plan
+    requested_command: np.ndarray | None = None  # before the loop's effort handling
+    clipped: bool = False
+
+
+@dataclass(frozen=True)
+class SolveCompleted:
+    """One returned solve, independently of whether its plan ever becomes active.
+
+    Request inputs are detached at submission when message observers are enabled.
+    Native solve latency remains in plan.stats['wall_s'].
+    """
+    request_time_s: float
+    initial: State | Prediction
+    reference: np.ndarray
+    updates: dict[str, Any] | None
+    plan: Plan
+    wall_s: float  # foreground preparation, submission and result waits; excludes physics and observer parking
 
 
 class PlantInterface(Protocol):
@@ -184,8 +201,10 @@ class TaskInterface(Protocol):
     def duration_s(self) -> float: ...
 
 
-ControlLaw = Callable[[Plan, float, State], np.ndarray]  # law(plan, t, state) -> command (laws.py)
+ControlLaw = Callable[[Plan, float, State], np.ndarray]
+EffortHandling = Callable[[np.ndarray], np.ndarray | None]
 Callback = Callable[[Tick], None]  # sees every command tick, e.g. a RunRecord
+MessageCallback = Callable[[Tick | SolveCompleted | Event], None]
 
 
 class Timing(Protocol):

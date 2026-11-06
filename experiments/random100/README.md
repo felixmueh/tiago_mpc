@@ -18,6 +18,11 @@ predictor, the plant and the compensation); earlier runs used 10 ms knots, 80 %,
 `VirtualTime.ideal()`, `SampleKnot` and no armature, another model. They keep
 their labels.
 
+The virtual-time effort policy defaults to clipping the complete command at the
+raw torque limits, including feedback (2026-11-04). The policy is recorded in
+the timing configuration. Earlier results retain their original effort policy
+and labels.
+
 ```bash
 .venv/bin/python -m experiments.random100.run --dry-run     # parameters only
 .venv/bin/python -m experiments.random100.run               # all 100 cases
@@ -43,7 +48,7 @@ their labels.
   2 cm/s within 8 simulated seconds) and simulated physical-limit compliance
   are reported separately. A timeout, limit violation or numerical failure
   keeps its output and the other cases continue; a shared setup failure stops
-  the run. There is no torque clipping or retry.
+  the run. Commands use the timing's effort policy; cases are never retried.
 - **Analysis:** `analyze.py` needs no GPU. It reads the run with `load`, counts the
   outcomes, checks each case's initial state, recomputes joint, speed and torque
   limit excesses from all saved command ticks, and writes the per-case audit

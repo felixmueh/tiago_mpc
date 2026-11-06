@@ -31,6 +31,23 @@ URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
 LOSSES = Friction([1.] * 7, [.5] * 7)
 
 
+def test_close_releases_controller_while_the_mpc_object_is_still_retained():
+    import weakref
+
+    class Controller:
+        pass
+
+    controller = Controller()
+    retained = weakref.ref(controller)
+    instance = Mpc.__new__(Mpc)
+    instance.controller, instance.step, instance._plan = controller, object(), None
+    del controller
+    assert retained() is not None
+    instance.close()
+    assert retained() is None and instance.step is None
+    instance.close()
+
+
 @pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(TIAGO, N=8, admm=replace(TIAGO.admm, iters=5))])
 def test_to_dict_round_trips_also_through_json_and_pickle(params):
     assert from_dict(to_dict(params)) == params

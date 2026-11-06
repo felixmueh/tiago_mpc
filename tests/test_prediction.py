@@ -13,7 +13,7 @@ from test_loops import Mpc, Plant, Task, commanded, wall
 
 
 def predictor(**settings):
-    return _Predictor(tm.LatencyCompensation(**settings), tm.loops.LEASE_S, tm.command_fault)
+    return _Predictor(tm.LatencyCompensation(**settings), tm.loops.LEASE_S)
 
 
 def plan(t0=0., measured_t=0., dt=.002, n=40):
@@ -231,18 +231,16 @@ def test_superseded_early_plan_does_not_misassociate_recorded_request(tmp_path):
     assert set(record.plans) == {'t0', 'measured_t', 'update_t', 'states', 'torques', 'wall_s'}
 
 
-def test_uncommanded_ready_plan_is_not_recorded_when_next_result_faults(tmp_path):
+def test_an_unapplied_over_limit_knot_does_not_reject_a_simulated_plan(tmp_path):
     timing = tm.VirtualTime(.002, 0., 0., tm.LatencyCompensation(initial_latency_s=.005))
     record = tm.RunRecord(tmp_path/'faulted', timing=timing)
     ticks, outcome = run(timing, Mpc(dt=.002, over=2), duration=.01, callbacks=[record])
-    assert outcome.reason == 'effort_limit' and outcome.t == pytest.approx(.006)
-    assert not any(tick.command is not None for tick in ticks)
-    assert not ticks[-1].new and ticks[-1].faulted is not None
-    assert ticks[-1].plan_request_t == pytest.approx(.006)
+    assert outcome.status == 'timeout' and outcome.reason is None
+    assert any(tick.command is not None for tick in ticks)
+    assert all(tick.faulted is None for tick in ticks)
     record.save()
-    assert record.plans['update_t'] == pytest.approx([.006])
-    assert record.plans['t0'] == pytest.approx([.006])
-    np.testing.assert_array_equal(record.ticks['plan'], -1)
+    assert record.plans['update_t'][0] == pytest.approx(.006)
+    assert record.plans['torques'][0, -1, 6] == pytest.approx(26.1)
 
 
 def test_stale_measured_state_stays_raw_for_requests_feedback_and_recording(tmp_path):

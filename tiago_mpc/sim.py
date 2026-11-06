@@ -13,6 +13,7 @@ substep is 1 ms (1 kHz), independent of command/control rates.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable, Sequence
 import time
 from typing import Any, Literal
 
@@ -85,6 +86,7 @@ class SimPlant:
         self.command: np.ndarray | None = None
         self.run_state: dict[str, Any] = {}
         self._events: list[Event] = []
+        self.step_callback: Callable[[State], Sequence[Event]] | None = None
 
     def start(self, clock: VirtualClock | WallClock) -> None:
         if self.config.sync_real_time and isinstance(clock, WallClock):
@@ -145,6 +147,10 @@ class SimPlant:
             if not np.isfinite(q).all() or not np.isfinite(qd).all():
                 raise FloatingPointError("Nonfinite simulated state")
             self.q, self.qd, self.t = q, qd, self.t + h
+            if self.step_callback is not None:
+                # Only observers need detached endpoint states. The command-loop
+                # clock advances after the complete command interval as usual.
+                self._events.extend(self.step_callback(State(self.t, q.copy(), qd.copy())))
         self.t = t  # instead of accumulating substep rounding
 
     def stop(self) -> None:

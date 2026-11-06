@@ -470,7 +470,8 @@ class Mpc:
         return None if plan is None else _checked(self, plan, plan.t0, plan.measured_t)
 
     def close(self) -> None:
-        pass
+        """Release controller/native buffers even when a traceback retains this Mpc."""
+        self.controller = self.step = self._plan = None
 
     def _objective(self, reference: np.ndarray | None) -> None:
         """Apply changed menu settings or explicitly supplied grasp-frame targets."""
@@ -497,9 +498,12 @@ class Mpc:
     def _x(self, state):
         """The solver's state vector."""
         q, qd = np.asarray(state.q, dtype=float), np.asarray(state.qd, dtype=float)
-        if q.shape != (7,) or qd.shape != (7,) or not np.isfinite(np.r_[q, qd]).all():
+        if q.shape != (7,) or qd.shape != (7,):
             raise ValueError("Measured state must contain seven finite native positions/velocities")
-        return np.r_[q, qd]
+        x = np.concatenate((q, qd))
+        if not np.isfinite(x).all():
+            raise ValueError("Measured state must contain seven finite native positions/velocities")
+        return x
 
     def _solve(self, state: State | Prediction, reference: np.ndarray | None, updates):
         x = self._x(state)
