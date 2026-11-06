@@ -15,8 +15,8 @@ from experiments.reach import Reach
 from gato.cost_menu import CostMenu, LinearTerm, Term
 from test_loops import Mpc, Plant, Task
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.laws import EffortClip, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
-from tiago_mpc.loops import RealTime, VirtualTime, run_virtual_time
+from tiago_mpc.laws import EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
+from tiago_mpc.loops import RealTimeSettings, VirtualTimeSettings, run_virtual_time
 from tiago_mpc.mpc import TIAGO, AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.record import CLASSES, FORMAT, Event, RunRecord, from_dict, load_run, to_dict
@@ -34,16 +34,15 @@ def test_a_run_is_written_and_read_back(tmp_path):
             super().advance(t)
             self.events.append(Event(t, "pacing_behind", "behind", dict(behind_s=.001)))
 
-    plant, mpc, task, timing = Emitting(measure=lambda t: t - .002), Mpc(wall=.004), Task(), VirtualTime(.01, .02, .01)
+    plant, mpc, task, timing = Emitting(measure=lambda t: t - .002), Mpc(wall=.004), Task(), VirtualTimeSettings(.01, .02, .01)
     record = RunRecord(tmp_path / "r", task=task, params=TIAGO,
                        plant=SimConfig(friction=urdf_friction(), friction_law=Tanh(.03)),
-                       law=SampleKnot(), timing=timing, duration=.05, case="first")
+                       law=SampleKnot(), settings=timing, duration=.05, case="first")
     written = json.loads((tmp_path / "r" / "summary.json").read_text())  # at once
     assert written["format"] == FORMAT and written["metadata"]["status"] == "running"
-    assert written["config"]["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.02,
-                                               solve_latency_s=.01, compensation=None, max_plan_age_s=.1,
-                                               effort_handling=to_dict(EffortClip()))
-    outcome = timing.run(plant, mpc, task, SampleKnot(), [record], duration=.05)
+    assert written["config"]["settings"] == dict(type="VirtualTimeSettings", command_period=.01, update_period=.02,
+                                               solve_latency_s=.01)
+    outcome = run_virtual_time(plant, mpc, task, SampleKnot(), [record], settings=timing, duration=.05)
     record.add_events([Event(plant.clock.now(), "handback", "handed back", dict(restored=True, errors=[]))])
     record.ticks["distance_m"] = np.arange(len(record.ticks["t"])) * .1
     record.plans["label"] = np.array([f"plan {i}" for i in range(len(record.plans["t0"]))])
@@ -82,8 +81,8 @@ def test_a_run_is_written_and_read_back(tmp_path):
 
 def test_save_refuses_a_column_of_the_wrong_length(tmp_path):
     record = RunRecord(tmp_path / "r", task=Task())
-    run_virtual_time(Plant(), Mpc(), Task(), tick_callbacks=[record], command_period=.01, update_period=.01,
-                     duration=.03, solve_latency_s=0.)
+    run_virtual_time(Plant(), Mpc(), Task(), tick_callbacks=[record],
+                     settings=VirtualTimeSettings(.01, .01, 0.), duration=.03)
     record.ticks["short"] = np.zeros(2)
     with pytest.raises(ValueError, match="rows"):
         record.save()
@@ -190,8 +189,8 @@ SAMPLES = [
     PlanFeedback(kp=(1.,) * 7, kd=(2.,) * 7),
     FrictionFeedforward(friction=FRICTION, base_law=HoldFirst(), evaluation=Tanh(.05)),
     EffortClip(effort=(2.,) * 7), RejectOnEffort(effort=(3.,) * 7),
-    VirtualTime(.01, .02, .01, compensation=LATENCY, max_plan_age_s=.2, effort_handling=RejectOnEffort()),
-    RealTime(command_period=.004, update_period=.04, compensation=None),
+    VirtualTimeSettings(.01, .02, .01), ExecutionSafety(.2),
+    RealTimeSettings(command_period=.004, update_period=.04),
     LATENCY,
     SimConfig(q=(.1,) * 7, qd=(.2,) * 7, substep=.002, friction=FRICTION, friction_law=Sign(),
               integrator="euler", sync_real_time=True, armature=(.1,) * 7),
@@ -214,7 +213,8 @@ REACH = Reach(target_m=(.4, -.2, .9), position_tol_m=.03, speed_tol_m_s=.01, tim
               orientation_rad=(.1, .2, .3))
 CASE = Case(name="c", initial_state=(.1,) * 14, target_m=(.4, -.2, .9))
 RANDOM100 = Random100Config(ids=(1, 2), inputs_sha256="ab", params=SAMPLE["MpcParams"], plant=SAMPLE["SimConfig"],
-                            timing=SAMPLE["VirtualTime"])
+                            settings=SAMPLE["VirtualTimeSettings"], compensation=LATENCY,
+                            safety=SAMPLE["ExecutionSafety"], effort_handling=SAMPLE["EffortClip"])
 EXPERIMENT_SAMPLES = [
     REACH, Figure8(start_m=(.4, -.2, .9), x_span_m=.2, y_amplitude_m=.05, edge_clearance_m=.01, period_s=12.,
                    orientation_rad=(.2, .1, -.2)),

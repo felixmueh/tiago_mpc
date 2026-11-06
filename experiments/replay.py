@@ -27,7 +27,7 @@ def export_replay(record):
     RunRecord, or load_run's with the task's class): the state and command at each tick,
     the task's reference (with its orientation when the task has one at some tick), every
     plan and the MpcParams (provenance.params); nothing for fewer than two ticks. The time
-    basis follows the timing's type: RealTime is wall time, every other timing virtual time
+    basis follows the settings' type: RealTimeSettings is wall time, every other settings type virtual time
     ("simulation")."""
     ticks, plans, params, task = record.ticks, record.plans, record.config["params"], record.config["task"]
     time_s, command = ticks["t"], ticks["command"]
@@ -38,8 +38,8 @@ def export_replay(record):
     predictions = [dict(origin_time_s=float(t0), time_s=np.arange(n) * dt, q=states[:, :7],
                         qd_rad_s=states[:, 7:], torque_nm=torques, torque_time_s=np.arange(n - 1) * dt)
                    for t0, states, torques in zip(plans["t0"], plans["states"], plans["torques"])]
-    timing = record.config["timing"]
-    wall = (timing["type"] if isinstance(timing, dict) else type(timing).__name__) == "RealTime"
+    settings = record.config["settings"]
+    wall = (settings["type"] if isinstance(settings, dict) else type(settings).__name__) == "RealTimeSettings"
     reference = np.array([task.at(t, 2, dt)[0][0] for t in time_s], dtype=float)
     rotation = reference[:, 3:] if np.isfinite(reference[:, 3:]).any() else None  # NaN rows: none
     return save_replay(record.out / "replay.npz", time_s=time_s, q=ticks["q"], qd_rad_s=ticks["qd"],

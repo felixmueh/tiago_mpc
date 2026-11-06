@@ -10,8 +10,8 @@ import numpy as np
 import pinocchio as pin
 
 from tiago_mpc.dynamics import CoulombLaw, Friction, StickSlip, plant_euler
-from tiago_mpc.interfaces import ControlLaw, EffortHandling, Plan, Prediction, State
-from tiago_mpc.laws import RejectOnEffort, _apply_effort
+from tiago_mpc.interfaces import ControlLaw, EffortHandling, Fault, Plan, Prediction, SafetyInterface, State
+from tiago_mpc.laws import ExecutionSafety, RejectOnEffort, decide_command
 from tiago_mpc.tiago import ARMATURE_KG_M2, arm_urdf
 
 _TOLERANCE = 1e-9
@@ -19,7 +19,7 @@ _TOLERANCE = 1e-9
 
 @dataclass(frozen=True)
 class LatencyCompensation:
-    """Prediction settings, on by default in RealTime() (and VirtualTime.like(RealTime())).
+    """The independent physical model and delay forecast for latency compensation.
 
     latency_s is a fixed forecast, or 'previous': the last completed request-to-result
     delay, bootstrapped by initial_latency_s. It never uses the current solve's duration.
@@ -60,10 +60,10 @@ class _Predictor:
     def __init__(
         self,
         config: LatencyCompensation,
-        lease_s: float | None,
+        safety: SafetyInterface = ExecutionSafety(),
         effort_handling: EffortHandling | None = RejectOnEffort(),
-    ):
-        self.config, self.lease_s = config, lease_s
+    ) -> None:
+        self.config, self.safety = config, safety
         self.effort_handling = effort_handling
         self.model = pin.buildModelFromUrdf(str(arm_urdf()))
         self.model.armature = np.asarray(config.armature)
@@ -82,7 +82,7 @@ class _Predictor:
         value.flags.writeable = False
         self.history.append((t, value))
         # Retain the command already held at the oldest usable observation time.
-        cutoff = t-self.lease_s if self.lease_s is not None else self.observed_time_s
+        cutoff = self.observed_time_s
         while len(self.history) > 1 and cutoff is not None and self.history[1][0] <= cutoff:
             self.history.popleft()
 
@@ -104,19 +104,17 @@ class _Predictor:
 
         None: the observation/history or committed plan cannot support the forecast.
         Unknown startup effort is onboard position hold, matching SimPlant.command=None.
+        During startup, execution safety is checked when the first plan arrives.
         No observation or plan timestamp is changed.
         """
         if (state.t > now + _TOLERANCE or state.t < self.history[0][0]
-                or at < now - _TOLERANCE
-                or self.lease_s is not None and at >= state.t + self.lease_s):
+                or at < now - _TOLERANCE):
             return None
         self.observed_time_s = state.t
         while len(self.history) > 1 and self.history[1][0] <= state.t:
             self.history.popleft()
         if plan is not None:
             expires = plan.t0 + len(plan.torques)*plan.dt
-            if self.lease_s is not None:
-                expires = min(expires, plan.measured_t+self.lease_s)
             if at > expires + _TOLERANCE:
                 return None
         q, qd, t = np.array(state.q, copy=True), np.array(state.qd, copy=True), state.t
@@ -148,14 +146,10 @@ class _Predictor:
             if t >= at - 1e-12:
                 break
             if plan is not None:
-                expires = plan.t0 + len(plan.torques)*plan.dt
-                if self.lease_s is not None:
-                    expires = min(expires, plan.measured_t+self.lease_s)
-                if t >= expires:
+                decision = decide_command(plan, t, State(t, q, qd), law,
+                                          safety=self.safety, effort_handling=self.effort_handling)
+                if isinstance(decision, Fault):
                     return None
-                requested = np.asarray(law(plan, t, State(t, q, qd)), dtype=float)
-                held, fault = _apply_effort(requested, self.effort_handling)
-                if fault is not None:
-                    return None
+                held = decision.applied
             tick += command_period
         return Prediction(at, q, qd, measured_t=state.t)

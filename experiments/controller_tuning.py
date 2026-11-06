@@ -123,7 +123,7 @@ def evaluate(record: tm.RunRecord) -> None:
     torque = ticks['command'][sent]
     raw = tm.limits()
     excess = limit_excess(dict(q=q, qd=qd, command=ticks['command']))
-    dt = record.config['timing'].command_period
+    dt = record.config['settings'].command_period
     late = ticks['t'] >= 1.
     tail = ticks['t'] >= max(0., ticks['t'][-1]-1.)
     quality = metrics(error)
@@ -201,7 +201,9 @@ def main() -> int:
     plant = scenario(args.scenario, args.feedback_period)
     timing = replace(TIMING, solve_latency_s=args.solve_latency)
     config = dict(provenance=tm.provenance(), params=tm.to_dict(params), plant=tm.to_dict(plant),
-                  timing=tm.to_dict(timing), laws={k: tm.to_dict(laws()[k]) for k in args.laws},
+                  settings=tm.to_dict(timing), loop="run_virtual_time", compensation=None,
+                  safety=tm.to_dict(tm.ExecutionSafety()), effort_handling=tm.to_dict(tm.EffortClip()),
+                  laws={k: tm.to_dict(laws()[k]) for k in args.laws},
                   case_params={k: tm.to_dict(case_params(k, params)) for k in args.laws},
                   tasks={k: tm.to_dict(tasks()[k]) for k in args.tasks}, duration_cap_s=args.duration,
                   urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),

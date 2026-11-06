@@ -8,13 +8,15 @@ root. Importing the package may load Pinocchio and GATO's Python package, but ne
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.costs import default_cost, with_reference
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh, passive_torque
-from tiago_mpc.laws import EffortClip, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
-from tiago_mpc.loops import (STOP, Outcome, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
-                             run_real_time, run_virtual_time)
+from tiago_mpc.laws import (EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback,
+                            RealTimeEffort, RealTimeSafety, RejectOnEffort, SampleKnot, decide_command, validate_plan)
+from tiago_mpc.loops import (STOP, Outcome, RealTimeSettings, Schedule, VirtualTimeSettings,
+                             default_compensation, run_real_time, run_virtual_time)
 from tiago_mpc.mpc import TIAGO, UPDATES, Mpc, MpcParams, MpcProcess, SolverSettings, compile_binary, find_binary
 from tiago_mpc.prediction import LatencyCompensation
-from tiago_mpc.interfaces import (Callback, ControlLaw, EffortHandling, Event, MessageCallback, MpcInterface, Plan,
-                                  PlantInterface, Prediction, SolveCompleted, State, TaskInterface, Tick, Timing)
+from tiago_mpc.interfaces import (Callback, Command, ControlLaw, EffortHandling, Event, Fault, MessageCallback,
+                                  MpcInterface, Plan, PlantInterface, Prediction, SolveCompleted, State, TaskInterface,
+                                  SafetyInterface, Tick)
 from tiago_mpc.record import Console, RunRecord, from_dict, load_run, provenance, to_dict
 from tiago_mpc.robot import RobotConfig, RosPlant
 from tiago_mpc.sim import SimConfig, SimPlant
@@ -26,15 +28,15 @@ from tiago_mpc.util import hz_to_s, inertia_gains
 
 __all__ = [
     "VirtualClock", "WallClock", "Friction", "Sign", "StickSlip", "Tanh", "passive_torque",
-    "EffortClip", "RejectOnEffort", "EffortHandling",
-    "FrictionFeedforward", "HoldFirst", "PlanFeedback", "SampleKnot", "inertia_gains",
-    "STOP", "Outcome", "RealTime", "Schedule", "VirtualTime", "command_fault", "lease_fault", "plan_fault",
-    "run_real_time", "run_virtual_time",
+    "EffortClip", "RejectOnEffort", "EffortHandling", "ExecutionSafety", "RealTimeSafety", "RealTimeEffort", "SafetyInterface",
+    "FrictionFeedforward", "HoldFirst", "PlanFeedback", "SampleKnot", "inertia_gains", "decide_command", "validate_plan",
+    "STOP", "Outcome", "RealTimeSettings", "Schedule", "VirtualTimeSettings",
+    "default_compensation", "run_real_time", "run_virtual_time",
     "TIAGO", "UPDATES", "Mpc", "MpcParams", "MpcProcess", "SolverSettings", "default_cost", "with_reference",
     "compile_binary", "find_binary",
     "LatencyCompensation", "Prediction",
     "Callback", "MessageCallback", "SolveCompleted", "ControlLaw", "Event", "MpcInterface", "Plan", "PlantInterface",
-    "State", "TaskInterface", "Tick", "Timing",
+    "State", "TaskInterface", "Tick", "Command", "Fault",
     "Console", "RunRecord", "from_dict", "load_run", "provenance", "to_dict",
     "RobotConfig", "RosPlant", "SimConfig", "SimPlant",
     "ARMATURE_KG_M2", "FLANGE_FRAME", "FULL_URDF", "GRASP_FRAME", "PD_KD", "PD_KP",

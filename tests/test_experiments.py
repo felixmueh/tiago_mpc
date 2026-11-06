@@ -11,10 +11,11 @@ import pinocchio as pin
 import pytest
 
 from experiments import common, figure8 as f8, reach as rc
-from experiments.latency_compensation import Compensated
+from experiments.latency_compensation import Compensated, run_compensated
+from test_loops import wall
 from tiago_mpc import record as rec
 from tiago_mpc.laws import SampleKnot
-from tiago_mpc.loops import STOP, RealTime, VirtualTime
+from tiago_mpc.loops import STOP, RealTimeSettings, VirtualTimeSettings
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, load_run
@@ -91,12 +92,12 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05, orientation_rad=tuple(rc.tm.ee_orientation(Q_START)))
         record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, dt_s=.01, cost=rc.tm.default_cost(4))), task,
-                                       SampleKnot(), VirtualTime(.01, .01, .01), out=tmp_path / name)
+                                       SampleKnot(), VirtualTimeSettings(.01, .01, .01), out=tmp_path / name)
         rc.evaluate(record)
     else:
         task = f8.Figure8(period_s=.05, orientation_rad=(0., 0., 0.))
         record = common.run_experiment(SimConfig(friction=urdf_friction(), integrator="euler"),
-                                       Mpc(replace(f8.FIGURE8, N=4, cost=rc.tm.default_cost(4, velocity=.01, torque=1e-6))), task, SampleKnot(), VirtualTime(.01, .01, 0.),
+                                       Mpc(replace(f8.FIGURE8, N=4, cost=rc.tm.default_cost(4, velocity=.01, torque=1e-6))), task, SampleKnot(), VirtualTimeSettings(.01, .01, 0.),
                                        out=tmp_path / name)
         f8.evaluate(record)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
@@ -104,7 +105,7 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     assert summary["format"] == rec.FORMAT and set(summary) == {"format", "provenance", "config", "metadata"}
     assert metadata["status"] == ("timeout" if name == "reach" else "done") and metadata["reason"] is None
     assert metadata["end_t"] == pytest.approx(.05) and metadata["error"] is None and metadata["plant"] == {}
-    assert set(config) == {"task", "params", "plant", "law", "timing", "duration"}
+    assert set(config) == {"task", "params", "plant", "law", "settings", "loop", "compensation", "safety", "effort_handling", "duration"}
     assert config["params"]["N"] == 4 and config["task"]["type"] == type(task).__name__
     cost = config["params"]["cost"]
     assert cost["type"] == "CostMenu" and cost["frame_pos"]["type"] == "Term"
@@ -114,9 +115,11 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     assert config["params"]["solver"]["type"] == "SolverSettings"
     assert not {"q_cost", "N_cost", "qd_cost", "u_cost"} & config["params"]["solver"].keys()
     assert config["plant"]["type"] == "SimConfig" and config["law"] == dict(type="SampleKnot")
-    assert config["timing"] == dict(type="VirtualTime", command_period=.01, update_period=.01,
-                                    solve_latency_s=.01 if name == "reach" else 0., compensation=None,
-                                    max_plan_age_s=.1, effort_handling=rec.to_dict(rc.tm.EffortClip()))
+    assert config["settings"] == dict(type="VirtualTimeSettings", command_period=.01, update_period=.01,
+                                    solve_latency_s=.01 if name == "reach" else 0.)
+    assert config["loop"] == "run_virtual_time" and config["compensation"] is None
+    assert config["safety"] == rec.to_dict(rc.tm.ExecutionSafety())
+    assert config["effort_handling"] == rec.to_dict(rc.tm.EffortClip())
     assert config["duration"] == .05 and results["limits_pass"]
     if name == "figure8":
         assert config["plant"]["substep"] == .001 and config["plant"]["integrator"] == "euler"
@@ -182,7 +185,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
 
     mpc = Counting(replace(rc.tm.TIAGO, N=8, cost=rc.tm.default_cost(8)))  # 10 ms knots, 70 ms plans
     record = common.run_experiment(SimConfig(substep=.002), mpc, rc.Reach(timeout_s=.06), SampleKnot(),
-                                   VirtualTime(.002, .006, 0.), out=tmp_path / "r")
+                                   VirtualTimeSettings(.002, .006, 0.), out=tmp_path / "r")
     run = load_run(record.out)
     np.testing.assert_allclose(run.ticks["t"], np.arange(31) * .002, atol=1e-12)
     assert np.isfinite(run.ticks["command"][:-1]).all()  # a command at every tick but the last
@@ -191,7 +194,7 @@ def test_reach_commands_every_tick_and_updates_every_third(tmp_path):
 
 def test_duration_caps_the_tasks_own(tmp_path):
     assert common.arguments("", ["--duration", ".02"]).duration == .02
-    task, mpc, timing = rc.Reach(timeout_s=.06), Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4))), VirtualTime.ideal()
+    task, mpc, timing = rc.Reach(timeout_s=.06), Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4))), VirtualTimeSettings.ideal()
     record = common.run_experiment(SimConfig(substep=.003), mpc, task, SampleKnot(), timing, out=tmp_path / "r",
                                    duration=.02)
     assert record.metadata["status"] == "timeout" and record.config["duration"] == .02
@@ -203,7 +206,7 @@ def test_duration_caps_the_tasks_own(tmp_path):
 
 def test_a_run_without_solves_reports_zero_work(tmp_path):
     """The goal met at the start, or a zero duration: one tick, no solve."""
-    params, timing = replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)), VirtualTime.ideal()
+    params, timing = replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)), VirtualTimeSettings.ideal()
     done = common.run_experiment(SimConfig(substep=.003), Mpc(params), rc.Reach(tuple(fk(Q_START))), SampleKnot(),
                                  timing, out=tmp_path / "d")
     zero = common.run_experiment(SimConfig(substep=.003), Mpc(params), rc.Reach(), SampleKnot(), timing,
@@ -221,7 +224,8 @@ def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
     """An effort refusal is saved without rejecting unapplied planned knots."""
     record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)), extra=30.), rc.Reach(),
                                    SampleKnot(),
-                                   VirtualTime(.01, .03, 0., effort_handling=rc.tm.RejectOnEffort(effort=(.01,)*7)),
+                                   VirtualTimeSettings(.01, .03, 0.),
+                                   effort_handling=rc.tm.RejectOnEffort(effort=(.01,)*7),
                                    out=tmp_path / "r")
     run = load_run(record.out)
     assert run.metadata["status"] == "fault" and run.metadata["reason"] == "effort_limit"
@@ -232,24 +236,23 @@ def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
     assert len(run.plans["t0"]) == 1 and run.plans["update_t"][0] == 0. and run.plans["torques"][0, -1, 6] > 26.
     # a 30 ms plan, 50 ms late
     record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, dt_s=.01, cost=rc.tm.default_cost(4))), rc.Reach(),
-                                   SampleKnot(), VirtualTime(.01, .01, .05), out=tmp_path / "late")
+                                   SampleKnot(), VirtualTimeSettings(.01, .01, .05), out=tmp_path / "late")
     assert record.metadata["status"] == "fault" and record.metadata["reason"] == "lease_expired"
     assert (record.out / "replay.npz").exists() and len(record.ticks["t"]) == 6
 
 
 def test_an_interrupted_run_is_saved_as_interrupted(tmp_path):
-    @dataclass(frozen=True)
-    class Abort:  # the hard abort: a second Ctrl-C raises KeyboardInterrupt
-        def run(self, *args, **kw):
-            raise KeyboardInterrupt
+    def abort(*args, **kw):  # the hard abort: a second Ctrl-C raises KeyboardInterrupt
+        raise KeyboardInterrupt
 
     mpc = Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)))
     with pytest.raises(KeyboardInterrupt):
-        common.run_experiment(SimConfig(substep=.003), mpc, rc.Reach(), SampleKnot(), Abort(), out=tmp_path / "r")
+        common.run_experiment(SimConfig(substep=.003), mpc, rc.Reach(), SampleKnot(), VirtualTimeSettings.ideal(),
+                              loop=abort, out=tmp_path / "r")
     metadata = json.loads((tmp_path / "r" / "summary.json").read_text())["metadata"]
     assert metadata["status"] == "interrupted" and "KeyboardInterrupt" in metadata["error"]
     STOP.set()  # the first Ctrl-C: the run ends at its first tick, saved and returned
-    record = common.run_experiment(SimConfig(substep=.003), mpc, rc.Reach(), SampleKnot(), VirtualTime.ideal(),
+    record = common.run_experiment(SimConfig(substep=.003), mpc, rc.Reach(), SampleKnot(), VirtualTimeSettings.ideal(),
                                    out=tmp_path / "stopped")
     assert record.metadata["status"] == "interrupted" and record.metadata["reason"] == "stop_requested"
     assert load_run(record.out).metadata == record.metadata
@@ -264,7 +267,7 @@ def test_a_failed_build_is_a_saved_error_and_a_failed_compile_leaves_no_run(monk
     for name, given in (("passed", mpc), ("built", rc.tm.TIAGO)):
         with pytest.raises(ValueError, match="StickSlip"):  # a plant with friction names its integrator
             common.run_experiment(SimConfig(friction=urdf_friction()), given, rc.Reach(), SampleKnot(),
-                                  VirtualTime.ideal(), out=tmp_path / name)
+                                  VirtualTimeSettings.ideal(), out=tmp_path / name)
         metadata = json.loads((tmp_path / name / "summary.json").read_text())["metadata"]
         assert metadata["status"] == "error" and "Euler-only" in metadata["error"]
         assert closed == ([] if name == "passed" else ["mpc"])  # a passed MPC is the caller's
@@ -274,7 +277,7 @@ def test_a_failed_build_is_a_saved_error_and_a_failed_compile_leaves_no_run(monk
 
     monkeypatch.setattr(rc.tm, "Mpc", NS(compile=fail))
     with pytest.raises(RuntimeError, match="compile"):
-        common.run_experiment(SimConfig(substep=.003), rc.tm.TIAGO, rc.Reach(), SampleKnot(), VirtualTime.ideal(),
+        common.run_experiment(SimConfig(substep=.003), rc.tm.TIAGO, rc.Reach(), SampleKnot(), VirtualTimeSettings.ideal(),
                               out=tmp_path / "compile")
     assert not (tmp_path / "compile").exists()  # a setup error, not a run
 
@@ -288,8 +291,8 @@ def test_update_period_0_stays_back_to_back(tmp_path):
             super().request(state, reference, updates)
 
     record = common.run_experiment(SimConfig(substep=.002), Counting(replace(rc.tm.TIAGO, N=8, cost=rc.tm.default_cost(8))),
-                                   rc.Reach(timeout_s=.01), SampleKnot(), VirtualTime(.002, 0., 0.), out=tmp_path / "r")
-    assert record.config["timing"].update_period == 0.
+                                   rc.Reach(timeout_s=.01), SampleKnot(), VirtualTimeSettings(.002, 0., 0.), out=tmp_path / "r")
+    assert record.config["settings"].update_period == 0.
     np.testing.assert_allclose(requests, np.arange(5) * .002, atol=1e-12)  # a request at every tick
 
 
@@ -315,33 +318,47 @@ def test_the_command_line_refuses_a_plant_the_experiment_does_not_support():
 
 
 @pytest.mark.parametrize("argv, timing", [
-    ([], VirtualTime(.002, .02, 0.)),
-    (["--update-period", ".01"], VirtualTime(.002, .01, 0.)),
-    (["--solve-latency", ".005", "--command-period", ".01"], VirtualTime(.01, .02, .005)),
-    (["--solve-latency", "measured"], VirtualTime(.002, .02, "measured")),
-    (["--plant", "rehearsal", "--update-period", "0"], RealTime(.002, 0.)),
-    (["--plant", "rehearsal"], RealTime())])
+    ([], VirtualTimeSettings(.002, .02, 0.)),
+    (["--update-period", ".01"], VirtualTimeSettings(.002, .01, 0.)),
+    (["--solve-latency", ".005", "--command-period", ".01"], VirtualTimeSettings(.01, .02, .005)),
+    (["--solve-latency", "measured"], VirtualTimeSettings(.002, .02, "measured")),
+    (["--plant", "rehearsal", "--update-period", "0"], RealTimeSettings(.002, 0.)),
+    (["--plant", "rehearsal"], RealTimeSettings())])
 def test_setup_replaces_only_the_given_options(argv, timing):
-    """In the main's timing (here 20 ms updates) or, for the rehearsal, in RealTime()."""
+    """In the main's timing (here 20 ms updates) or, for the rehearsal, in RealTimeSettings()."""
     plant = SimConfig(substep=.003)
-    assert common.setup(common.arguments("", argv), plant, VirtualTime(.002, .02, 0.)) == (plant, timing)
+    loop = rc.tm.run_real_time if isinstance(timing, RealTimeSettings) else rc.tm.run_virtual_time
+    assert common.setup(common.arguments("", argv), plant, VirtualTimeSettings(.002, .02, 0.)) == (
+        plant, timing, loop)
 
 
 def test_setup_replaces_the_options_in_an_experiments_own_timing():
     plant = SimConfig(substep=.003)
     args = common.arguments("", ["--solve-latency", ".03", "--command-period", ".004"])
-    assert common.setup(args, plant, Compensated()) == (plant, Compensated(.03, .004))
+    assert common.setup(args, plant, Compensated(), loop=run_compensated) == (
+        plant, Compensated(.03, .004), run_compensated)
 
 
-FORECAST = LatencyCompensation(latency_s=.02)  # the defaults: one 50 Hz control period
-
-
-@pytest.mark.parametrize("argv, solver, timing, budget", [
-    ([], "Mpc", VirtualTime(.002, .02, .02, FORECAST), None),
-    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTime(.01, .02, .005, FORECAST), None),
-    (["--solve-latency", "measured"], "Mpc", VirtualTime(.002, .02, "measured", FORECAST), .01),
-    (["--plant", "rehearsal", "--update-period", "0"], "MpcProcess", RealTime(.002, 0.), .01)])
-def test_the_main_runs_on_the_mpc_run_experiment_builds(monkeypatch, tmp_path, argv, solver, timing, budget):
+@pytest.mark.parametrize("argv, solver, timing, budget, compensation", [
+    ([], "Mpc", VirtualTimeSettings(.002, .02, .02), None, LatencyCompensation(latency_s=.02)),
+    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTimeSettings(.01, .02, .005),
+     None, LatencyCompensation(latency_s=.005)),
+    (["--solve-latency", "measured"], "Mpc", VirtualTimeSettings(.002, .02, "measured"),
+     .01, LatencyCompensation(initial_latency_s=.02)),
+    (["--solve-latency", "measured", "--update-period", ".007"], "Mpc", VirtualTimeSettings(.002, .007, "measured"),
+     .01, LatencyCompensation(initial_latency_s=.007)),
+    (["--plant", "rehearsal", "--update-period", "0"], "MpcProcess", RealTimeSettings(.002, 0.),
+     .01, LatencyCompensation(initial_latency_s=.002)),
+])
+def test_the_main_runs_on_the_mpc_run_experiment_builds(
+    monkeypatch,
+    tmp_path,
+    argv,
+    solver,
+    timing,
+    budget,
+    compensation,
+):
     """reach's main end to end on a fake MPC: run_experiment builds it for the timing, with
     the wall-time budget only where the solve's wall time is the latency, and closes it. The
     record holds the params the MPC resolved, here GATO's warm start."""
@@ -364,7 +381,10 @@ def test_the_main_runs_on_the_mpc_run_experiment_builds(monkeypatch, tmp_path, a
     assert built[0].kind == solver and built[1:] == ["closed"]
     expected = replace(rc.tm.TIAGO, max_sqp_time_s=budget, warm_start="shift")
     assert rec.to_dict(run.config["params"]) == rec.to_dict(built[0].params) == rec.to_dict(expected)
-    assert run.config["timing"] == timing and run.config["plant"] == SimConfig(substep=.003)
+    assert run.config["settings"] == timing and run.config["plant"] == SimConfig(substep=.003)
+    assert run.config["compensation"] == compensation
+    assert isinstance(run.config["effort_handling"],
+                      rc.tm.RejectOnEffort if isinstance(timing, RealTimeSettings) else rc.tm.EffortClip)
     assert run.config["duration"] == .02 and "distance_m" in run.ticks
 
 
@@ -395,7 +415,7 @@ def test_the_random100_study_round_trips_and_load_reads_its_runs(tmp_path):
     assert case.name == "pair_03546" and len(case.initial_state) == 14
     record = common.run_experiment(replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:]),
                                    Mpc(replace(config.params, N=4, cost=rc.tm.default_cost(4))), rc.Reach(case.target_m, timeout_s=.01),
-                                   SampleKnot(), config.timing, out=tmp_path / "runs" / case.name, case=case.name)
+                                   SampleKnot(), config.settings, out=tmp_path / "runs" / case.name, case=case.name)
     rc.evaluate(record)
     loaded, records = random100.load(tmp_path)
     assert rec.to_dict(loaded) == rec.to_dict(study)
@@ -403,6 +423,22 @@ def test_the_random100_study_round_trips_and_load_reads_its_runs(tmp_path):
     assert records[0].config["task"] == rc.Reach(case.target_m, timeout_s=.01)
     np.testing.assert_array_equal(np.r_[records[0].ticks["q"][0], records[0].ticks["qd"][0]], case.initial_state)
     assert records[0].metadata == record.metadata
+
+
+@pytest.mark.parametrize('settings, expected', [
+    (VirtualTimeSettings(.002, .01, .0055), LatencyCompensation(latency_s=.0055)),
+    (VirtualTimeSettings(.002, .007, 'measured'), LatencyCompensation(initial_latency_s=.007)),
+    (VirtualTimeSettings(.004, 0., 'measured'), LatencyCompensation(initial_latency_s=.004)),
+])
+def test_random100_resolves_its_forecast_from_the_chosen_settings_and_preserves_explicit_overrides(settings, expected):
+    from experiments.random100 import run as random100
+
+    config = random100.Random100Config(ids=(3546,), inputs_sha256='0'*64, settings=settings)
+    assert config.compensation == expected
+    assert from_dict(json.loads(json.dumps(rec.to_dict(config))), classes=[random100.Random100Config]) == config
+    fixed = LatencyCompensation(latency_s=.013)
+    assert replace(config, compensation=fixed).compensation is fixed
+    assert replace(config, compensation=None).compensation is None
 
 
 def test_save_replay_takes_a_reference_orientation_per_sample_nan_for_none(tmp_path):
@@ -421,3 +457,38 @@ def test_save_replay_takes_a_reference_orientation_per_sample_nan_for_none(tmp_p
                         end_effector_frame=rc.tm.GRASP_FRAME,
                         reference_xyz_m=np.zeros((3, 3)), reference_time_s=times, reference_frame="torso_lift_link",
                         reference_rotvec_rad=bad)
+
+
+@pytest.mark.parametrize('real', [False, True])
+def test_runner_resolves_loop_specific_defaults_and_records_the_actual_policies(tmp_path, real, wall):
+    loop = rc.tm.run_real_time if real else rc.tm.run_virtual_time
+    settings = RealTimeSettings(.002, .006) if real else VirtualTimeSettings.ideal()
+    mpc = Mpc(replace(rc.tm.TIAGO, N=8, cost=rc.tm.default_cost(8)))
+    @dataclass(frozen=True)
+    class Excess:
+        def __call__(self, *args):
+            return rc.tm.Command(np.full(7, 1000.), np.full(7, 1000.))
+
+    law = Excess()
+    record = common.run_experiment(SimConfig(substep=.002), mpc, rc.Reach(), law, settings,
+                                   loop=loop, duration=.03 if real else .004, out=tmp_path / 'r')
+    assert record.config['loop'] == loop.__name__
+    assert record.config['compensation'] == (LatencyCompensation(initial_latency_s=.006) if real else None)
+    assert isinstance(record.config['effort_handling'], rc.tm.RejectOnEffort if real else rc.tm.EffortClip)
+    assert record.metadata['status'] == ('fault' if real else 'timeout')
+    if real:
+        assert record.metadata['reason'] == 'effort_limit'
+        assert not np.isfinite(record.ticks['command']).any()
+    else:
+        np.testing.assert_array_equal(record.ticks['command'][0], rc.tm.limits().effort)
+
+
+def test_runner_accepts_explicit_custom_loop_and_plain_settings(tmp_path):
+    settings = Compensated(.01, .01, .01, compensate=False)
+    record = common.run_experiment(SimConfig(substep=.003),
+                                   Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4))),
+                                   rc.Reach(), SampleKnot(), settings, loop=run_compensated,
+                                   duration=.03, out=tmp_path / 'r')
+    loaded = load_run(record.out, classes=[rc.Reach, Compensated])
+    assert loaded.config['settings'] == settings and loaded.config['loop'] == 'run_compensated'
+    assert loaded.metadata['status'] == 'timeout' and len(loaded.ticks['t']) == 4

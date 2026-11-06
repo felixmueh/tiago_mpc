@@ -39,6 +39,6 @@ class HoldMpc:
 @pytest.fixture(autouse=True)
 def doctest_names(request, doctest_namespace):
     if isinstance(request.node, pytest.DoctestItem):
-        doctest_namespace.update(mpc=HoldMpc(), task=Reach(), law=tm.SampleKnot(), timing=tm.VirtualTime.ideal(),
+        doctest_namespace.update(mpc=HoldMpc(), task=Reach(), law=tm.SampleKnot(), settings=tm.VirtualTimeSettings.ideal(),
                                  plant_config=tm.SimConfig(substep=.003),
                                  out=request.getfixturevalue("tmp_path") / "run")

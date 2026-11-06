@@ -24,7 +24,7 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 - **Execution:** `--execute --target X_M Y_M Z_M` (target required). You type
   `EXECUTE` in `setup`, before the ROS client exists and before anything compiles;
   anything else returns exit status 2. Only then does `setup` return
-  `RobotConfig(execute=True)` and `RealTime`. The main has installed the stop
+  `RobotConfig(execute=True)` and `RealTimeSettings`. The main has installed the stop
   signals first (`handle_stop_signals`). Then `run_experiment` creates the run's
   record, compiles GATO's module unless it is cached and builds the `MpcProcess`
   (`MpcProcess.compile`), builds the `RosPlant` from `RobotConfig(execute=True)`, and
@@ -62,12 +62,14 @@ packages are missing, or if `controller_manager_msgs` does not match PAL 4.32.2.
 | `RosPlant(config)` | refuses a disabled safety worker or one monitoring other joints than the right arm |
 | `RosPlant.start()` | first state within 180 s; safety worker started with it; PAL's `arm_right_controller` active (existing effort control is not adopted; mixed or unknown arm owners are rejected); with `execute`, the effort controller loaded and configured; then a newer state passes `state()`'s checks, lies within 0.05 rad of the comfortable pose at joint-speed L1 ≤ 1 rad/s, and the safety worker has checked it |
 | `RosPlant.state()` | receipt age ≤ 100 ms; finite stamp; seven finite q, qd within the URDF position and speed limits; sequence never reversed; a new sample has a later ROS stamp (a clock reset faults); full named body state; every other body joint within 0.02 rad (torso 5 mm) of its start value; the state goes to the safety worker, whose faults latch |
-| loop (`run_real_time`) | `plant.start(WallClock())` (any other clock raises before a ROS call) and `mpc.warmup` before the first tick; `task.done` and the stop flag before any command (a met goal never activates effort control); no command before the first plan; every knot of a plan within the raw effort limits when it arrives, before any of its knots is commanded (`plan_fault`); `plant.stop()` first on exit |
+| loop (`run_real_time`) | `plant.start(WallClock())` (any other clock raises before a ROS call) and `mpc.warmup` before the first tick; `task.done` and the stop flag before any command (a met goal never activates effort control); no command before the first plan; every knot of a plan within the raw effort limits when it arrives, before any of its knots is commanded (`validate_plan`); `plant.stop()` first on exit |
+| `RealTimeSafety` (`laws.py`) | mandatory plan age and horizon checks before user safety, through the same `validate(plan, t, state)` interface as `ExecutionSafety`; waiting plans use the mandatory `ExecutionSafety` directly |
+| `RealTimeEffort` (`laws.py`) | callable effort handler checking raw requested and applied torque before and after user effort handling |
 | `MpcProcess.result()` | every knot finite; expected shapes and knot interval; the plan answers the pending request; an error reply or a dead process raises, polled every tick |
-| `lease_fault`, `command_fault` (`loops.py`) | before the law, the tick before min(measured_t + 100 ms, t₀ + plan length), with the original measurement time retained even with prediction; then the command finite, seven torques, within the raw effort limits; never clipped |
+| `decide_command` (`laws.py`) | before the law, the tick before min(measured_t + 100 ms, t₀ + plan length), with the original measurement time retained even with prediction; then the command finite, seven torques, within the raw effort limits through `RejectOnEffort`; never clipped |
 
-The loop's checks (`plan_fault`, `lease_fault`, `command_fault`) return a reason
-(`effort_limit`, `lease_expired`, `invalid_command`): the tick sends nothing,
+The loop's arrival/waiting-plan checks return a refusal reason; `decide_command`
+returns a `Fault` for `effort_limit`, `lease_expired` or `invalid_command`. The tick sends nothing,
 reaches the tick callbacks, and the run ends as `fault` with that reason. The plant's
 checks (`RosPlant`, the safety worker) and the MPC's raise: the run ends as
 `error`. Nothing retries. Limits are the full URDF's; the tolerances are fields
@@ -101,16 +103,15 @@ of `Checks` in `robot.py`.
 
 ## Latency
 
-[Latency compensation](latency-compensation.md), on by default in `RealTime()`,
+[Latency compensation](latency-compensation.md), on by default in `run_real_time`,
 predicts a separate MPC initial state for a future plan origin. Actual feedback
-remains measured, including for PD. A fixed estimate (the default, one 20 ms control
-period) or a previous completed solve's delay sets the forecast; the current solve's
+remains measured, including for PD. The default forecast uses the previous observed
+request-to-result delay, initially estimated from the update period; the current solve's
 duration is unknown beforehand. Early results wait for their origin; late results
 retain that origin and run at their actual age. On wall time the origin is the first
 command tick at or after the request plus the forecast, and the request goes out after
-the tick's work, so the default 20 ms forecast starts each plan 22 ms after its control
-update, which therefore come every 22 ms rather than 20 (a rehearsal, 2026-10-30);
-the simulation's `VirtualTime.like(RealTime())` keeps exactly 20 ms. The original
+the tick's work. The standard simulation uses its declared solve latency as a fixed
+forecast, or the previous observed delay in measured mode. The original
 measurement still bounds the lease to 100 ms. This adds no physical qualification
 or changes to the robot's startup and safety checks.
 

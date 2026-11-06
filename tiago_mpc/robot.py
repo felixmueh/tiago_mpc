@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
-from tiago_mpc.loops import LEASE_S
+from tiago_mpc.laws import LEASE_S
 from tiago_mpc.interfaces import Event, State
 from tiago_mpc.ros2 import ArmState, TiagoRightArmClient
 from tiago_mpc.safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState

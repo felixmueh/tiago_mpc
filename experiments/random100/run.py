@@ -17,6 +17,7 @@ from pathlib import Path
 import shutil
 import sys
 import traceback
+from typing import Literal
 
 import numpy as np
 
@@ -36,7 +37,14 @@ class Random100Config:
     inputs_sha256: str
     params: tm.MpcParams = PARAMS
     plant: tm.SimConfig = tm.SimConfig(substep=.003)
-    timing: tm.VirtualTime = tm.VirtualTime.like(tm.RealTime())
+    settings: tm.VirtualTimeSettings = tm.VirtualTimeSettings.like(tm.RealTimeSettings())
+    compensation: tm.LatencyCompensation | None | Literal["default"] = "default"
+    safety: tm.ExecutionSafety = tm.ExecutionSafety()
+    effort_handling: tm.EffortClip = tm.EffortClip()
+
+    def __post_init__(self):
+        if self.compensation == "default":
+            object.__setattr__(self, "compensation", tm.default_compensation(self.settings))
 
 
 @dataclass(frozen=True)
@@ -128,7 +136,9 @@ def main(argv=None):
         try:
             mpc = tm.MpcProcess(config.params, binary)  # one process per case
             plant = replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:])
-            record = run_experiment(plant, mpc, Reach(case.target_m), tm.PlanFeedback(), config.timing,
+            record = run_experiment(plant, mpc, Reach(case.target_m), tm.PlanFeedback(), config.settings,
+                                    compensation=config.compensation, safety=config.safety,
+                                    effort_handling=config.effort_handling,
                                     out=out / "runs" / case.name, case=case.name)
             evaluate(record)
         except Exception:  # an error is a result: run_experiment saved it; the other cases continue

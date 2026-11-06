@@ -101,7 +101,7 @@ PARAMS = replace(FIGURE8, dt_s=.03, friction=None, armature=ARMATURE_KG_M2,
                  solver=replace(FIGURE8.solver, mu=1.),
                  cost=tm.default_cost(FIGURE8.N, velocity=.01, torque=1e-4, terminal_position=80.),
                  admm=replace(FIGURE8.admm, rho_u=5e-4))
-TIMING = tm.VirtualTime(command_period=.002, update_period=.02, solve_latency_s=.0055)
+TIMING = tm.VirtualTimeSettings(command_period=.002, update_period=.02, solve_latency_s=.0055)
 PLANT_COULOMB_J1_4_NM = (2.01, 2.39, 2.03, 1.91)
 PLANT_VISCOUS_J1_4_NM_S_RAD = (4.44, 5.07, 2.87, 2.82)
 LABELS = {'default': 'MPC only', 'feedforward': 'Friction feedforward',
@@ -138,7 +138,9 @@ def configuration(params=PARAMS, plant=None, timing=TIMING, width=MPC_FRICTION_W
         delay += 'Rounded from the recorded native solve mean (5.4441ms), not end-to-end latency. '
     return dict(provenance=tm.provenance(), urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
                 params=tm.to_dict(params), task=tm.to_dict(Figure8()),
-                plant=tm.to_dict(plant if plant is not None else plant_config()), timing=tm.to_dict(timing),
+                plant=tm.to_dict(plant if plant is not None else plant_config()), settings=tm.to_dict(timing),
+                loop="run_virtual_time", compensation=None, safety=tm.to_dict(tm.ExecutionSafety()),
+                effort_handling=tm.to_dict(tm.EffortClip()),
                 cases={key: tm.to_dict(law) for key, law in cases().items()},
                 case_params={key: tm.to_dict(case_params(key, params, width)) for key in cases()},
                 assumptions='Virtual time, periodic held feedback, no additional sensor/command transport delay '
@@ -235,7 +237,7 @@ def main(argv=None):
                                           terminal_position=args.terminal_ee_cost),
                      admm=replace(PARAMS.admm, rho_u=args.rho_u))
     plant = plant_config(args.feedback_period)
-    timing = tm.VirtualTime(args.command_period, args.update_period, args.solve_latency)
+    timing = tm.VirtualTimeSettings(args.command_period, args.update_period, args.solve_latency)
     if timing.solve_latency_s != 'measured':
         params = replace(params, max_sqp_time_s=None)  # match run_experiment's effective parameters
     config = configuration(params, plant, timing, args.mpc_friction_width)

@@ -15,12 +15,12 @@ their labels; never relabel them as grasp-frame results.
 knots, planning speeds at 60 %, 50 Hz control updates, a declared 20 ms solve
 latency, latency compensation, `PlanFeedback()`, and the supplied armature in the
 predictor, the plant and the compensation); earlier runs used 10 ms knots, 80 %,
-`VirtualTime.ideal()`, `SampleKnot` and no armature, another model. They keep
+`VirtualTimeSettings.ideal()`, `SampleKnot` and no armature, another model. They keep
 their labels.
 
 The virtual-time effort policy defaults to clipping the complete command at the
 raw torque limits, including feedback (2026-11-04). The policy is recorded in
-the timing configuration. Earlier results retain their original effort policy
+the separate execution configuration. Earlier results retain their original effort policy
 and labels.
 
 ```bash
@@ -32,7 +32,7 @@ and labels.
 
 - **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`, grasp
   frame) with no solve-time limit (`PARAMS` in `run.py`), 3 ms RK4 substeps and
-  the simulation of the real MPC's timing, `VirtualTime.like(RealTime())`. The
+  the simulation of the real MPC's timing, `VirtualTimeSettings.like(RealTimeSettings())`. The
   study is two frozen dataclasses: `Random100Config` (the ids, the sha256 of
   `manifest.json`, which pins the inputs, and those pieces) and one `Case` per input
   pair (its name, start state and grasp-frame target),
@@ -48,7 +48,7 @@ and labels.
   2 cm/s within 8 simulated seconds) and simulated physical-limit compliance
   are reported separately. A timeout, limit violation or numerical failure
   keeps its output and the other cases continue; a shared setup failure stops
-  the run. Commands use the timing's effort policy; cases are never retried.
+  the run. Commands use the selected effort policy; cases are never retried.
 - **Analysis:** `analyze.py` needs no GPU. It reads the run with `load`, counts the
   outcomes, checks each case's initial state, recomputes joint, speed and torque
   limit excesses from all saved command ticks, and writes the per-case audit

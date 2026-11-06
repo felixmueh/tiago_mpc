@@ -13,7 +13,7 @@ control-law interface; use `import tiago_mpc as tm`.
 [friction_compensation.py](../experiments/friction_compensation.py) is also a
 simulation experiment. Neither is a runnable physical tuning preset. A short
 standalone script still needs to compose the selected law with `RobotConfig`,
-`RealTime`, `setup`, `handle_stop_signals` and `run_experiment`, preserving the
+`RealTimeSettings`, `setup`, `handle_stop_signals` and `run_experiment`, preserving the
 existing confirmation, checks, leases and handback. Reuse these paths rather
 than publishing torque directly. The holding/stroke references and component
 logging below also need that script; they are not existing joint-sweep presets.
@@ -39,7 +39,7 @@ planned velocity, not the measured velocity.
 | Sliding `c_ff`, viscous `b_ff` | Nm; Nm s/rad | `Friction(coulomb_nm=..., viscous_nm_s_per_rad=...)` |
 | `w_ff` | rad/s | `FrictionFeedforward(..., evaluation=Tanh(w_ff))`; smooths reversals |
 | Reflected armature | kg m² | `MpcParams.armature`, `SimConfig.armature`, `LatencyCompensation.armature`; all default to `ARMATURE_KG_M2` |
-| Command / control-update periods | s | `RealTime(command_period=.002, update_period=.02)` for 500/50 Hz requests |
+| Command / control-update periods | s | `RealTimeSettings(command_period=.002, update_period=.02)` for 500/50 Hz requests |
 
 For a PD-plus-feedforward candidate use
 `tm.FrictionFeedforward(friction, tm.PlanFeedback(kp=..., kd=...))`. Coefficient

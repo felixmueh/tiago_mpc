@@ -145,7 +145,7 @@ class MpcParams:
     armature: tuple[float, ...] = ARMATURE_KG_M2  # reflected joint inertia, kg m²; never link inertia
     # Wall time for a solve's SQP iterations (MPCController.step's budget_s), within
     # solver.max_sqp_iters; None: no time limit. run_experiment, when it builds the MPC, keeps
-    # it only where the solve's wall time is the latency (RealTime, VirtualTime "measured").
+    # it only where the solve's wall time is the latency (RealTimeSettings, VirtualTimeSettings "measured").
     max_sqp_time_s: float | None = .01
     warmup: bool = True  # Mpc.warmup runs GATO's warm-up solve before the first plan
 

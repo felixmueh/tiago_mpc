@@ -1,6 +1,6 @@
 """The data that crosses the pieces' interfaces (the plant's state, the MPC's plan, the
 loop's tick and its events) and the interfaces themselves: the protocols a plant, an MPC,
-a task and a timing satisfy (structurally, checked by mypy, never at run time) and the
+a task and an execution safety policy satisfy (structurally, checked by mypy, never at run time) and the
 types of a control law and a tick callback.
 
 A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
@@ -8,11 +8,11 @@ A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
 its initial condition, predicted when compensation is enabled. measured_t retains
 the original observation time. Knot k covers t0 + k dt <= t < t0 + (k + 1) dt,
 a zero-order hold as GATO's transcription assumes; past the last knot there is
-no torque, and a plan's lease ends before it (loops.lease_fault).
+no torque, and a plan's lease ends before it (laws.decide_command).
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import math
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
@@ -22,7 +22,6 @@ import numpy as np
 from tiago_mpc.clock import VirtualClock, WallClock
 
 if TYPE_CHECKING:
-    from tiago_mpc.loops import Outcome
     from tiago_mpc.mpc import MpcParams
 
 # Knot boundaries computed as k * dt must select knot k despite rounding
@@ -95,6 +94,24 @@ class Plan:
 
 
 @dataclass(frozen=True)
+class Command:
+    """A torque command with its requested and applied values."""
+    requested: np.ndarray
+    applied: np.ndarray
+
+    @property
+    def clipped(self) -> bool:
+        return bool(np.any(self.applied != self.requested))
+
+
+@dataclass(frozen=True)
+class Fault:
+    """A refused execution command and its reason."""
+    reason: str
+    requested: np.ndarray | None = None  # Unavailable when refusal precedes torque evaluation.
+
+
+@dataclass(frozen=True)
 class Event:
     """Something the loop or a plant detected, at its own time t on the loop's clock: its
     kind, the message the console prints and small JSON data (record.py stores them)."""
@@ -111,7 +128,7 @@ class Tick:
     on the last tick and on a fault; new marks the tick at which the plan took effect,
     update the tick at which a control update started (its request); events: what the
     loop and the plant detected since the previous tick (usually none); faulted: the
-    plan that arrived at this tick and faulted (loops.plan_fault), which never takes
+    plan that arrived at this tick and faulted (laws.validate_plan), which never takes
     effect, else None. plan_request_t associates a new/faulted plan with its request
     tick, independently of solver statistics; None when no plan is introduced."""
     t: float
@@ -201,24 +218,13 @@ class TaskInterface(Protocol):
     def duration_s(self) -> float: ...
 
 
-ControlLaw = Callable[[Plan, float, State], np.ndarray]
-EffortHandling = Callable[[np.ndarray], np.ndarray | None]
+ControlLaw = Callable[[Plan, float, State], Command | Fault]
+EffortHandling = Callable[[Command], Command | Fault]
 Callback = Callable[[Tick], None]  # sees every command tick, e.g. a RunRecord
 MessageCallback = Callable[[Tick | SolveCompleted | Event], None]
 
 
-class Timing(Protocol):
-    """VirtualTime and RealTime (loops.py), or an experiment's own: a frozen dataclass of
-    a loop's settings whose run calls that loop with them and returns its Outcome."""
-    __dataclass_fields__: ClassVar[dict[str, Any]]  # a dataclass: recorded, and replaced by the mains' setup
+class SafetyInterface(Protocol):
+    """A pure execution check, shared by command decisions and hypothetical forecasts."""
 
-    def run(
-        self,
-        plant: PlantInterface,
-        mpc: MpcInterface,
-        task: TaskInterface,
-        law: ControlLaw,
-        tick_callbacks: Sequence[Callback],
-        *,
-        duration: float,
-    ) -> Outcome: ...
+    def validate(self, plan: Plan, t: float, state: State) -> Fault | None: ...

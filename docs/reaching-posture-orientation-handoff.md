@@ -44,7 +44,7 @@ change uncommitted. Paths below are container paths. On the host, `/workspace/` 
 `impl/` in the thesis workspace (`/var/home/felix/_Uni/MasterThesis/impl/`).
 
 - **Main (`64dd698`) has the new defaults since 30 October:**
-  - 50 Hz control updates, with a declared 20 ms latency and latency compensation (`RealTime()`, `VirtualTime.like`)
+  - 50 Hz control updates, with a declared 20 ms latency and latency compensation (`RealTimeSettings()`, `VirtualTimeSettings.like`)
   - dt 0.03 s, N 32, velocity fraction 0.6
   - planned torque plus PD (`PlanFeedback()`)
   - the supplied armature in predictor, plant and forecast

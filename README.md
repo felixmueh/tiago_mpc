@@ -20,12 +20,15 @@ drives the robot and the rehearsal, a `SimPlant` on the robot's architecture.
 (`VirtualClock`), which the loop keeps itself: the experiment declares how long a
 solve lasts (`solve_latency_s`). With an asynchronous MPC it integrates the
 independent plant interval before waiting at a possible activation boundary;
-plans retain the request-plus-latency schedule. Their timings, `RealTime` and `VirtualTime`
-(with the presets `ideal`, `constant_latency`, `as_fast_as_possible` and
-`constant_rate`), hold each loop's settings and run it. Either loop takes any MPC;
+plans retain the request-plus-latency schedule. `run_virtual_time` requires a
+`VirtualTimeSettings` object, with the presets `ideal`, `constant_latency`,
+`as_fast_as_possible` and `constant_rate`. It holds only command period, update
+period and solve latency. `run_real_time` requires `RealTimeSettings`, holding
+the two periods. Both are plain dataclasses passed to their loop with `settings=`.
+Either loop takes any MPC;
 given parameters, `run_experiment` (`experiments/common.py`) builds an `MpcProcess`,
-which solves concurrently in its own process, for `RealTime` and an in-process `Mpc`
-for every other timing. Each loop starts the plant on its clock
+which solves concurrently in its own process, for `run_real_time` and an in-process
+`Mpc` for other loops. Each loop starts the plant on its clock
 (`plant.start(clock)`) and samples plans, checks leases and schedules ticks and
 control updates on it. `State.t` is when the state was measured, on the same
 time, and a plan starts at its state's time; on the robot a state can be older
@@ -34,8 +37,13 @@ than the tick and repeat. On the robot the safety check runs in its own process.
 Both loops support optional [latency compensation](docs/latency-compensation.md):
 predict the state at the next plan's intended start under the ongoing commands,
 then solve from that prediction. The measured state and its age remain separate.
-The timing holds it: `RealTime()`, the real MPC's timing, turns it on by default with a
-fixed forecast of one control period (20 ms); `compensation=None` turns it off.
+It is an explicit loop argument: `run_real_time` defaults to the previous observed
+request-to-result delay, initially estimated from `settings.update_period` or
+`settings.command_period` when the update period is zero. `run_virtual_time`
+defaults to none. The standard reach, figure-eight and random100 experiments use
+`default_compensation(settings)`: declared virtual latency selects the same fixed
+forecast, while measured latency uses the previous observed delay with that seed.
+`compensation=None` turns it off.
 Its physical friction and armature model is independent of the optimizer's model.
 
 A run ends without an exception: the task done, the time up, a fault or a stop
@@ -46,17 +54,40 @@ command law: `effort_handling=EffortClip()` is the default, including when an
 experiment supplies its own law. `RejectOnEffort()` stops on an excessive command;
 `None` explicitly disables effort handling. Both policies accept configurable
 per-joint effort limits. Neither rejects a prediction merely because an unapplied
-future knot exceeds an effort limit. Command laws return torque arrays and must
-be pure when used for forecasting; the forecast uses the same effort policy.
+future knot exceeds an effort limit. Command laws return `Command | Fault` and
+must be pure when used for forecasting; the forecast uses the same safety and
+effort policies.
+Both loops use `decide_command` before sending a command: it checks the plan's
+lease, evaluates the law, and applies effort handling. It returns `Command`
+with requested and applied torques, or a `Fault` with the refusal reason.
+Forecasting uses this same decision on hypothetical
+states; a refusal makes the prediction unavailable and emits no execution event.
 Exceptions are real errors, among them the robot plant's own checks and a failed
 solve.
 
-`run_virtual_time` is also the interactive simulation entrypoint. `duration=None`
-has no preset end; the caller supplies bounded recording and capacity handling.
-`max_plan_age_s=None` disables the measurement-age expiry; a finite plan still
-ends at its horizon. Its default law is `SampleKnot()`; `VirtualTime.effort_handling`
-sets the effort policy independently. Real-time execution retains its strict
-checks and has no clipping option.
+`run_virtual_time` is also the interactive simulation entrypoint. Both loops
+require a finite, nonnegative duration and reject runs over ten minutes before
+starting the plant. Virtual runs disable cyclic garbage collection and restore
+the caller's previous GC policy on exit.
+`safety=ExecutionSafety(max_plan_age_s=None)` disables the measurement-age expiry;
+a finite plan still ends at its horizon. Its default law is `SampleKnot()`;
+`safety`, `effort_handling` and `compensation` are separate run arguments. A custom
+law still receives the default safety and effort handling. Real-time execution
+retains its mandatory strict checks and rejects clipping.
+
+```python
+settings = tm.VirtualTimeSettings.constant_latency(.005)
+outcome = tm.run_virtual_time(
+    plant, mpc, task, settings=settings, duration=1.,
+    safety=tm.ExecutionSafety(max_plan_age_s=.1),
+    effort_handling=tm.EffortClip(), compensation=None,
+)
+```
+
+`ExecutionSafety` implements the structural `SafetyInterface` protocol. A user
+can provide a different pure `validate(plan, t, state) -> Fault | None` check.
+Validation runs before the law, and the loop applies only an accepted command.
+Duration, callbacks, cancellation and initial conditions are also loop arguments.
 
 Existing `tick_callbacks` receive each command decision. Optional
 `message_callbacks` receive `SolveCompleted` for every completed noncancelled
@@ -71,21 +102,26 @@ the plant. Observers should enqueue these owned numerical values and format them
 outside the numerical path.
 
 `before_tick(state)` may block on a condition/event to pause virtual time without
-losing pending plans or controller warm state. Set `cancelled` to a run-owned
-flag's `is_set` method, then wake a paused callback to terminate it. Cancellation
-is checked after warm-up, solves and callbacks before further numerical action.
-A replacement run gets a fresh flag/controller. `start_time_s` and
+losing pending plans or controller warm state. It runs once per command boundary,
+before result collection or another command. An outstanding solve may finish
+while the loop is parked; its reply is consumed normally after resume. Set
+`cancelled` to a run-owned flag's `is_set` method, then wake a paused callback to
+terminate it. Cancellation is checked at this one boundary checkpoint. Once a
+tick is admitted, it completes its command decision and physics interval before
+another checkpoint, even if a solve or observer requests cancellation meanwhile.
+Waiting for a solve can delay cancellation in wall time. A replacement run gets
+a fresh flag/controller. `start_time_s` and
 `initial_command` support anchored state and a previously held actual torque;
 tasks still see time relative to the run's origin. Pacing is optional and belongs
 to the caller or `SimPlant(sync_real_time=True)`, with only one pacing mechanism.
-`quiesce_at(state)` can request collection of the outstanding result before
-that boundary's callback parks, even if activation lies further in the future.
-It is checked again after Tick observers: if an observer requests a pause at
-that point, the loop collects and calls `before_tick` again at the same timestamp
-before further physics. The callback must tolerate that repeated boundary.
-For declared latency the normal wait boundary is the first eligible command
-tick; measured latency conservatively waits at the next possible command tick
-to learn the result's delay. Zero declared latency waits immediately.
+Pause requests raised by Tick observers take effect at the next ordinary
+boundary. Pausing retains the invocation; reset cancels it and creates its replacement.
+Results are collected once at the first possible activation boundary. For
+declared latency this is the first eligible command tick; measured latency
+conservatively waits at least until the next command tick to learn the result's
+delay. This includes a measured duration of zero. Zero declared latency waits
+immediately. A collected plan waits for its scheduled availability and predicted
+origin before activation.
 Normal completion collects any outstanding solve without activating it or
 advancing physics, leaving a caller-owned MPC ready for another run.
 
@@ -100,12 +136,13 @@ tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what ex
               tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary, SolverSettings,
               Mpc, MpcProcess),
-              interfaces.py (State, Plan, Event, Tick, SolveCompleted; the protocols PlantInterface,
-              MpcInterface, TaskInterface, Timing; ControlLaw, EffortHandling, Callback),
+              interfaces.py (State, Plan, Command, Fault, Event, Tick, SolveCompleted; the protocols PlantInterface,
+              MpcInterface, TaskInterface, SafetyInterface; ControlLaw, EffortHandling, Callback),
               clock.py (VirtualClock, WallClock), laws.py (SampleKnot, HoldFirst,
-              PlanFeedback, FrictionFeedforward, EffortClip, RejectOnEffort),
-              loops.py (run_real_time, run_virtual_time, RealTime, VirtualTime, Outcome,
-              STOP, plan_fault, lease_fault, command_fault),
+              PlanFeedback, FrictionFeedforward, ExecutionSafety, RealTimeSafety, RealTimeEffort,
+              EffortClip, RejectOnEffort, validate_plan, decide_command),
+              loops.py (run_real_time, run_virtual_time, RealTimeSettings, VirtualTimeSettings, Outcome,
+              STOP, default_compensation),
               prediction.py (LatencyCompensation and physical state propagation),
               sim.py (SimConfig, SimPlant), robot.py (RobotConfig, RosPlant),
               ros2.py (ROS 2 client), safety.py,
@@ -137,7 +174,7 @@ uv run python -m mypy                     # the type check alone (pyproject.toml
   and `python -m experiments.<name>` works from any directory. Change a
   dependency in `pyproject.toml`, then `uv lock` and `uv sync`. `uv run` and
   `uv sync` restore the lock and undo a manual `uv pip install`.
-- **GATO** is `gato-mpc` 0.1.7 from `../GATO-tiago-armature-collision-cache`,
+- **GATO** is `gato-mpc` 0.1.7 from `../GATO/.worktrees/tiago-combined`,
   selected in `pyproject.toml` and `uv.lock`. That local source supplies fixed-arm
   armature support, the native ADMM-budget accessor and per-SQP collision-row
   caching. It uses `grid-rbd` 0.6.0 from `../GRiD-tiago-armature-060` for armature
@@ -246,7 +283,7 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
 ```
 
 - **Timing.** `--plant sim` (the default) runs `run_virtual_time` with an in-process
-  `Mpc`, on the main's `VirtualTime` (`VirtualTime.like(RealTime())` for reach, figure8
+  `Mpc`, on the main's `VirtualTimeSettings` (`VirtualTimeSettings.like(RealTimeSettings())` for reach, figure8
   and random100: the real MPC's defaults, 500 Hz commands, 50 Hz control updates and
   latency compensation, each solve declared, not measured, to last one control period,
   20 ms). `--solve-latency` says how long a solve lasts on the timeline: declared
@@ -255,11 +292,12 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   after its request plus that latency; no new request is made while a solve is
   outstanding. A solve that really took longer than a declared latency above 0 is
   an `overrun` event. `--plant rehearsal` runs the rehearsal:
-  `SimPlant` on `run_real_time` (`RealTime`) with `MpcProcess`, as on the robot; a tick
+  `SimPlant` on `run_real_time` (`RealTimeSettings`) with `MpcProcess`, as on the robot; a tick
   whose work ran past the next one is late, skips the missed ticks and is a
   `late_tick` event. `SimConfig(sync_real_time=True)` paces a virtual-time run to the
   wall clock for watching, without changing its results. The run records its timing
-  as `config.timing`. Until the first command, `SimPlant` holds
+  as `config.settings`, with the loop name and execution components recorded
+  separately. Until the first command, `SimPlant` holds
   its start state, as PAL's position controller holds the arm until effort
   control starts.
 - **Events:** what the loop or a plant detects at its own time (`late_tick`,
@@ -279,8 +317,8 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
 - **Solve time and warm-up:** `MpcParams.max_sqp_time_s` (10 ms) stops a solve's
   SQP iterations by wall time, within `solver.max_sqp_iters` (5). It follows the
   timing: when `run_experiment` builds the MPC, it keeps the budget only where the
-  solve's wall time is the latency (`RealTime`: the rehearsal and the robot;
-  `VirtualTime` with `measured`) and sets None for every other timing (a declared
+  solve's wall time is the latency (`RealTimeSettings`: the rehearsal and the robot;
+  `VirtualTimeSettings` with `measured`) and sets None for every other timing (a declared
   `--solve-latency`, `Compensated`: the solve's wall time is irrelevant by
   assumption); random100 (a declared latency) and the latency study build their own MPC
   with None.
@@ -305,7 +343,7 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   (`hz_to_s(500) == .002`).
 - **reach:** `TIAGO` defaults (32 knots of 30 ms, planning speeds at 60 % of the raw
   limits), loss-free with the fitted armature, 3 ms RK4 substeps, `PlanFeedback()` on
-  `VirtualTime.like(RealTime())`, from `Q_START`
+  `VirtualTimeSettings.like(RealTimeSettings())`, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm with the grasp point slower than 2 cm/s, timeout 8 s.
 - **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, `StickSlip`
@@ -324,20 +362,23 @@ An experiment is a task and an `evaluate`. The task is a frozen dataclass with
 same code runs on a saved run (`tm.load_run(path, classes=[Reach])`), and it skips
 the metrics of a run without ticks. Reach's turns `done` into `arrived`.
 
-`run_experiment(plant, mpc, task, law, timing, *, duration=None, out=None, **pieces)`
+`run_experiment(plant, mpc, task, law, settings, *, loop=run_virtual_time, ...)`
 (`experiments/common.py`) runs one run for the task's duration, or at most
-`duration` seconds. Given `MpcParams` as `mpc`, it first compiles and builds the MPC
-(minutes, unless GATO's module is cached): `MpcProcess` on `RealTime`, the in-process
-`Mpc` on every other timing, with the wall-time budget only where the solve's wall
+`duration` seconds. Its `"default"` compensation and effort options select the
+chosen loop's defaults; `None` explicitly disables the optional component.
+The record stores the resolved objects. Given `MpcParams` as `mpc`, it first compiles and builds the MPC
+(minutes, unless GATO's module is cached): `MpcProcess` for `run_real_time`, the in-process
+`Mpc` for other loops, with the wall-time budget only where the solve's wall
 time is the latency (above), and closes it; a built MPC is the caller's, which
 closes it. A failed compile is a setup error and leaves no run directory. It then
 records the pieces as the run's configuration (the duration it resolved, the MPC's
-params, which GATO resolved), builds the plant (`plant.build()`), runs the timing's
-loop, sets the status (`done`, `timeout`, `fault`, `interrupted`; `error` for a real
+params, which GATO resolved), builds the plant (`plant.build()`), calls the supplied
+loop with its settings, sets the status (`done`, `timeout`, `fault`, `interrupted`; `error` for a real
 error, raised again, a failed build among them), adds the
 common results, closes the plant, saves the run and exports the replay, also after
 a fault or an error. Each main defines its defaults once and hands them to
-`setup(args, plant, timing)`, which replaces only what the options name (`--plant`,
+`setup(args, plant, settings)`, which returns the plant, settings and loop function
+and replaces only what the options name (`--plant`,
 `--command-period`, `--update-period`, `--solve-latency`) and holds the robot's gate
 (after the check-only run or a cancelled confirmation it returns the exit status
 instead); the main then calls `run_experiment` and `evaluate` and prints the metadata
@@ -353,7 +394,7 @@ from experiments.reach import Reach, evaluate
 
 params = replace(tm.TIAGO, solver=replace(tm.TIAGO.solver, mu=1.))
 record = run_experiment(tm.SimConfig(substep=.003), params, Reach(position_tol_m=.02), tm.HoldFirst(),
-                        tm.VirtualTime.constant_latency(.005))  # an in-process Mpc without the budget
+                        tm.VirtualTimeSettings.constant_latency(.005))  # an in-process Mpc without the budget
 evaluate(record)
 print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
 ```
@@ -361,18 +402,17 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
 - **Configuration pieces are dataclasses,** recorded by `tm.to_dict` (with their type
   name) and rebuilt by `tm.from_dict`: the task,
   `MpcParams`, the plant's `SimConfig` or `RobotConfig` (`build()` makes the
-  plant), the law and the timing. Extra keyword pieces of `run_experiment` (e.g.
+  plant), the law, safety, effort handling, compensation and timing settings. Extra keyword pieces of `run_experiment` (e.g.
   `case="pair_00026"`) are recorded too. The package's configs are frozen and hold tuples;
   a supplied native cost menu retains its mutable terms and arrays.
-- A **control law** is a frozen dataclass called `law(plan, t, state) -> command`
+- A **control law** is a frozen dataclass called `law(plan, t, state) -> Command | Fault`
   (`tm.SampleKnot()`, `tm.HoldFirst()`, `tm.PlanFeedback(kp, kd)`,
-  `tm.FrictionFeedforward(friction, base_law)`); a **timing** one whose
-  `run(plant, mpc, task, law, tick_callbacks, duration=...)` runs its loop
-  (`VirtualTime`, `RealTime`, `Compensated`); **tick callbacks** see every `Tick` (the
+  `tm.FrictionFeedforward(friction, base_law)`); **timing settings** are plain data
+  passed to an explicitly selected loop. **Tick callbacks** see every `Tick` (the
   tick's time, state, command, plan, whether it is new, whether a control update
   started, its events). The pieces' interfaces are typed in `tiago_mpc/interfaces.py`:
-  a plant, an MPC, a task and a timing need no base class, only what the protocols
-  `PlantInterface`, `MpcInterface`, `TaskInterface` and `Timing` declare.
+  plants, MPCs, tasks and safety checks need no base class, only what the protocols
+  `PlantInterface`, `MpcInterface`, `TaskInterface` and `SafetyInterface` declare.
 - `SimConfig(friction=..., friction_law=..., integrator=...)` sets the **plant's** losses,
   `MpcParams.friction` and `friction_law` the **predictor's**; the run records both.
 - **Friction simulation:** a `Friction` holds only the Coulomb and viscous coefficients.
@@ -445,8 +485,9 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
 - **Per-solve solver changes** come from the task's `at`, named in `UPDATES`
   (`mpc.py`). **Your own loop** can use `Mpc` (the `MpcProcess` interface plus
   the raw GATO `controller` and `step`, the latest solve's result) and starts the
-  plant with `VirtualClock()` or `WallClock()`; given a timing dataclass whose `run`
-  calls it and returns a `tm.Outcome`, it fits `run_experiment` (as `Compensated`).
+  plant with `VirtualClock()` or `WallClock()`. Pass its function with `loop=` and
+  its settings dataclass to `run_experiment` (as for `run_compensated`). It returns
+  a `tm.Outcome` and accepts the explicit execution components.
   Per-plan data of an own loop travels in `plan.stats` (every key a `plans`
   column). Without `run_experiment`, `tm.RunRecord(out, **pieces)` is used on its
   own: pass it and `tm.Console()` as tick callbacks, and set the status, take the plant's
@@ -522,7 +563,7 @@ python -m experiments.figure8 --plant robot --execute --target X_M Y_M Z_M --dur
 - **Check-only is the default:** the startup checks, then exit; no MPC, no
   controller switch, no command.
 - **`--execute`** asks you to type `EXECUTE` and runs the experiment on wall
-  time (`RealTime`, `RobotConfig(execute=True)`): effort control from the first
+  time (`RealTimeSettings`, `RobotConfig(execute=True)`): effort control from the first
   command, zero torque and PAL's position controller again on exit, a fault or a
   stop request. `--target` (metres in
   `torso_lift_link`) is the reach target or the figure eight's `start_m`;
@@ -538,7 +579,8 @@ provenance and configuration at the start and buffers one entry per command tick
 
 - `summary.json`: `format`; `provenance` (commit, source status, package
   versions, GATO's source, `ROS_DISTRO`); `config`, the pieces (`task`, `params`,
-  `plant`, `law`, `timing`, `duration`, extra ones), each `to_dict`-ed; `metadata`:
+  `plant`, `law`, `settings`, `loop`, `compensation`, `safety`, `effort_handling`,
+  `duration`, extra ones), each `to_dict`-ed; `metadata`:
   `status`, `reason`, `end_t`, one flat `results` dict (the common results, then the
   experiment's, e.g. arrival or tracking error), `error` (a traceback) and `plant`
   (the robot's `activated`, `restored`, `cleanup_errors`; `{}` in simulation).
@@ -555,7 +597,7 @@ provenance and configuration at the start and buffers one entry per command tick
   also has its rotation vectors (`reference_rotvec_rad`, NaN at a tick without one).
 
 `tm.load_run(path, classes=[Reach])` reads a run back with the same interface
-(`run.ticks["q"]`, `run.config["timing"]`, `run.metadata["status"]`, `run.events`):
+(`run.ticks["q"]`, `run.config["settings"]`, `run.metadata["status"]`, `run.events`):
 a metric added later is the same code, and `run.save()` writes it back.
 The loader rejects other format versions before reconstructing their configuration.
 Format-2 runs remain readable with WIP `f66172f`; their files are unchanged.

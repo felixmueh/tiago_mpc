@@ -3,9 +3,11 @@
 Both package loops accept optional `LatencyCompensation`. It predicts the arm state
 at the intended start of the next plan while the previous plan continues running.
 MPC solves from that prediction, with the reference window starting at the same
-future time. `RealTime()` turns it on by default, `LatencyCompensation(latency_s=.02)`:
-a fixed forecast of one 50 Hz control period, otherwise this class's defaults; the
-simulation takes it with `VirtualTime.like(RealTime())`. It does not change the
+future time. `run_real_time` uses the previous observed request-to-result delay by
+default. Its initial estimate is the update period, with the command period as a
+fallback for back-to-back updates. Standard simulations pass
+`default_compensation(settings)`: declared virtual latency selects that fixed
+delay; measured latency selects the previous observed delay. It does not change the
 command rate, control-update schedule or MPC knot interval.
 
 ```python
@@ -20,33 +22,37 @@ compensation = tm.LatencyCompensation(
     armature=tm.ARMATURE_KG_M2,
     substep=.001,
 )
-timing = tm.RealTime(
+real_settings = tm.RealTimeSettings(
     command_period=.002,       # 500 Hz torque commands, including PD/FF
     update_period=.02,         # 50 Hz control updates; 0 requests back to back
-    compensation=compensation,
 )
 
 # The same compensation on a simulation clock, charging actual solve wall time:
-simulation_timing = tm.VirtualTime(
+simulation_settings = tm.VirtualTimeSettings(
     command_period=.002,
     update_period=.02,
     solve_latency_s="measured",
-    compensation=compensation,
 )
 ```
 
-Pass the timing to `experiments.common.run_experiment` as usual. It builds a
-concurrent `MpcProcess` for `RealTime` and an in-process `Mpc` for simulation.
-Interactive callers can pass `MpcProcess` to `run_virtual_time` to overlap solving
-with independent plant integration. Compensation is configured on the timing.
+Pass the settings, selected loop and `compensation=compensation` to
+`experiments.common.run_experiment`. It builds a concurrent `MpcProcess` for
+`run_real_time` and an in-process `Mpc` for simulation. Interactive callers can
+pass `MpcProcess`, `settings=simulation_settings` and `compensation=compensation`
+to `run_virtual_time` to overlap solving with independent plant integration.
 
 ## Delay estimate and plan activation
 
 `latency_s=.01` uses a fixed 10 ms forecast. `latency_s="previous"` uses a previous
 completed request's observed delay; the first request uses `initial_latency_s`.
 It never uses the current solve's duration before that solve completes. This
-estimate is separate from `VirtualTime.solve_latency_s`, which determines when
+estimate is separate from `VirtualTimeSettings.solve_latency_s`, which determines when
 the simulated result actually becomes available.
+
+`default_compensation(settings)` centralizes the loop-dependent choice and seeds
+previous-delay mode from the configured periods. A fixed forecast remains an
+explicit `LatencyCompensation(latency_s=...)` choice; changing the update rate
+does not silently change that explicit model.
 
 On wall time, computing the forecast also costs time. The target is chosen before
 that CPU rollout, and the request is sent afterwards; its remaining lookahead can
@@ -110,7 +116,7 @@ callers set it equal to `t0`. Real-time execution expires a plan at the earlier 
 - `measured_t + 0.1` seconds, the existing measurement-age allowance;
 - `t0 + len(torques) * dt`, the end of its trajectory.
 
-Virtual-time execution uses `VirtualTime.max_plan_age_s` for the first limit
+Virtual-time execution uses `ExecutionSafety.max_plan_age_s` for the first limit
 (default 0.1 s); None disables that age limit in execution and prediction.
 The plan's finite horizon remains. Forecasting still preserves the original
 measurement time and does not renew an observation's age.
@@ -127,7 +133,11 @@ uses the same law and separate effort policy for actual and predicted commands:
 `RejectOnEffort()` makes an excessive future command return prediction_unavailable
 without an actual actuator event. `None` explicitly disables effort handling.
 Forecast-compatible laws and effort policies must be pure; forecasting evaluates
-them directly without copying their state. On
+them directly without copying their state. Safety implements
+`validate(plan, t, state) -> Fault | None`; forecasting uses that same object.
+`decide_command` performs the same
+lease, law and effort checks in both execution and forecasting, returning
+`Command` or `Fault`; forecasting consumes a refusal without an actuator event. On
 wall time this preparation happens after the current valid command and callbacks;
 the loop stops and hands back immediately if preparation fails.
 

@@ -18,7 +18,7 @@ import numpy as np
 
 from experiments import figure8, reach
 from experiments.common import handle_stop_signals, run_experiment
-from experiments.latency_compensation import Compensated, first_tick_of_each_plan, requested_states
+from experiments.latency_compensation import Compensated, first_tick_of_each_plan, requested_states, run_compensated
 import tiago_mpc as tm
 
 COMMAND_PERIOD = tm.hz_to_s(500)  # the experiments' default; the control-update period is the knot interval
@@ -55,11 +55,12 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
                 compensate, law = CASES[case]
                 timing = (Compensated(solve_latency_s=ms / 1e3, command_period=COMMAND_PERIOD,
                                       prediction_substep_s=prediction_substep_s, predictor=predictor) if compensate
-                          else tm.VirtualTime.constant_latency(ms / 1e3, command_period=COMMAND_PERIOD))
+                          else tm.VirtualTimeSettings.constant_latency(ms / 1e3, command_period=COMMAND_PERIOD))
                 case_out = out / name / f"{name}_{case}_{ms:g}ms"
                 mpc = tm.Mpc(params, binary)
                 try:
-                    evaluate(run_experiment(plant, mpc, task, law, timing, out=case_out))
+                    evaluate(run_experiment(plant, mpc, task, law, timing,
+                                            loop=run_compensated if compensate else tm.run_virtual_time, out=case_out))
                 except Exception as exc:  # an error is a result: run_experiment saved it as "error"
                     print(f"{case_out.name}: {type(exc).__name__}: {exc}", flush=True)
                 finally:

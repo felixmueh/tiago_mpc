@@ -12,9 +12,8 @@ from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleK
 from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.prediction import LatencyCompensation
-from tiago_mpc.loops import (STOP, RealTime, Schedule, VirtualTime, command_fault, lease_fault, plan_fault,
-                             run_real_time, run_virtual_time)
-from tiago_mpc.interfaces import Plan, Prediction, State
+from tiago_mpc.loops import STOP, RealTimeSettings, Schedule, VirtualTimeSettings, run_real_time, run_virtual_time
+from tiago_mpc.interfaces import Command, Plan, Prediction, State
 from tiago_mpc.record import Event
 
 
@@ -136,11 +135,14 @@ def test_duplicate_mpc_and_external_friction_is_rejected_before_start(loop, feed
     mpc.params = replace(TIAGO, friction=Friction((2.,)*7, (1.,)*7))
     base = PlanFeedback() if feedback else SampleKnot()
     law = FrictionFeedforward(Friction((1.,)*7, (.5,)*7), base)
-    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    settings = dict(command_period=.002, update_period=.02)
     if loop is run_virtual_time:
-        settings['solve_latency_s'] = .0055
+        settings = dict(settings=VirtualTimeSettings(**settings, solve_latency_s=.0055))
+    else:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
     with pytest.raises(ValueError, match="double compensation"):
-        loop(plant, mpc, Task(), law, **settings)
+        loop(plant, mpc, Task(), law, duration=.01, **settings)
     assert not plant.calls and not plant.applied and not mpc.warmups and not mpc.requests
 
 
@@ -150,11 +152,14 @@ def test_nested_external_compensation_is_rejected_before_start(loop, wall):
     mpc.params = TIAGO
     friction = Friction((1.,)*7, (.5,)*7)
     law = FrictionFeedforward(friction, FrictionFeedforward(friction))
-    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    settings = dict(command_period=.002, update_period=.02)
     if loop is run_virtual_time:
-        settings['solve_latency_s'] = .0055
+        settings = dict(settings=VirtualTimeSettings(**settings, solve_latency_s=.0055))
+    else:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
     with pytest.raises(ValueError, match="another friction feedforward"):
-        loop(plant, mpc, Task(), law, **settings)
+        loop(plant, mpc, Task(), law, duration=.01, **settings)
     assert not plant.calls and not mpc.warmups and not mpc.requests
 
 
@@ -166,10 +171,14 @@ def test_valid_compensation_choices_still_execute(loop, mode, wall):
     mpc.params = replace(TIAGO, friction=friction if mode == "internal_pd" else None)
     base = PlanFeedback() if mode.endswith('pd') else SampleKnot()
     law = FrictionFeedforward(friction, base) if mode.startswith('external') else base
-    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    settings = dict(command_period=.002, update_period=.02)
     if loop is run_virtual_time:
-        settings['solve_latency_s'] = .004
-    outcome = loop(plant, mpc, Task(), law, **settings)
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=VirtualTimeSettings(**settings, solve_latency_s=.004), compensation=compensation)
+    else:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
+    outcome = loop(plant, mpc, Task(), law, duration=.01, **settings)
     assert outcome.status == 'timeout' and plant.applied
     assert plant.calls == ['start', 'stop'] and mpc.requests
 
@@ -180,11 +189,15 @@ def test_plan_feedback_without_latency_compensation_warns(loop, feedforward, wal
     mpc = Mpc(wall=.004)
     mpc.params = TIAGO
     law = FrictionFeedforward(Friction((1.,)*7, (.5,)*7), PlanFeedback()) if feedforward else PlanFeedback()
-    settings = dict(command_period=.002, update_period=.02, duration=.01)
+    settings = dict(command_period=.002, update_period=.02)
     if loop is run_virtual_time:
-        settings['solve_latency_s'] = .004
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=VirtualTimeSettings(**settings, solve_latency_s=.004), compensation=compensation)
+    else:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
     with pytest.warns(RuntimeWarning, match="PlanFeedback without latency compensation"):
-        outcome = loop(Plant(), mpc, Task(), law, **settings)
+        outcome = loop(Plant(), mpc, Task(), law, duration=.01, **settings)
     assert outcome.status == 'timeout'  # a warning, not a rejection
 
 
@@ -196,14 +209,18 @@ def test_no_feedback_warning_without_plan_feedback_or_with_compensation(loop, ca
     friction = Friction((1.,)*7, (.5,)*7)
     law = {"sample_knot": SampleKnot(), "feedforward": FrictionFeedforward(friction),
            "compensated_pd": PlanFeedback(), "compensated_both": FrictionFeedforward(friction, PlanFeedback())}[case]
-    settings = dict(command_period=.002, update_period=.02, duration=.01)
-    if loop is run_virtual_time:
-        settings['solve_latency_s'] = .004
+    settings = dict(command_period=.002, update_period=.02)
     if case.startswith("compensated"):
         settings['compensation'] = LatencyCompensation(initial_latency_s=.004)
+    if loop is run_virtual_time:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=VirtualTimeSettings(**settings, solve_latency_s=.004), compensation=compensation)
+    else:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
-        outcome = loop(Plant(), mpc, Task(), law, **settings)
+        outcome = loop(Plant(), mpc, Task(), law, duration=.01, **settings)
     assert outcome.status == 'timeout'
 
 
@@ -216,18 +233,28 @@ def test_physical_friction_and_armature_do_not_count_as_double_compensation(loop
     plant = SimConfig(friction=friction, integrator='euler', armature=ARMATURE_KG_M2).build()
     mpc = Mpc(wall=.004)
     mpc.params = TIAGO
-    settings = dict(command_period=.002, update_period=.02, duration=.006)
+    settings = dict(command_period=.002, update_period=.02)
     if loop is run_virtual_time:
-        settings['solve_latency_s'] = .004
-    outcome = loop(plant, mpc, Task(), FrictionFeedforward(friction), **settings)
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=VirtualTimeSettings(**settings, solve_latency_s=.004), compensation=compensation)
+    else:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
+    outcome = loop(plant, mpc, Task(), FrictionFeedforward(friction), duration=.006, **settings)
     assert outcome.status == 'timeout' and mpc.requests
 
 
 def go(mpc, task=Task(), loop=run_virtual_time, duration=.1, update_period=.01, plant=None, **kw):
-    """10 ms command ticks; run_virtual_time needs solve_latency_s in kw."""
+    """Run test fakes at 10 ms command ticks with the chosen loop's settings."""
     plant, ticks = plant or Plant(), []
-    outcome = loop(plant, mpc, task, tick_callbacks=[ticks.append], command_period=.01,
-                   update_period=update_period, duration=duration, **kw)
+    options = {key: kw.pop(key) for key in ("compensation", "safety", "effort_handling") if key in kw}
+    settings = dict(command_period=.01, update_period=update_period, **kw)
+    if loop is run_virtual_time:
+        settings = dict(settings=VirtualTimeSettings(**settings))
+    elif loop is run_real_time:
+        compensation = settings.pop("compensation", None)
+        settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
+    outcome = loop(plant, mpc, task, tick_callbacks=[ticks.append], duration=duration, **settings, **options)
     return plant, ticks, outcome
 
 
@@ -280,6 +307,14 @@ def test_measured_latency_uses_the_plans_own_wall_time():
     mpc = Mpc(wall=.004)
     _, ticks, _ = go(mpc, solve_latency_s="measured", duration=.03)
     assert commanded(ticks) == [(.01, 2.), (.02, 2.)]  # 4 ms: from the next tick
+
+
+def test_measured_zero_waits_one_tick_while_explicit_ideal_zero_is_immediate():
+    for latency, first in [('measured', .01), (0., 0.)]:
+        mpc = Mpc(wall=0.)
+        _, ticks, _ = go(mpc, solve_latency_s=latency, duration=.03)
+        assert commanded(ticks)[0][0] == first
+        assert [round(t, 6) for t, _ in mpc.requests] == [0., .01, .02]
 
 
 def test_each_solve_longer_than_a_declared_latency_is_an_overrun_event():
@@ -341,13 +376,75 @@ def test_task_updates_reach_the_request_and_the_schedule_sets_the_control_rate()
 
 
 @pytest.mark.parametrize("solve_latency", [None, -.01, math.nan, math.inf, "real"])
-def test_run_virtual_time_needs_a_valid_solve_latency_before_it_starts_the_plant(solve_latency):
-    plant = Plant()
+def test_virtual_settings_need_a_valid_solve_latency(solve_latency):
     with pytest.raises(ValueError, match="solve_latency_s"):
-        go(Mpc(), plant=plant, solve_latency_s=solve_latency)
+        VirtualTimeSettings(.01, .01, solve_latency)
+
+
+@pytest.mark.parametrize("loop", [run_virtual_time, run_real_time])
+def test_each_loop_requires_a_settings_object_before_starting_the_plant(loop):
+    plant = Plant()
+    with pytest.raises(TypeError, match="settings"):
+        loop(plant, Mpc(), Task(), duration=.01)
     assert not plant.calls
-    with pytest.raises(TypeError, match="solve_latency_s"):  # no default
-        go(Mpc())
+
+
+@pytest.mark.parametrize('loop, settings', [
+    (run_virtual_time, VirtualTimeSettings.ideal()),
+    (run_real_time, RealTimeSettings()),
+])
+def test_each_loop_requires_a_duration_before_starting_the_plant(loop, settings):
+    plant = Plant()
+    with pytest.raises(TypeError, match='duration'):
+        loop(plant, Mpc(), Task(), settings=settings)
+    assert not plant.calls
+
+
+@pytest.mark.parametrize('duration', [None, -1., math.inf, -math.inf, math.nan])
+@pytest.mark.parametrize('loop, settings', [
+    (run_virtual_time, VirtualTimeSettings.ideal()),
+    (run_real_time, RealTimeSettings()),
+])
+def test_invalid_duration_is_rejected_before_startup(loop, settings, duration):
+    plant, mpc = Plant(), Mpc()
+    with pytest.raises(ValueError, match='duration'):
+        loop(plant, mpc, Task(), settings=settings, duration=duration)
+    assert not plant.calls and not mpc.warmups and not mpc.requests
+
+
+@pytest.mark.parametrize('loop, settings', [
+    (run_virtual_time, VirtualTimeSettings.ideal()),
+    (run_real_time, RealTimeSettings()),
+])
+def test_zero_duration_and_exact_ten_minute_limit_are_accepted(wall, loop, settings):
+    assert loops.MAX_RUNTIME_MIN == 10
+    for duration in (0., 600.):
+        plant = Plant()
+        outcome = loop(plant, Mpc(), Task(done_at=0.), settings=settings, duration=duration)
+        assert outcome.status == 'done' and outcome.t == 0.
+        assert plant.calls == ['start', 'stop'] and not plant.applied
+    plant = Plant()
+    with pytest.raises(ValueError, match='Not validated for long runs'):
+        loop(plant, Mpc(), Task(), settings=settings, duration=600.001)
+    assert not plant.calls
+
+
+@pytest.mark.parametrize("settings_type", [VirtualTimeSettings, RealTimeSettings])
+@pytest.mark.parametrize("piece", ["compensation", "safety", "effort_handling", "max_plan_age_s"])
+def test_timing_settings_reject_execution_policies(settings_type, piece):
+    with pytest.raises(TypeError, match=piece):
+        settings_type(**{piece: None})
+
+
+@pytest.mark.parametrize("setting, value", [
+    ("command_period", .01), ("update_period", .01), ("solve_latency_s", 0.), ("max_plan_age_s", .1),
+])
+def test_run_virtual_time_requires_timing_in_settings(setting, value):
+    plant = Plant()
+    with pytest.raises(TypeError, match=setting):
+        run_virtual_time(plant, Mpc(), Task(), settings=VirtualTimeSettings.ideal(),
+                         duration=.01, **{setting: value})
+    assert not plant.calls
 
 
 @pytest.mark.parametrize("loop, kw", [(run_virtual_time, dict(solve_latency_s=0.)), (run_real_time, {})])
@@ -418,7 +515,7 @@ def test_the_tick_after_the_first_command_is_late_without_an_event(wall):
 def test_past_the_plans_end_faults_and_stops(wall):
     plant, ticks = Plant(), []
     outcome = run_real_time(plant, Mpc(N=4, replies=1), Task(), HoldFirst(), tick_callbacks=[ticks.append],
-                            command_period=.01, update_period=.01, duration=1.)
+                            settings=RealTimeSettings(.01, .01), compensation=None, duration=1.)
     assert outcome.status == "fault" and outcome.reason == "lease_expired"  # 30 ms plan: lease ends with it
     assert [round(t, 6) for t, _ in plant.applied] == [.01, .02]  # from the tick after it arrived
     assert plant.calls == ["start", "stop"] and round(ticks[-1].t, 6) == .03 and ticks[-1].command is None
@@ -431,7 +528,7 @@ def test_a_dead_mpc_process_is_noticed_within_one_tick_and_stops_the_plant(wall)
         mpc.dead = tick.t >= .02
 
     with pytest.raises(RuntimeError, match="exited"):
-        run_real_time(plant, mpc, Task(), tick_callbacks=[die], command_period=.01, update_period=.05,
+        run_real_time(plant, mpc, Task(), tick_callbacks=[die], settings=RealTimeSettings(.01, .05), compensation=None,
                       duration=1.)
     assert plant.calls == ["start", "stop"] and wall.now == pytest.approx(.03)
 
@@ -507,8 +604,8 @@ def test_schedule_skips_missed_slots_and_period_0_is_due_at_every_call():
 def test_real_time_rejects_a_plan_above_the_raw_effort_limit_before_any_knot_is_commanded(wall):
     """Only plan 2's last knot is over the limit; the run stops on its arrival, sending nothing."""
     mpc, plant, ticks = Mpc(delay=1, over=2), Plant(), []
-    outcome = run_real_time(plant, mpc, Task(), tick_callbacks=[ticks.append], command_period=.01,
-                            update_period=.01, duration=.1)
+    outcome = run_real_time(plant, mpc, Task(), tick_callbacks=[ticks.append],
+                            settings=RealTimeSettings(.01, .01), compensation=None, duration=.1)
     assert outcome.status == "fault" and outcome.reason == "effort_limit"
     assert len(mpc.requests) == 2 and mpc.waiting is None and plant.calls[-1] == "stop"
     assert all(command[1] == 1. for _, command in plant.applied)  # plan 2 is never commanded
@@ -516,26 +613,17 @@ def test_real_time_rejects_a_plan_above_the_raw_effort_limit_before_any_knot_is_
     assert ticks[-1].faulted.torques[-1, 6] == 26.1 and all(k.faulted is None for k in ticks[:-1])  # for the record
 
 
-def test_the_faults_name_the_reason_and_none_without_one():
-    plan = Plan(0., .01, np.zeros((32, 14)), np.ones((31, 7)), measured_t=0.)
-    assert plan_fault(plan) is None and command_fault(np.ones(7)) is None and lease_fault(plan, .099) is None
-    assert plan_fault(Plan(0., .01, np.zeros((3, 14)), np.r_[np.ones((1, 7)), [[1.] * 6 + [26.1]]], measured_t=0.)) == "effort_limit"
-    assert command_fault(np.r_[np.ones(6), 26.1]) == "effort_limit"  # joint 7: 26 Nm
-    for bad in (np.r_[np.ones(6), np.nan], np.ones(6)):
-        assert command_fault(bad) == "invalid_command"
-    assert lease_fault(plan, .1) == "lease_expired"
-    assert lease_fault(Plan(0., .01, np.zeros((4, 14)), np.ones((3, 7)), measured_t=0.), .03) == "lease_expired"  # its end
-
-
-@pytest.mark.parametrize("loop, kw", [(run_virtual_time, dict(solve_latency_s=0.)), (run_real_time, {})])
+@pytest.mark.parametrize("loop, kw", [
+    (run_virtual_time, dict(settings=VirtualTimeSettings(.01, .01, 0.))),
+    (run_real_time, dict(settings=RealTimeSettings(.01, .01))),
+])
 def test_a_stop_request_ends_the_run_without_a_later_command(wall, loop, kw):
     def stop(tick):
         if round(tick.t, 6) == .02:
             STOP.set()
 
     plant, ticks = Plant(), []
-    outcome = loop(plant, Mpc(), Task(), tick_callbacks=[stop, ticks.append], command_period=.01,
-                   update_period=.01, duration=1., **kw)
+    outcome = loop(plant, Mpc(), Task(), tick_callbacks=[stop, ticks.append], duration=1., **kw)
     assert outcome.status == "interrupted" and outcome.reason == "stop_requested"
     assert all(t <= .02 for t, _ in plant.applied)
     assert plant.calls == ["start", "stop"]
@@ -552,18 +640,19 @@ def test_the_plants_events_ride_on_the_next_tick(wall):
     assert [[e.t for e in k.events] for k in ticks] == [[], [.01], [pytest.approx(.02)]]
 
 
-def test_the_timings_run_their_loops_with_their_settings(wall):
-    assert VirtualTime.ideal() == VirtualTime(.002, .01, 0.)
-    assert VirtualTime.constant_latency() == VirtualTime(.002, .01, .05)
-    assert VirtualTime.constant_latency(.02, update_period=.02) == VirtualTime(.002, .02, .02)
-    assert VirtualTime.as_fast_as_possible() == VirtualTime(.002, 0., "measured")
-    assert VirtualTime.constant_rate() == VirtualTime(.002, .01, .01)
-    forecast = LatencyCompensation(latency_s=.02)  # the real MPC's defaults, and their simulation
-    assert RealTime() == RealTime(.002, .02, forecast)
-    assert VirtualTime.like(RealTime()) == VirtualTime(.002, .02, .02, forecast)
-    for timing, clock in ((VirtualTime(.01, .01, .025), "VirtualClock"), (RealTime(.01, .01, None), "WallClock")):
+def test_timing_presets_and_explicit_loop_selection(wall):
+    assert VirtualTimeSettings.ideal() == VirtualTimeSettings(.002, .01, 0.)
+    assert VirtualTimeSettings.constant_latency() == VirtualTimeSettings(.002, .01, .05)
+    assert VirtualTimeSettings.constant_latency(.02, update_period=.02) == VirtualTimeSettings(.002, .02, .02)
+    assert VirtualTimeSettings.as_fast_as_possible() == VirtualTimeSettings(.002, 0., "measured")
+    assert VirtualTimeSettings.constant_rate() == VirtualTimeSettings(.002, .01, .01)
+    assert RealTimeSettings() == RealTimeSettings(.002, .02)
+    assert VirtualTimeSettings.like(RealTimeSettings()) == VirtualTimeSettings(.002, .02, .02)
+    for timing, clock in ((VirtualTimeSettings(.01, .01, .025), "VirtualClock"), (RealTimeSettings(.01, .01), "WallClock")):
         plant, ticks = Plant(), []
-        outcome = timing.run(plant, Mpc(delay=2), Task(), HoldFirst(), [ticks.append], duration=.08)
+        loop = run_real_time if isinstance(timing, RealTimeSettings) else run_virtual_time
+        outcome = loop(plant, Mpc(delay=2), Task(), HoldFirst(), [ticks.append], settings=timing,
+                       compensation=None, duration=.08)
         assert outcome.status == "timeout" and len(ticks) == 9 and type(plant.clock).__name__ == clock
         assert [round(k.t, 6) for k in ticks if k.new][0] == .03  # 25 ms declared; the third poll
 
@@ -583,8 +672,8 @@ def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
 
     stamps, plant, task = [], Timed(), Reach(timeout_s=10.)
     record = RunRecord(tmp_path / "r", task=task, params=TIAGO)
-    run_virtual_time(plant, Mpc(N=32, dt=.002), task, tick_callbacks=[record], command_period=.002,
-                update_period=.002, duration=2., solve_latency_s=0.)
+    run_virtual_time(plant, Mpc(N=32, dt=.002), task, tick_callbacks=[record],
+                     settings=VirtualTimeSettings(.002, .002, 0.), duration=2.)
     body = np.diff(stamps) * 1e3
     print(f"tick body ms: median {np.median(body):.3f}, p99 {np.percentile(body, 99):.3f}, max {body.max():.3f}")
     assert len(body) == 999 and np.isfinite(record.ticks["command"][:-1]).all()
@@ -596,6 +685,7 @@ def test_compensated_plans_take_effect_at_a_tick_a_rounding_error_before_their_o
     """50 Hz control updates with a fixed 20 ms forecast on virtual time: after about 2 s of summed
     2 ms ticks, the tick at a predicted origin t + 20 ms lands about 2e-15 s before it, and its plan
     still takes effect there."""
-    timing, ticks = VirtualTime(.002, .02, .02, LatencyCompensation(latency_s=.02)), []
-    outcome = timing.run(Plant(), Mpc(N=32, dt=.03), Task(), SampleKnot(), [ticks.append], duration=2.2)
+    timing, ticks = VirtualTimeSettings(.002, .02, .02), []
+    outcome = run_virtual_time(Plant(), Mpc(N=32, dt=.03), Task(), SampleKnot(), [ticks.append], settings=timing,
+                               compensation=LatencyCompensation(latency_s=.02), duration=2.2)
     assert outcome.status == "timeout" and sum(k.new for k in ticks) == 110

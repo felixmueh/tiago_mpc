@@ -11,17 +11,21 @@ this module is the one that writes and reads it. (Small single purpose serializa
 
 Usually experiments.common.run_experiment creates the record, runs the loop and saves,
 also after a fault or an error. By hand, given an mpc, a task (a Reach), a law, a
-timing, a plant_config and the run directory out (None: _expr_data/<task type>/<UTC
+settings, a plant_config and the run directory out (None: _expr_data/<task type>/<UTC
 time>/);
 
 >>> import numpy as np
 >>> import tiago_mpc as tm
 >>> from experiments.reach import Reach
+>>> safety, effort = tm.ExecutionSafety(), tm.EffortClip()
 >>> record = tm.RunRecord(out, task=task, params=mpc.params, plant=plant_config, law=law,
-...                       timing=timing, duration=1.)  # every piece the loop gets
+...                       settings=settings, compensation=None, safety=safety,
+...                       effort_handling=effort, duration=1.)  # every piece the loop gets
 >>> plant = plant_config.build()
 >>> try:
-...     outcome = timing.run(plant, mpc, task, law, [record, tm.Console()], duration=1.)
+...     outcome = tm.run_virtual_time(plant, mpc, task, law, [record, tm.Console()],
+...                                   settings=settings, compensation=None, safety=safety,
+...                                   effort_handling=effort, duration=1.)
 ...     record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t)
 ... finally:
 ...     plant.close()
@@ -32,19 +36,26 @@ time>/);
 
 >>> run = tm.load_run(record.out, classes=[Reach])  # Reach: rebuild the task piece too
 >>> list(run.config)
-['task', 'params', 'plant', 'law', 'timing', 'duration']
->>> run.config["timing"] == timing
+['task', 'params', 'plant', 'law', 'settings', 'compensation', 'safety', 'effort_handling', 'duration']
+>>> run.config["settings"] == settings
 True
 >>> sorted(run.ticks)
 ['command', 'distance_m', 'plan', 'q', 'qd', 'state_t', 't', 'update']
 >>> run.metadata["results"]
 {'final_distance_m': ...}
 
->>> data = tm.to_dict(tm.VirtualTime.ideal())
+>>> data = tm.to_dict(tm.VirtualTimeSettings.ideal())
 >>> data
-{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0, 'compensation': None, 'max_plan_age_s': 0.1, 'effort_handling': {'type': 'EffortClip', 'effort': [...]}}
->>> tm.from_dict(data) == tm.VirtualTime.ideal()
+{'type': 'VirtualTimeSettings', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0}
+>>> tm.from_dict(data) == tm.VirtualTimeSettings.ideal()
 True
+>>> real = tm.to_dict(tm.RealTimeSettings())
+>>> real
+{'type': 'RealTimeSettings', 'command_period': 0.002, 'update_period': 0.02}
+>>> tm.from_dict(real) == tm.RealTimeSettings()
+True
+>>> tm.from_dict(tm.to_dict(tm.ExecutionSafety(None)))
+ExecutionSafety(max_plan_age_s=None)
 
 A run directory holds (FORMAT 3):
 - summary.json: format; provenance (provenance()); config, the named pieces given to
@@ -86,8 +97,9 @@ from gato.cost_menu import CostMenu, LinearTerm, Term
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.laws import EffortClip, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
-from tiago_mpc.loops import RealTime, VirtualTime
+from tiago_mpc.laws import (EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback,
+                            RejectOnEffort, SampleKnot)
+from tiago_mpc.loops import RealTimeSettings, VirtualTimeSettings
 from tiago_mpc.mpc import AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.interfaces import Event, Tick
@@ -100,8 +112,8 @@ FORMAT = 3
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
     SolverSettings, MpcParams, AdmmLimits, CostMenu, Term, LinearTerm,
     Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
-    PlanFeedback, FrictionFeedforward, EffortClip, RejectOnEffort,
-    VirtualTime, RealTime, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
+    PlanFeedback, FrictionFeedforward, EffortClip, RejectOnEffort, ExecutionSafety,
+    VirtualTimeSettings, RealTimeSettings, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
 )
 
 

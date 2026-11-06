@@ -85,10 +85,10 @@ def main():
         inner_modes.update(plans["admm_linsys_mode"].tolist())
     arrivals = [r for r, s in zip(records, statuses) if s == "arrived"]
     valid = [r for r in arrivals if r.metadata["results"]["limits_pass"]]
-    params, timing, timeout_s = records[0].config["params"], study.config.timing, records[0].config["task"].timeout_s
+    params, timing, timeout_s = records[0].config["params"], study.config.settings, records[0].config["task"].timeout_s
     setting_line = (f"N{params.N}, B1, {1000*params.dt_s:g} ms knots, {1000*timing.update_period:g} ms control "
                     f"updates, {1000*timing.solve_latency_s:g} ms declared solve latency, latency compensation "
-                    f"{'on' if timing.compensation else 'off'}, law {type(records[0].config['law']).__name__}, "
+                    f"{'on' if study.config.compensation else 'off'}, law {type(records[0].config['law']).__name__}, "
                     f"armature {'on' if any(params.armature) else 'off'} (predictor), "
                     f"{'on' if any(study.config.plant.armature) else 'off'} (plant), "
                     f"{1000*study.config.plant.substep:g} ms Pinocchio RK4, "
