@@ -7,6 +7,61 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-11-07: the package keeps only what the MPC needs; the body cover for the safety
+  monitor is parked** (Felix, refactor of the entry below).
+  - **`collision.py`** keeps `Collision` and the cover loading (`arm_cover`, `body_cover`,
+    `body_posture`, `cover_hashes`, `cover_file`) with `cuboid`. `ExactCheck`, the reduced robot
+    and the mesh helpers leave the package: the mesh helpers move to `tiago_scripts/validate.py`,
+    the evaluation to `experiments/clearance.py`, which `obstacles.py` uses.
+  - **Posture:** `BodyPosture` and `Collision.posture` are removed. The posture is the chosen
+    body cover's (named joint positions); `body=None` uses the default cover's, because it is
+    the same robot. The measured values are `tiago_scripts/body_cover.POSTURE`, the generator's
+    input; a test compares each stored cover's posture with it.
+  - **One robot model:** generation and evaluation use safety's `build_tiago_collision_model`
+    with the full URDF's original meshes, every joint but the right arm's locked.
+  - **No body cover for the safety monitor for now:** a cover of safety's alpha-wrap body grown
+    by the monitor's 4 cm is parked on `experiment/body-cover-safety` (its NOTES.md: the fit
+    exceeds the container's memory at 5 mm, and the default start pose has only 0.6 cm of
+    monitor slack, so such a cover puts it inside; `todo.org`).
+  - **Arm:** stays `arm/exact`. The monitor checks the arm's alpha-wrap meshes, about 1 cm outside
+    the original ones, which the spheres do not certainly contain, so it may trip up to about
+    1 cm early on the robot; noted at `collision.arm_cover` and in `todo.org`.
+  - **Evaluation:** `experiments/clearance.py` measures the original meshes, as the removed
+    `ExactCheck` did. `record.FORMAT` stays 4.
+
+- **2026-11-07: stored collision covers, generated offline by `tiago_scripts`** (Felix).
+  Nothing is fitted at run time any more; `Cover` and `fit_spheres` are gone.
+  - **Scripts:** the package `tiago_scripts/`, run as `python -m tiago_scripts.<name>`
+    (README there): `arm_cover` (the greedy's candidates, selected by an exact HiGHS MILP;
+    a time limit or a non-optimal status fails, with no greedy fallback and no tie-break;
+    it records the SciPy and HiGHS versions), `body_cover` (the weighted greedy plus
+    redundant-shape removal, `--choice balanced|tighter`, one pass for both) and
+    `validate` (the validation both use). The covers' viewer, the GPU distance bench and
+    `tune_costs.py` were dropped. mypy does not check `tiago_scripts/`.
+  - **Data:** one JSON per cover in `tiago_mpc/data/collision/`: `arm/exact.json` (28
+    spheres per link; the default) and `body/balanced.json` (83 primitives; the default)
+    and `body/tighter.json` (155, from the one-pass generator; the 2026-11-04 tighter had
+    156 from a two-step run). Each holds the primitives by shape in the collision layouts,
+    the frame, the posture (body), the inputs (URDF and per-part geometry sha256), the
+    settings, a validation summary and the library versions; no absolute paths, no
+    intermediates.
+  - **Runtime:** `Collision.arm = "exact"` and `Collision.body = "balanced"` (or None) name
+    the stored covers, which load when the MPC and the environment are built.
+    `environment()` merges the body's spheres, capsules and cuboids with the obstacles'.
+    No checks at load: `tests/test_collision.py` compares the stored inputs and posture with
+    the current model. Records store the names and, in their provenance, an 8-digit content
+    hash of each cover file; `record.FORMAT` became 4. Replays carry the body cover's
+    capsules and boxes (`body_capsules`, `body_boxes`).
+
+- **2026-11-04, revised 2026-11-07: body cover decimation is postponed** (Felix).
+  On 2026-11-04 Felix decided to keep four static body covers, balanced and tighter, each
+  original and decimated. On 2026-11-07 decimation was postponed: the decimated
+  `tighter` leaves the torso base's mesh up to 1.2 mm outside its primitives (certified
+  unreachable only for the current arm cover). Only complete covers land. The decimation,
+  the four 2026-11-04 covers with their decimation records and their re-decimation
+  against the exact arm cover are kept on branch `experiment/body-cover-decimation`; the
+  follow-up (one enclosing box for the unreachable back) is in `todo.org`.
+
 - **2026-11-03: retain local GATO armature and collision-cache work until upstream** (Felix).
   The shared-loop integration selects `../GATO/.worktrees/tiago-combined`
   and `../GRiD-tiago-armature-060` through `pyproject.toml` and `uv.lock`.

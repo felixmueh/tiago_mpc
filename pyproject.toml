@@ -57,8 +57,8 @@ ignore_errors = true
 module = ["experiments.common"]
 ignore_errors = false
 
-[[tool.mypy.overrides]]  # untyped: GATO, Pinocchio and ROS 2
-module = ["gato.*", "pinocchio.*", "rclpy.*", "builtin_interfaces.*", "rcl_interfaces.*",
+[[tool.mypy.overrides]]  # untyped: GATO, Pinocchio, Coal, SciPy, trimesh and ROS 2
+module = ["gato.*", "pinocchio.*", "coal.*", "scipy.*", "trimesh.*", "rclpy.*", "builtin_interfaces.*", "rcl_interfaces.*",
           "controller_manager_msgs.*", "sensor_msgs.*", "std_msgs.*", "sea_state_msgs.*"]
 ignore_missing_imports = true
 

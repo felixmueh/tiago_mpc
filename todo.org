@@ -13,6 +13,21 @@
 * Experiments
 - Jetson with 60W?
 
+* Collision covers
+- Safe body-cover decimation (after the refactor): replace the primitives the arm cannot reach
+  (essentially the robot's back) by one enclosing box, so the cover stays complete; keep containment
+  removals; the box itself must stay out of reach. Prior work: branch experiment/body-cover-decimation.
+- Exact (ILP) selection for the mixed body cover: the stored coverage table has ~7k candidates × 682k
+  cells (80–90 M nonzeros); reduce duplicate and dominated cells, warm-start from the greedy result,
+  time limit + gap; compare primitive counts with balanced (83) / tighter (155).
+- An MPC body cover consistent with the safety monitor (alpha-wrap + 4 cm): parked on
+  experiment/body-cover-safety; the default start pose has only 0.6 cm of monitor slack, so a
+  guaranteeing cover puts it inside.
+- Arm cover and the safety monitor: the monitor checks the arm's alpha-wrap meshes (about 1 cm outside
+  the original ones, offset 0.01 in models/safety/collision_alpha_wrap_a3_o25_cap001/alpha_wrap_results.json),
+  which arm/exact's spheres do not certainly contain, so on the robot the monitor could trip up to about
+  1 cm early. We see what happens.
+
 * Incoming from upstream (GATO , GRiD)
 - tanh friction.
 - robot axes handling.

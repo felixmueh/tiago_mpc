@@ -14,6 +14,7 @@ from experiments.random100.run import Case, Random100Config, Random100Study
 from experiments.reach import Reach
 from gato.cost_menu import CostMenu, LinearTerm, Term
 from test_loops import Mpc, Plant, Task
+from tiago_mpc.collision import Collision
 from tiago_mpc.interfaces import Diagnostic, State, Tick
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.laws import EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
@@ -215,6 +216,10 @@ COST_MENU = CostMenu(
     linear_x=LinearTerm(weight=.3, A=tuple(tuple(row) for row in np.eye(14))), linear_u=LINEAR,
     orientation=Term(weight=.4, target=tuple(tuple(row) for row in np.eye(3))),
     velocity=Term(weight=.2, target=(.1,) * 6), frame_pos_2=TERM, q_ref=((.1,) * 7,) * 8)
+COLLISION = Collision(arm="another-arm", body=None,
+                      obstacles=((.4, -.3, -.2, .05),), capsules=((0., 0., 0., 1., 1., 1., .1),),
+                      boxes=((.1, .2, .3, 0., 0., 0., 1., .1, .2, .3),), planes=((0., 0., 1., -.5),),
+                      margin_m=.01, mechanism="al", rho=2.)
 SAMPLES = [
     SolverSettings(max_sqp_iters=3, max_pcg_iters=50, pcg_tol=1e-5, solve_ratio=.5, mu=2., rho=.02,
                  adapt_rho=False, linsys="bdsv",
@@ -225,8 +230,8 @@ SAMPLES = [
               reset_rho_each_step=False, admm_linsys="auto", admm_threshold=.2, admm=AdmmLimits(iters=4),
               linsys="bdsv", bdsv_threshold=.3, reseed_threshold=.5, joint_margin_rad=.05,
               velocity_fraction=.5, effort_fraction=.8, friction=FRICTION, friction_law=Tanh(.05),
-              armature=(.1,) * 7, max_sqp_time_s=None, warmup=False, cost=COST_MENU),
-    COST_MENU, TERM, LINEAR,
+              armature=(.1,) * 7, max_sqp_time_s=None, warmup=False, cost=COST_MENU, collision=COLLISION),
+    COST_MENU, TERM, LINEAR, COLLISION,
     FRICTION, Tanh(.05), Sign(), StickSlip(), SampleKnot(), HoldFirst(),
     PlanFeedback(kp=(1.,) * 7, kd=(2.,) * 7),
     FrictionFeedforward(friction=FRICTION, base_law=HoldFirst(), evaluation=Tanh(.05)),

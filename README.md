@@ -202,9 +202,14 @@ tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what ex
               sim.py (SimConfig, SimPlant), robot.py (RobotConfig, RosPlant),
               ros2.py (ROS 2 client), safety.py,
               record.py (the run format: to_dict, from_dict, CLASSES, provenance, Console,
-              RunRecord, load_run)
+              RunRecord, load_run),
+              collision.py (Collision: GATO's collision rows; the stored covers arm_cover,
+              body_cover, body_posture), data/collision/ (the stored covers, one JSON each)
 experiments/  common.py (run_experiment, common_results, handle_stop_signals, and the mains'
-              arguments and setup), reach.py, figure8.py, random100/, replay.py
+              arguments and setup), reach.py, figure8.py, random100/, replay.py, obstacles.py,
+              clearance.py (the exact clearances the covers approximate)
+tiago_scripts/ offline generators of the checked-in data: arm_cover.py, body_cover.py,
+              validate.py (tiago_scripts/README.md)
 ```
 
 ## Setup
@@ -633,10 +638,11 @@ python -m experiments.figure8 --plant robot --execute --target X_M Y_M Z_M --dur
 `RunRecord` (`tiago_mpc/record.py`, the one module of the format) writes the
 provenance and configuration at the start and buffers one entry per command tick;
 `save()` writes the run into `--output` or `_expr_data/<task>/<UTC time>/`
-(ignored by Git). Plain JSON and npz, format 3; times count from the first state's:
+(ignored by Git). Plain JSON and npz, format 4; times count from the first state's:
 
 - `summary.json`: `format`; `provenance` (commit, source status, package
-  versions, GATO's source, `ROS_DISTRO`); `config`, the pieces (`task`, `params`,
+  versions, GATO's source, `ROS_DISTRO`, the 8-digit content hash of each stored
+  collision cover); `config`, the pieces (`task`, `params`,
   `plant`, `law`, `settings`, `loop`, `compensation`, `safety`, `effort_handling`,
   `duration`, extra ones), each `to_dict`-ed; `metadata`:
   `status`, `reason`, `end_t`, one flat `results` dict (the common results, then the

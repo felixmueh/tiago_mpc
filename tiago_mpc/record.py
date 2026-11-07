@@ -63,7 +63,7 @@ True
 >>> tm.from_dict(tm.to_dict(tm.ExecutionSafety(None)))
 ExecutionSafety(max_plan_age_s=None)
 
-A run directory holds (FORMAT 3):
+A run directory holds (FORMAT 4):
 - summary.json: format; provenance (provenance()); config, the named pieces given to
   RunRecord, each to_dict-ed, written at the start; metadata: status, reason, end_t,
   results, error and plant (the plant's run_state);
@@ -104,6 +104,7 @@ import numpy as np
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.laws import (EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback,
                             RejectOnEffort, SampleKnot)
+from tiago_mpc.collision import Collision, cover_hashes
 from tiago_mpc.loops import RealTimeSettings, VirtualTimeSettings
 from tiago_mpc.mpc import AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
@@ -113,12 +114,13 @@ from tiago_mpc.safety import CollisionSafetySettings
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import ROOT
 
-FORMAT = 3
+FORMAT = 4
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
     SolverSettings, MpcParams, AdmmLimits, CostMenu, Term, LinearTerm,
     Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
     PlanFeedback, FrictionFeedforward, EffortClip, RejectOnEffort, ExecutionSafety,
     VirtualTimeSettings, RealTimeSettings, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
+    Collision,
 )
 
 
@@ -183,10 +185,12 @@ def _gato_source() -> dict[str, Any]:
 
 def provenance() -> dict[str, Any]:
     """Where the code came from: this repository's commit and source status, the package
-    versions, the GATO this environment runs (_gato_source) and ROS_DISTRO (None without ROS)."""
+    versions, the GATO this environment runs (_gato_source), ROS_DISTRO (None without ROS)
+    and the content hash of each stored collision cover (collision.cover_hashes), which a
+    Collision names."""
     return dict(repository_commit=_git("rev-parse", "HEAD"), repository_status=_git("status", "--short"),
                 versions={k: importlib.metadata.version(k) for k in ("gato-mpc", "grid-rbd", "pin", "numpy")},
-                gato=_gato_source(), ros_distro=os.environ.get("ROS_DISTRO"))
+                gato=_gato_source(), ros_distro=os.environ.get("ROS_DISTRO"), collision_covers=cover_hashes())
 
 
 class Console:

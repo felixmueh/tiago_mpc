@@ -10,17 +10,18 @@ import numpy as np
 import pinocchio as pin
 import pytest
 
-from experiments import common, figure8 as f8, reach as rc
+from experiments import common, figure8 as f8, reach as rc, replay
 from experiments.latency_compensation import Compensated, run_compensated
 from test_loops import wall
 from tiago_mpc import record as rec
+from tiago_mpc.collision import Collision, arm_cover, body_cover, body_posture
 from tiago_mpc.laws import SampleKnot
 from tiago_mpc.loops import STOP, RealTimeSettings, VirtualTimeSettings
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, load_run
 from tiago_mpc.sim import SimConfig
-from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, arm_urdf, fk, urdf_friction
+from tiago_mpc.tiago import GRASP_FRAME, Q_START, RIGHT_ARM_JOINTS, arm_urdf, fk, urdf_friction
 
 
 def test_figure8_reference_includes_edge_clearance_and_leaves_orientation_free():
@@ -154,8 +155,57 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
         assert rec.to_dict(from_dict(replay_metadata["provenance"]["params"])) == rec.to_dict(record.config["params"])
         np.testing.assert_allclose(replay["reference_rotvec_rad"],
                                    np.tile(task.orientation_rad, (len(replay["time_s"]), 1)), rtol=1e-6)
+        assert set(replay_metadata) == {"format", "version", "joint_names", "model_sha256", "time_basis",
+                                        "end_effector_frame", "provenance", "label", "reference_frame",
+                                        "predictions"}  # no collision rows: no posture, obstacles or spheres
     assert record.out == tmp_path / name
     assert summary["provenance"]["gato"] == rec._gato_source() and summary["provenance"]["ros_distro"] is None
+
+
+def test_a_collision_runs_replay_carries_its_obstacles_and_collision_spheres(tmp_path, monkeypatch):
+    arm = {"arm_right_7_link": ((0., 0., .1, .05),)}
+    monkeypatch.setattr(replay, "arm_cover", lambda name: arm)
+    collision = Collision(body=None, obstacles=((.4, -.3, -.2, .05),))
+    record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, collision=collision)),
+                                   rc.Reach(timeout_s=.02), SampleKnot(), VirtualTimeSettings.ideal(), out=tmp_path / "r")
+    with np.load(record.out / "replay.npz") as saved:
+        metadata = json.loads(str(saved["metadata_json"]))
+    assert metadata["fixed_joints"] == body_posture(None)  # the default cover's: it places ROOT_FRAME's spheres
+    assert metadata["obstacles"] == [[.4, -.3, -.2, .05]]
+    assert metadata["collision_spheres"] == dict(environment=metadata["obstacles"],  # body None: obstacles only
+                                                 arm={"arm_right_7_link": [[0., 0., .1, .05]]})
+    assert not {"obstacle_capsules", "obstacle_boxes", "obstacle_planes"} & set(metadata)  # none in this run
+    assert not {"body_capsules", "body_boxes"} & set(metadata)
+
+
+def test_a_collision_runs_replay_carries_the_body_covers_capsules_and_boxes(tmp_path):
+    collision = Collision(obstacles=((.4, -.3, -.2, .05),))  # the default body cover
+    body = body_cover(collision.body)
+    record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, collision=collision)),
+                                   rc.Reach(timeout_s=.02), SampleKnot(), VirtualTimeSettings.ideal(), out=tmp_path / "r")
+    with np.load(record.out / "replay.npz") as saved:
+        metadata = json.loads(str(saved["metadata_json"]))
+    assert metadata["collision_spheres"]["environment"] == [list(s) for s in body["spheres"] + collision.obstacles]
+    assert metadata["collision_spheres"]["arm"] == {link: [list(s) for s in spheres]
+                                                    for link, spheres in arm_cover(collision.arm).items()}
+    assert metadata["body_capsules"] == [list(c) for c in body["capsules"]]
+    assert metadata["body_boxes"] == [list(b) for b in body["boxes"]]
+
+
+def test_a_replay_carries_capsules_boxes_and_planes_in_collisions_layouts(tmp_path):
+    collision = Collision(body=None, capsules=((.4, -.3, -.4, .4, -.3, -.1, .03),),
+                          boxes=((.4, -.4, -.4, 0., 0., .1736, .9848, .1, .02, .1),), planes=((0., 0., 2., -1.2),))
+    replay.save_replay(tmp_path / "r.npz", time_s=[0., .1], q=np.zeros((2, 7)), joint_names=RIGHT_ARM_JOINTS, time_basis="simulation",
+                       end_effector_frame=GRASP_FRAME, obstacle_capsules=collision.capsules, obstacle_boxes=collision.boxes,
+                       obstacle_planes=collision.planes)
+    with np.load(tmp_path / "r.npz") as saved:
+        metadata = json.loads(str(saved["metadata_json"]))
+    assert metadata["obstacle_capsules"] == [list(collision.capsules[0])]
+    assert metadata["obstacle_boxes"] == [list(collision.boxes[0])]
+    assert metadata["obstacle_planes"] == [[0., 0., 1., -.6]]
+    with pytest.raises(ValueError, match="obstacle_boxes"):
+        replay.save_replay(tmp_path / "bad.npz", time_s=[0., .1], q=np.zeros((2, 7)), joint_names=RIGHT_ARM_JOINTS, time_basis="simulation",
+                           end_effector_frame=GRASP_FRAME, obstacle_boxes=[(0., 0., 0., 0., 0., 0., 1., .1, 0., .1)])
 
 
 def test_provenance_names_the_installed_gato_and_an_editable_checkouts_commit(monkeypatch):

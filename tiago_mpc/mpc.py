@@ -27,6 +27,7 @@ from gato import SolverParams
 from gato.cost_menu import CostMenu
 import numpy as np
 
+from tiago_mpc.collision import Collision, arm_cover
 from tiago_mpc.costs import default_cost, with_reference
 from tiago_mpc.dynamics import Friction, Tanh, passive_torque
 from tiago_mpc.interfaces import Plan, Prediction, State
@@ -148,6 +149,9 @@ class MpcParams:
     # it only where the solve's wall time is the latency (RealTimeSettings, VirtualTimeSettings "measured").
     max_sqp_time_s: float | None = .01
     warmup: bool = True  # Mpc.warmup runs GATO's warm-up solve before the first plan
+    # GATO's collision rows against the body and obstacles (collision.py); None: no rows, and
+    # the GPU URDF keeps the arm's meshes (GATO's own spheres, unused).
+    collision: Collision | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.solver, SolverSettings):
@@ -232,7 +236,8 @@ def _plant(params: MpcParams):
     bin_dir = str(Path(sys.executable).parent)
     if os.environ["PATH"].split(os.pathsep)[0] != bin_dir:
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
-    gpu_path = runtime_urdf(params.friction)
+    spheres = None if params.collision is None else arm_cover(params.collision.arm)
+    gpu_path = runtime_urdf(params.friction, spheres)
     return model, gpu_path, plant_name(gpu_path, params.friction, params.armature, params.friction_law)
 
 
@@ -322,6 +327,10 @@ def load_controller(params: MpcParams, binary: Path | None):
     if controller.limits != "admm":
         raise RuntimeError(f"GATO installed the {controller.limits!r} limit rows, not ADMM")
     set_bounds(solver, model, params)
+    if params.collision is not None:  # after the limit groups: enabling those drops appended groups
+        solver.set_collision_environment(**params.collision.environment())
+        solver.enable_collision(params.collision.mechanism, margin=params.collision.margin_m,
+                                rho=params.collision.rho)
     return controller
 
 

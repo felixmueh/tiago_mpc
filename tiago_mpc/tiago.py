@@ -218,14 +218,24 @@ def ee_velocity(q: np.ndarray, qd: np.ndarray) -> np.ndarray:
     return jacobian[:3] @ np.asarray(qd, dtype=float)
 
 
-def runtime_urdf(friction: Friction | None = None) -> Path:
+def runtime_urdf(friction: Friction | None = None, arm_spheres=None) -> Path:
     """The GPU URDF: a copy of the reduced arm with friction's coefficients, if given, in the
     cache by its content (cached). GATO reads only its collision meshes, so the visuals are
-    left out."""
+    left out. arm_spheres (link name to spheres (x, y, z, radius) in the link's frame, a
+    stored cover: collision.arm_cover), if given, replace all collision geometry: GATO copies
+    spheres unchanged into its collision rows, so the cover is compiled into the module and
+    another cover is another module."""
     tree = ET.parse(arm_urdf())
     for link in tree.iter("link"):
         for visual in link.findall("visual"):
             link.remove(visual)
+        if arm_spheres is not None:
+            for collision in link.findall("collision"):
+                link.remove(collision)
+            for x, y, z, r in arm_spheres.get(link.get("name"), ()):
+                collision = ET.SubElement(link, "collision")
+                ET.SubElement(collision, "origin", xyz=f"{x!r} {y!r} {z!r}", rpy="0 0 0")
+                ET.SubElement(ET.SubElement(collision, "geometry"), "sphere", radius=repr(r))
     if friction is not None:
         joints = [joint for joint in tree.iter("joint") if joint.get("type") != "fixed"]
         for joint, c, b in zip(joints, friction.coulomb_nm, friction.viscous_nm_s_per_rad):

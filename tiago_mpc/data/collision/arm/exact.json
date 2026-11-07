@@ -1,0 +1,339 @@
+{
+ "kind": "arm",
+ "frame": "each link's own frame",
+ "spheres": {
+  "arm_right_2_link": [
+   [
+    0.0,
+    -0.0050000000000000044,
+    -0.009999999999999995,
+    0.058722813232690144
+   ],
+   [
+    0.010000000000000002,
+    -0.060000000000000026,
+    -0.024999999999999994,
+    0.07031128874149276
+   ],
+   [
+    0.019999999999999997,
+    -0.11000000000000001,
+    -0.034999999999999996,
+    0.07527692569068709
+   ]
+  ],
+  "arm_right_3_link": [
+   [
+    0.0,
+    0.0,
+    0.04,
+    0.07636809247747853
+   ],
+   [
+    0.0049999999999999975,
+    0.0049999999999999975,
+    0.065,
+    0.077169905660283
+   ],
+   [
+    0.019999999999999997,
+    0.0049999999999999975,
+    0.14500000000000002,
+    0.075
+   ]
+  ],
+  "arm_right_4_link": [
+   [
+    -0.019999999999999997,
+    0.11000000000000001,
+    -0.034999999999999996,
+    0.07527692569068709
+   ],
+   [
+    -0.009999999999999995,
+    0.055,
+    -0.01999999999999999,
+    0.06840572873934303
+   ],
+   [
+    0.0,
+    0.0049999999999999975,
+    -0.009999999999999995,
+    0.058722813232690144
+   ]
+  ],
+  "arm_right_5_link": [
+   [
+    0.0,
+    -0.04999999999999999,
+    0.08499999999999999,
+    0.045
+   ],
+   [
+    0.0,
+    -0.04999999999999999,
+    0.12,
+    0.045
+   ],
+   [
+    0.0,
+    -0.04999999999999999,
+    0.165,
+    0.045
+   ],
+   [
+    0.0,
+    -0.03499999999999999,
+    0.045000000000000005,
+    0.048027756377319944
+   ],
+   [
+    0.0,
+    1.3877787807814457e-17,
+    0.010000000000000002,
+    0.05692582403567252
+   ]
+  ],
+  "arm_right_6_link": [
+   [
+    0.019999999999999997,
+    0.0050000000000000044,
+    -0.04499999999999999,
+    0.08
+   ],
+   [
+    0.05999999999999999,
+    -0.0050000000000000044,
+    -0.04499999999999999,
+    0.0706201920231798
+   ]
+  ],
+  "arm_right_7_link": [
+   [
+    -0.030000000000000002,
+    -0.020000000000000004,
+    0.06,
+    0.034999999999999996
+   ],
+   [
+    -0.020000000000000004,
+    0.03,
+    0.06,
+    0.034999999999999996
+   ],
+   [
+    -0.015,
+    -0.009999999999999995,
+    0.0,
+    0.055
+   ],
+   [
+    -0.010000000000000002,
+    0.009999999999999995,
+    0.09,
+    0.03707106781186548
+   ],
+   [
+    -0.0050000000000000044,
+    -0.045,
+    0.14500000000000002,
+    0.04
+   ],
+   [
+    0.0,
+    -0.045,
+    0.10500000000000001,
+    0.03707106781186548
+   ],
+   [
+    0.0,
+    0.045,
+    0.10500000000000001,
+    0.03707106781186548
+   ],
+   [
+    0.0,
+    0.045,
+    0.14500000000000002,
+    0.04
+   ],
+   [
+    0.009999999999999995,
+    0.0,
+    0.11000000000000001,
+    0.034999999999999996
+   ],
+   [
+    0.009999999999999995,
+    0.0050000000000000044,
+    0.0,
+    0.055
+   ],
+   [
+    0.020000000000000004,
+    -0.03,
+    0.06,
+    0.034999999999999996
+   ],
+   [
+    0.03,
+    0.020000000000000004,
+    0.06,
+    0.034999999999999996
+   ]
+  ]
+ },
+ "inputs": {
+  "urdf": "models/tiago_pro/tiago_pro.urdf",
+  "urdf_sha256": "0e3f43718ad0985f90a8d6f5e73e0205c7268e463db47ce8492832b28236b5eb",
+  "parts_sha256": {
+   "arm_right_2_link_0": "ffa1ebcbd13a807479a324df729f0b8b4b79a6bf9585fe49a1a42dbf1ba0d641",
+   "arm_right_3_link_0": "63a2eb6cb3439908f724115347ccbb87e15a94983d0152642c99bffd69b240d8",
+   "arm_right_4_link_0": "fc829f98c86322f3f19741c6ad28bcc7b055f8de2e4aa5a2244645aadb0c439b",
+   "arm_right_5_link_0": "1b03d317048fd50d81b0f379a28bb69cd58a8ae106df4b40f35b9bb0b452f500",
+   "arm_right_6_link_0": "3e4d742c15f65b5f88ceccdb43a213536861a8d44d418872a886c3d9e1f8ee4f",
+   "arm_right_7_link_0": "64783dc996fb0b6c7620491e5e62c1c37148836875be7029ccf967d458a5469e",
+   "gripper_right_base_link_0": "8e5f4099074a3b7d0800bbae68587d45f6800f99b9cd29bc804f99f795f13bf5",
+   "gripper_right_outer_finger_left_link_0": "4285d812582cf1e99b3254e0f41ea102b5161287dbb2844bfd216a73d08947e4",
+   "gripper_right_inner_finger_left_link_0": "b54dbeb17e096281cec9b98194635615b72e6b7ce0ad9cbb8a5a7beb4b54f450",
+   "gripper_right_fingertip_left_link_0": "56f74a46c1e43c4b227c9d701491715bdcb4b4013e473573aabe3d9bd24ed606",
+   "gripper_right_inner_finger_right_link_0": "f15825b73257b00fe8a96d75e69ae7e7d35d9353cb741b2a67197bf0bd10da24",
+   "gripper_right_fingertip_right_link_0": "ab54f8eb57598f7433b5946d69f06f39f3dfd182bb65a5ff0b2304fd51af5110",
+   "gripper_right_outer_finger_right_link_0": "6b70c117a63caa88892c9e106c0abe1fe0a8f97f1ac76f1bc84db08b7362f344"
+  }
+ },
+ "settings": {
+  "bulge_m": 0.03,
+  "max_radius_m": 0.1,
+  "pitch_m": 0.005,
+  "time_limit_s": 300.0
+ },
+ "solve": {
+  "arm_right_2_link": {
+   "candidates": 9875,
+   "boundary_voxels": 3288,
+   "nonzeros": 4146910,
+   "status": 0,
+   "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+   "objective": 3.0,
+   "dual_bound": 3.0,
+   "solve_s": 3.2204465419999906
+  },
+  "arm_right_3_link": {
+   "candidates": 13818,
+   "boundary_voxels": 3841,
+   "nonzeros": 5704989,
+   "status": 0,
+   "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+   "objective": 3.0,
+   "dual_bound": 3.0,
+   "solve_s": 4.6813691909992485
+  },
+  "arm_right_4_link": {
+   "candidates": 9875,
+   "boundary_voxels": 3288,
+   "nonzeros": 4146910,
+   "status": 0,
+   "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+   "objective": 3.0,
+   "dual_bound": 3.0,
+   "solve_s": 3.1829964030002884
+  },
+  "arm_right_5_link": {
+   "candidates": 4797,
+   "boundary_voxels": 2391,
+   "nonzeros": 1526327,
+   "status": 0,
+   "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+   "objective": 5.0,
+   "dual_bound": 5.0,
+   "solve_s": 1.176660658999026
+  },
+  "arm_right_6_link": {
+   "candidates": 9279,
+   "boundary_voxels": 2800,
+   "nonzeros": 3874028,
+   "status": 0,
+   "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+   "objective": 2.0,
+   "dual_bound": 2.0,
+   "solve_s": 2.8781287720012187
+  },
+  "arm_right_7_link": {
+   "candidates": 4009,
+   "boundary_voxels": 2916,
+   "nonzeros": 1128894,
+   "status": 0,
+   "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+   "objective": 11.999999999999991,
+   "dual_bound": 11.999999999999991,
+   "solve_s": 8.310251088001678
+  }
+ },
+ "validation": {
+  "arm_right_2_link": {
+   "surface_samples": 101096,
+   "uncovered_samples": 0,
+   "max_gap_m": -0.0063603669252118855,
+   "boundary_samples": 6314,
+   "bulge_max_m": 0.0350050620701803,
+   "bulge_median_m": 0.025080229595218613,
+   "method": "seed 0; bulge 0 inside a part's 2.5 mm voxel fill"
+  },
+  "arm_right_3_link": {
+   "surface_samples": 100723,
+   "uncovered_samples": 0,
+   "max_gap_m": -0.006550456925057249,
+   "boundary_samples": 7343,
+   "bulge_max_m": 0.0342853128649858,
+   "bulge_median_m": 0.022591734802472615,
+   "method": "seed 1; bulge 0 inside a part's 2.5 mm voxel fill"
+  },
+  "arm_right_4_link": {
+   "surface_samples": 101096,
+   "uncovered_samples": 0,
+   "max_gap_m": -0.0063603669252118855,
+   "boundary_samples": 6344,
+   "bulge_max_m": 0.03511522785005929,
+   "bulge_median_m": 0.024461694452208395,
+   "method": "seed 2; bulge 0 inside a part's 2.5 mm voxel fill"
+  },
+  "arm_right_5_link": {
+   "surface_samples": 100249,
+   "uncovered_samples": 0,
+   "max_gap_m": -0.003982929825255929,
+   "boundary_samples": 5104,
+   "bulge_max_m": 0.03727464399338809,
+   "bulge_median_m": 0.019537558340983627,
+   "method": "seed 3; bulge 0 inside a part's 2.5 mm voxel fill"
+  },
+  "arm_right_6_link": {
+   "surface_samples": 101202,
+   "uncovered_samples": 0,
+   "max_gap_m": -0.007509762749199206,
+   "boundary_samples": 5485,
+   "bulge_max_m": 0.03443655359714831,
+   "bulge_median_m": 0.02196862953856433,
+   "method": "seed 4; bulge 0 inside a part's 2.5 mm voxel fill"
+  },
+  "arm_right_7_link": {
+   "surface_samples": 139067,
+   "uncovered_samples": 0,
+   "max_gap_m": -0.002423468985171498,
+   "boundary_samples": 6755,
+   "bulge_max_m": 0.03669106028624381,
+   "bulge_median_m": 0.023254976219675608,
+   "method": "seed 5; bulge 0 inside a part's 2.5 mm voxel fill"
+  }
+ },
+ "versions": {
+  "numpy": "2.2.6",
+  "scipy": "1.15.3",
+  "trimesh": "5.2.0",
+  "pin": "3.9.0",
+  "coal": "3.0.2",
+  "highs": "1.8.0",
+  "python": "3.10.12"
+ },
+ "elapsed_s": 40.77115024300292
+}
