@@ -76,23 +76,48 @@ def _ended(done: bool, stopped: bool, t: float) -> Outcome:
 
 
 class Schedule:
-    """Control updates every period from the first call: due at the first call at or
-    after each slot, at most once per call; missed slots are skipped. Schedule(0) is
-    due at every call."""
+    """A periodic time cursor that advances through nominal slots and aligns action times.
 
-    def __init__(self, period):
-        self.period, self.next = period, None
+    Zero period stays ready without imposing a grid. Alignment can start at an
+    actual eligible boundary so floating-point command times retain their cadence.
+    """
 
-    def __call__(self, t):
+    def __init__(self, period: float, *, start_at: float = 0.) -> None:
+        self.period, self.next_at = period, start_at
+
+    def advance(self, *, past: float | None = None) -> None:
+        """Advance the cursor, skipping positive-period slots through past without shifting their phase."""
         if self.period == 0:
-            return True
-        if self.next is None:
-            self.next = t
-        slots = math.floor((t - self.next) / self.period + _TOLERANCE)
-        if slots < 0:
-            return False
-        self.next += (slots + 1) * self.period
-        return True
+            if past is not None:
+                self.next_at = max(self.next_at, past)
+            return
+        slots = (1 if past is None else
+                 max(1, math.floor((past-self.next_at+_TOLERANCE)/self.period)+1))
+        self.next_at += slots*self.period
+
+    def align(self, at: float) -> float:
+        """Round at onto the grid starting at this cursor's next slot."""
+        if self.period == 0:
+            return max(at, self.next_at)
+        slots = max(0, math.ceil((at-self.next_at-_TOLERANCE)/self.period))
+        return self.next_at+slots*self.period
+
+
+def _request_snapshot(
+    state: State | Prediction,
+    reference: np.ndarray,
+    solver_updates: dict | None,
+) -> tuple[State | Prediction, np.ndarray, dict | None]:
+    """Detach the state, reference and solver updates submitted to MPC."""
+    if isinstance(state, Prediction):
+        state_snapshot: State | Prediction = Prediction(state.t, state.q, state.qd, measured_t=state.measured_t)
+    else:
+        state_snapshot = State(state.t, state.q.copy(), state.qd.copy(),
+                               deepcopy(state.joint_positions), deepcopy(state.joint_velocities))
+        state_snapshot.q.flags.writeable = state_snapshot.qd.flags.writeable = False
+    reference_snapshot = np.array(reference, copy=True)
+    reference_snapshot.flags.writeable = False
+    return state_snapshot, reference_snapshot, deepcopy(solver_updates)
 
 
 def _check_setup(mpc: MpcInterface, law: ControlLaw, compensation: LatencyCompensation | None) -> None:
@@ -215,7 +240,7 @@ def run_real_time(
         compensation = default_compensation(settings)
     real_safety, real_effort = RealTimeSafety(safety), RealTimeEffort(effort_handling)
     _check_setup(mpc, law, compensation)
-    clock, update_due = WallClock(), Schedule(settings.update_period)
+    clock, update_schedule = WallClock(), Schedule(settings.update_period)
     active_plan, solve_outstanding, start_time_s, command_deadline = None, False, None, None
     predictor = (None if compensation is None else
                  _Predictor(compensation, real_safety, real_effort))
@@ -239,6 +264,7 @@ def run_real_time(
             completed_solve: SolveCompleted | None = None
             if command_deadline is None:
                 command_deadline = t  # the first tick
+                update_schedule.next_at = t
             elif t >= command_deadline + settings.command_period:  # The work before it ran past the next tick.
                 if commands_sent != 1:  # The first command's switch delay has its own diagnostic.
                     diagnostic = Diagnostic(t, "late_tick",
@@ -291,7 +317,9 @@ def run_real_time(
                     plant.apply(command)
                     commands_sent += 1
             request_update = (not end and fault is None and not solve_outstanding
-                              and pending_plan is None and update_due(t))
+                              and pending_plan is None and t >= update_schedule.next_at-_TOLERANCE)
+            if request_update:
+                update_schedule.advance(past=t)
             diagnostics.extend(plant.take_diagnostics())
             if completed_solve is not None:
                 for solve_completed_callback in solve_completed_callbacks:
@@ -322,17 +350,7 @@ def run_real_time(
                         return Outcome("fault", "prediction_unavailable", clock.now() - start_time_s)
                     request_state = predicted
                 reference, solver_updates = task.at(request_state.t - start_time_s, mpc.N, mpc.dt)
-                if isinstance(request_state, Prediction):
-                    state_snapshot = Prediction(request_state.t, request_state.q, request_state.qd,
-                                                measured_t=request_state.measured_t)
-                else:
-                    state_snapshot = State(request_state.t, request_state.q.copy(), request_state.qd.copy(),
-                                           deepcopy(request_state.joint_positions),
-                                           deepcopy(request_state.joint_velocities))
-                    state_snapshot.q.flags.writeable = state_snapshot.qd.flags.writeable = False
-                reference_snapshot = np.array(reference, copy=True)
-                reference_snapshot.flags.writeable = False
-                last_mpc_request_snapshot = state_snapshot, reference_snapshot, deepcopy(solver_updates)
+                last_mpc_request_snapshot = _request_snapshot(request_state, reference, solver_updates)
                 requested_at = clock.now()  # Measure delay from submission, after prediction and preparation.
                 mpc.request(*last_mpc_request_snapshot)
                 solve_outstanding = True
@@ -366,14 +384,17 @@ def run_virtual_time(
 ) -> Outcome:
     """Run a controlled simulation on virtual time until the task or duration ends.
 
-    Three quantities determine a run's timing: the command period, the control-update
-    schedule and the solve latency. settings holds these separately; none need equal
-    the MPC knot interval. The simulator's own computing and observer work consume
+    The command period, control-update schedule and solve latency are separate
+    settings; none need equal the MPC knot interval. The plant owns physics
+    integration and its substeps. The simulator's computing and observer work consume
     wall time, but do not advance the virtual clock. In run_real_time, all that work
     consumes the actual time on which commands and requests are scheduled.
 
-    This loop advances VirtualClock in settings.command_period increments. A solve
-    is requested at a command tick; its plan becomes available at the request time
+    Each iteration executes one command tick. It samples the plant's state,
+    collects and activates eligible earlier work, may submit one request, then
+    collects any immediately eligible result before publishing its command.
+    The plant then advances to the next command tick under the held command.
+    A solve is requested at a command tick; its plan becomes available at the request time
     plus settings.solve_latency_s. Commands continue from the previous active plan
     until the first tick at or after that availability time. With compensation, the
     plan must also have reached its predicted origin, plan.t0. Before the first
@@ -450,8 +471,8 @@ def run_virtual_time(
     declared latency and no future origin the loop waits immediately. Measured
     results still wait for their scheduled availability and predicted origin.
     An in-process Mpc stays synchronous; the loop does not create a worker for it.
-    Each tick collects eligible earlier work before deciding whether to request,
-    then collects the new solve if it is already eligible at that same tick.
+    Collection and activation precede requests at the same command boundary;
+    a newly submitted solve may also arrive and activate before that boundary's command.
 
     SimPlant(sync_real_time=True) can pace the virtual clock for watching. Falling
     behind emits pacing_behind and leaves the numerical timeline unchanged. A
@@ -485,6 +506,9 @@ def run_virtual_time(
     policy is restored on exit. start_time_s supports anchored runs;
     task.at/done still receive time relative to this run's initial clock.
     """
+
+    # This is one big function on purpose so the control flow can be read from top to botton.
+
     if duration is None or not math.isfinite(duration) or duration < 0:
         raise ValueError("duration must be finite nonnegative seconds")
     if duration > 60*MAX_RUNTIME_MIN:
@@ -496,7 +520,10 @@ def run_virtual_time(
         if initial_command.shape != (7,) or not np.isfinite(initial_command).all():
             raise ValueError("initial_command requires seven finite native torques")
     _check_setup(mpc, law, compensation)
-    clock, update_due = VirtualClock(start_time_s), Schedule(settings.update_period)
+    clock = VirtualClock(start_time_s)
+    command_schedule = Schedule(settings.command_period, start_at=start_time_s)
+    # Nominal MPC slots remain independent of command timing and outstanding work.
+    update_schedule = Schedule(settings.update_period, start_at=start_time_s)
     active_plan: Plan | None = None
     pending_plan: Plan | None = None
     # Scheduled virtual availability from solve latency; the plan's origin may be later.
@@ -514,9 +541,13 @@ def run_virtual_time(
     last_mpc_request_snapshot: tuple[State | Prediction, np.ndarray, dict | None] | None = None
     collect_result_at = start_time_s
 
-    def report_result(solved_plan: Plan, latency: float) -> None:
-        """Notify observers about a completed solve and any declared-latency overrun."""
+    def receive_result() -> tuple[Plan, float]:
+        """Receive a completed solve and notify observers about it and any latency overrun."""
+        solved_plan = mpc.result(block=True)
+        if solved_plan is None:
+            raise RuntimeError("MPC returned no plan for a blocking result")
         solve_wall_s = solved_plan.stats["wall_s"]
+        latency = solve_wall_s if settings.solve_latency_s == "measured" else settings.solve_latency_s
         assert last_mpc_request_snapshot is not None
         state_snapshot, reference_snapshot, solver_updates = last_mpc_request_snapshot
         completed_solve = SolveCompleted(requested_at, state_snapshot, reference_snapshot,
@@ -530,6 +561,7 @@ def run_virtual_time(
                                     dict(plan=requests_sent-1, wall_s=solve_wall_s, solve_latency_s=latency))
             for diagnostic_callback in diagnostic_callbacks:
                 diagnostic_callback(diagnostic)
+        return solved_plan, latency
 
     plant.start(clock)
     gc_enabled = gc.isenabled()
@@ -540,8 +572,7 @@ def run_virtual_time(
         mpc.warmup(plant.state(), task.at(0., mpc.N, mpc.dt)[0])
         while True:
             s, t = plant.state(), clock.now()
-            # Diagnostics retain their physics-endpoint timestamps, but are delivered
-            # at this command boundary before another actuator decision.
+            # Physics diagnostics retain their endpoint times and arrive before the next command.
             for diagnostic in plant.take_diagnostics():
                 for diagnostic_callback in diagnostic_callbacks:
                     diagnostic_callback(diagnostic)
@@ -555,79 +586,61 @@ def run_virtual_time(
             fault: str | None = None
             # Forecast and application reuse this decision unless a new plan replaces it.
             decision: Command | Fault | None = None
-            # Receive earlier work before forecasting the next request.
-            if solve_outstanding and t >= collect_result_at-_TOLERANCE:
-                pending_plan = mpc.result(block=True)
-                if pending_plan is None:
-                    raise RuntimeError("MPC returned no plan for a blocking result")
+            if solve_outstanding and collect_result_at-t <= _TOLERANCE:
+                pending_plan, latency = receive_result()
                 solve_outstanding = False
-                latency = (pending_plan.stats["wall_s"] if settings.solve_latency_s == "measured" else
-                           settings.solve_latency_s)
                 plan_available_at = requested_at+latency
                 if compensation is not None and compensation.latency_s == "previous":
                     forecast_delay = latency
-                report_result(pending_plan, latency)
-            if pending_plan is not None and t >= max(plan_available_at, pending_plan.t0)-_TOLERANCE:
+            if pending_plan is not None and max(plan_available_at, pending_plan.t0)-t <= _TOLERANCE:
                 active_plan, pending_plan = pending_plan, None
                 plan_activated = True
-            request_update = not solve_outstanding and pending_plan is None and not end and update_due(t)
-            request_state: State | Prediction = s
-            if request_update and predictor is not None:
-                if active_plan is not None:
-                    decision = decide_command(active_plan, t, s, law, safety=safety,
-                                              effort_handling=effort_handling)
-                    if isinstance(decision, Fault):
-                        fault = decision.reason
-                prediction_time = _tick_at_or_after(t+forecast_delay, t, settings.command_period)
-                predicted = (None if fault is not None else predictor(
-                    s, t, prediction_time, active_plan, law,
-                    decision.applied if isinstance(decision, Command) else held_command,
-                    t+settings.command_period, settings.command_period))
-                if predicted is None:
-                    fault = fault or "prediction_unavailable"
-                    request_update = False
-                else:
-                    request_state = predicted
-            if request_update:
-                requests_sent += 1
-                reference, solver_updates = task.at(request_state.t-start_time_s, mpc.N, mpc.dt)
-                if isinstance(request_state, Prediction):
-                    state_snapshot: State | Prediction = Prediction(request_state.t, request_state.q,
-                                                                   request_state.qd,
-                                                                   measured_t=request_state.measured_t)
-                else:
-                    state_snapshot = State(request_state.t, request_state.q.copy(), request_state.qd.copy(),
-                                           deepcopy(request_state.joint_positions),
-                                           deepcopy(request_state.joint_velocities))
-                    state_snapshot.q.flags.writeable = state_snapshot.qd.flags.writeable = False
-                reference_snapshot = np.array(reference, copy=True)
-                reference_snapshot.flags.writeable = False
-                last_mpc_request_snapshot = state_snapshot, reference_snapshot, deepcopy(solver_updates)
-                requested_at = t
-                # Measured latency is unknown until receipt; first integrate at least one command interval.
-                latency_bound = (settings.command_period if settings.solve_latency_s == "measured" else
-                                 settings.solve_latency_s)
-                collect_result_at = max(t+latency_bound, request_state.t)
-                mpc.request(*last_mpc_request_snapshot)
-                solve_outstanding = True
-            # A request made at this tick may already be eligible for collection.
-            if solve_outstanding and t >= collect_result_at-_TOLERANCE:
-                pending_plan = mpc.result(block=True)
-                if pending_plan is None:
-                    raise RuntimeError("MPC returned no plan for a blocking result")
-                solve_outstanding = False
-                latency = (pending_plan.stats["wall_s"] if settings.solve_latency_s == "measured" else
-                           settings.solve_latency_s)
-                plan_available_at = requested_at+latency
-                if compensation is not None and compensation.latency_s == "previous":
-                    forecast_delay = latency
-                report_result(pending_plan, latency)
-            if pending_plan is not None and t >= max(plan_available_at, pending_plan.t0)-_TOLERANCE:
-                active_plan, pending_plan = pending_plan, None
-                plan_activated = True
-                decision = None
+            request_update = False
+            can_request_update = (not solve_outstanding and pending_plan is None and not end
+                                  and update_schedule.next_at-t <= _TOLERANCE)
+            if can_request_update:
+                request_state: State | Prediction = s
+                update_schedule.advance(past=t)
+                if predictor is not None:
+                    if active_plan is not None:
+                        decision = decide_command(active_plan, t, s, law, safety=safety,
+                                                  effort_handling=effort_handling)
+                        if isinstance(decision, Fault):
+                            fault = decision.reason
+                    prediction_time = command_schedule.align(t+forecast_delay)
+                    predicted = (None if fault is not None else predictor(
+                        s, t, prediction_time, active_plan, law,
+                        decision.applied if isinstance(decision, Command) else held_command,
+                        t+settings.command_period, settings.command_period))
+                    if predicted is None:
+                        fault = fault or "prediction_unavailable"
+                    else:
+                        request_state = predicted
+                if fault is None:
+                    requests_sent += 1
+                    reference, solver_updates = task.at(request_state.t-start_time_s, mpc.N, mpc.dt)
+                    last_mpc_request_snapshot = _request_snapshot(request_state, reference, solver_updates)
+                    requested_at = t
+                    # Measured latency is unknown until receipt; first integrate one command interval.
+                    latency_bound = (settings.command_period if settings.solve_latency_s == "measured" else
+                                     settings.solve_latency_s)
+                    collect_result_at = max(t+latency_bound, request_state.t)
+                    mpc.request(*last_mpc_request_snapshot)
+                    solve_outstanding, request_update = True, True
+                    # Zero latency can make the new result usable in this tick, before command publication.
+                    if collect_result_at-t <= _TOLERANCE:
+                        pending_plan, latency = receive_result()
+                        solve_outstanding = False
+                        plan_available_at = requested_at+latency
+                        if compensation is not None and compensation.latency_s == "previous":
+                            forecast_delay = latency
+                        if max(plan_available_at, pending_plan.t0)-t <= _TOLERANCE:
+                            active_plan, pending_plan = pending_plan, None
+                            plan_activated = True
+                            decision = None
             if plan_activated:
                 plans_activated += 1
+
             command: np.ndarray | None = None
             requested_command = None if decision is None else decision.requested
             clipped = False
@@ -658,15 +671,11 @@ def run_virtual_time(
                 tick_callback(tick)
             if fault is not None or end:
                 break
-            plant.advance(t+settings.command_period)
+            command_schedule.advance()
+            plant.advance(command_schedule.next_at)
 
         if solve_outstanding:
-            solved_plan = mpc.result(block=True)
-            if solved_plan is None:
-                raise RuntimeError("MPC returned no plan for a blocking result")
-            latency = (solved_plan.stats["wall_s"] if settings.solve_latency_s == "measured" else
-                       settings.solve_latency_s)
-            report_result(solved_plan, latency)
+            receive_result()
         if fault is not None:
             return Outcome("fault", fault, t-start_time_s)
         return _ended(done, False, t-start_time_s)

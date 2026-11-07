@@ -147,7 +147,8 @@ def run_compensated(
     step = None
     if compensate:
         step = gpu_step(mpc) if predictor == "gpu" else implicit_step(mpc.params.friction, mpc.params.friction_law)
-    clock, update_due = tm.VirtualClock(), tm.Schedule(update_period)
+    clock = tm.VirtualClock()
+    update_schedule = tm.Schedule(update_period, start_at=clock.now())
     active_plan, pending_plan, start, plans_activated = None, None, None, 0
     plant.start(clock)
     try:
@@ -162,7 +163,8 @@ def run_compensated(
             if plan_activated:  # (time it takes effect, plan)
                 active_plan, pending_plan = pending_plan[1], None
             fault, request_update = None, False
-            if pending_plan is None and not end and update_due(t):
+            if pending_plan is None and not end and t >= update_schedule.next_at-_TOLERANCE:
+                update_schedule.advance(past=t)
                 request_update, at = True, t
                 for _ in range(ahead):  # summed as the loop sums its deadlines: the same tick times
                     at += command_period

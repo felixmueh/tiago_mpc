@@ -102,8 +102,8 @@ Both loops expose three independent notification streams:
 | `solve_completed_callbacks` | `SolveCompleted` | Returned plan and its request |
 | `diagnostic_callbacks` | `Diagnostic` | Overruns, lateness, breaches and plant diagnostics |
 
-The loop receives plans directly from `mpc.result()` and updates their scheduling
-before notifying observers. Each notification goes only to its own callback
+The loop receives plans directly from `mpc.result()` before notifying observers.
+Each notification goes only to its own callback
 group; diagnostics are not bundled into `Tick`. `before_tick_callbacks` is a
 separate group of control hooks for pausing and capacity handling.
 Real-time notifications follow the command decision and publication. Virtual-time
@@ -145,12 +145,37 @@ boundary. Pausing retains the invocation; reset cancels it and creates its repla
 Results are collected once at the first possible activation boundary. For
 declared latency this is the first eligible command tick; measured latency
 conservatively waits at least until the next command tick to learn the result's
-delay. This includes a measured duration of zero. Zero declared latency waits
-immediately. A collected plan waits for its scheduled availability and predicted
-origin before activation. Each tick checks for an eligible previous result,
-optionally submits one request, then checks whether the new result is already
-eligible. Both collection positions use the same time inequalities, including
-zero declared latency; there is no inner scheduling loop.
+delay. This includes a measured duration of zero. Zero declared latency with no
+future predicted origin waits immediately. A collected plan waits for its
+scheduled availability and predicted origin before activation.
+
+Each virtual-loop iteration handles one complete command tick, then advances the
+plant to the next command time. The loop's periodic schedules are:
+
+| Schedule | Period | Action |
+| --- | --- | --- |
+| Commands | `settings.command_period` | Read state, handle MPC work and publish a command |
+| MPC updates | `settings.update_period` | Determine when a command tick may request an update |
+
+Both use `Schedule`: `next_at` is the nominal next slot, and `advance`
+consumes it while skipping missed slots without shifting the periodic phase.
+The command schedule's pure `align` method rounds the forecast onto an eligible
+command boundary without advancing the schedule. The command cursor advances
+after publication.
+
+A command tick reads the state, delivers diagnostics, runs pause callbacks and
+checks cancellation. It receives and activates eligible earlier work, then may
+submit one MPC request. If that new result is immediately eligible, the same tick
+receives and activates it before deciding and publishing its command. Collection
+checks use the scheduled time and predicted origin; a zero declared latency with
+a future prediction still waits. Result reception and reporting share a small
+helper, while plan selection and timing updates remain explicit in the loop.
+Each tick follows this sequence once, so it submits at most one request.
+
+`SimPlant.advance()` integrates the held command in `SimConfig.substep` steps,
+shortening the final step to reach the next command time. This integration step
+is independent of the command and MPC update periods. An asynchronous MPC can
+solve during integration. A paced `SimPlant` waits once per command interval.
 After the final tick, completion or a fault collects any outstanding solve without
 activating it or advancing physics, leaving a caller-owned MPC ready for another run.
 

@@ -71,8 +71,10 @@ one is waiting to activate.
 A collected result can activate when
 `tick_time >= max(request_time + solve_latency, predicted_origin)`. Zero declared
 latency can therefore activate at the request tick through the same time
-inequality as any other delay. Each command tick admits at most one new request,
-including ideal back-to-back updates.
+inequality as any other delay. After submitting a request, the virtual command
+tick checks whether its result is immediately eligible and receives and activates
+it before publication. A future predicted origin still delays collection. Each
+command tick admits at most one new request, including ideal back-to-back updates.
 
 ## Physical propagation and feedback
 

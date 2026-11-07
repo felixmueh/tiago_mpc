@@ -475,18 +475,39 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   introduce additional execution state. Add short comments where timing semantics
   or estimator policy need context; do not repeat self-explanatory variable names.
 
-- **2026-11-07: keep virtual-time command ticks linear** (Felix).
-  Receive and activate eligible previous work, optionally forecast and submit one
-  due request, receive and activate a newly submitted result if already eligible,
-  then apply the command, emit Tick and advance physics. Keep these ordered
-  checks visible in one command loop. A few repeated result-handling assignments
-  are preferable to an inner scheduling loop or hidden state updates in helpers.
-  Both collection positions use the same time inequalities; zero declared
-  latency needs no distinct timing rule. Retain the measured-mode collection
-  bound, per-tick request limit and independent physics overlap.
-  Normal completion and fault drainage run after the final tick, outside the
-  command loop, and never apply the drained plan or advance physics. Cancellation
-  returns from the single boundary checkpoint and leaves teardown to the owner.
+- **2026-11-07: handle a whole command tick in one pass** (Felix).
+  Each iteration handles a complete command tick, then advances the plant to the
+  next command time. A command tick reads state, delivers
+  diagnostics and runs the pause/cancellation checkpoint, receives and activates
+  eligible earlier work, optionally submits one request, receives its result if
+  immediately eligible, then decides and publishes its command. Use a small
+  shared function for receiving, checking and reporting a result. Keep plan
+  selection and timing updates explicit; do not re-enter a partially completed
+  tick or track preparation/publication phases. The immediate path checks result
+  eligibility, including a future predicted origin and the next-tick lower bound
+  for measured latency. Preserve independent physics/solver overlap.
+  Normal terminal drainage remains outside the loop. Cancellation
+  returns from the command-boundary checkpoint without draining the reply.
+
+- **2026-11-07: leave physics substeps to the plant** (Felix).
+  The loop calls `plant.advance()` once per command interval. `SimPlant` already
+  integrates with `SimConfig.substep`, shortening the last step at the command
+  boundary and emitting substep observations through `step_callback`. Remove the
+  separate loop physics schedule and period argument. Command period, MPC update
+  period and integration step remain independently configurable. Optional wall
+  pacing runs once per command interval; asynchronous solving can overlap the
+  plant's integration.
+
+- **2026-11-07: share periodic advancement and command alignment** (Felix).
+  Use the same small `Schedule` class for commands and MPC updates.
+  `next_at` exposes the nominal slot; `advance` consumes or skips slots without
+  moving the periodic phase. Keep command-grid rounding in its pure `align`
+  method, anchored to an actual eligible boundary so floating-point drift does
+  not introduce actions between command ticks. Result and activation times stay
+  plain deadlines checked inside the command tick. The update cursor controls
+  request cadence there. Zero update period requests whenever the solver is free
+  and no returned plan is waiting to activate, at most once per command tick.
+  The command cursor advances after publication.
 
 - **2026-11-06: record plans only through completed-solve callbacks** (Felix).
   `RunRecord.solve_completed` records every returned plan and its request time,

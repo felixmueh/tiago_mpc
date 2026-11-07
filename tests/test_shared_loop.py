@@ -665,6 +665,98 @@ class MovingPlant(Plant):
         super().advance(t)
 
 
+@pytest.mark.parametrize('start', [0., 1e6])
+def test_plant_substeps_commands_and_updates_keep_their_independent_periods(start):
+    plant = tm.SimConfig(integrator='euler', substep=.001).build()
+    mpc, substeps, boundaries, ticks, solves = Mpc(dt=.004), [], [], [], []
+    plant.step_callback = lambda state: substeps.append(state) or []
+
+    def completed(value):
+        solves.append((value, plant.clock.now()))
+
+    def law(plan, t, state):
+        return tm.Command(np.ones(7), np.ones(7))
+
+    outcome = run(mpc, plant, law, settings=tm.VirtualTimeSettings(.002, .005, .0015), duration=.014,
+                  start_time_s=start, initial_command=np.full(7, .25),
+                  before_tick_callbacks=[boundaries.append], tick_callbacks=[ticks.append],
+                  solve_completed_callbacks=[completed])
+    assert outcome.status == 'timeout'
+    assert [state.t-start for state in substeps] == pytest.approx(np.arange(1, 15)*.001, abs=1e-9)
+    assert [state.t-start for state in boundaries] == pytest.approx(np.arange(8)*.002, abs=1e-9)
+    assert [tick.t-start for tick in ticks] == pytest.approx(np.arange(8)*.002, abs=1e-9)
+    assert [state.t-start for state in mpc.requested_states] == pytest.approx([0., .006, .010], abs=1e-9)
+    assert [at-start for _, at in solves] == pytest.approx([.002, .008, .012], abs=1e-9)
+    assert [tick.t-start for tick in ticks if tick.plan_activated] == pytest.approx([.002, .008, .012], abs=1e-9)
+    assert [tick.t-start for tick in ticks if tick.command is not None] == pytest.approx(
+        [.002, .004, .006, .008, .010, .012], abs=1e-9)
+    assert ticks[-1].command is None
+    np.testing.assert_array_equal(boundaries[1].q, substeps[1].q)
+    np.testing.assert_array_equal(boundaries[1].qd, substeps[1].qd)
+    np.testing.assert_array_equal(plant.q, substeps[-1].q)
+    np.testing.assert_array_equal(plant.qd, substeps[-1].qd)
+
+
+def test_off_grid_plant_substeps_end_at_each_command_boundary():
+    plant, endpoints = tm.SimConfig(integrator='euler', substep=.003).build(), []
+    plant.step_callback = lambda state: endpoints.append(state.t) or []
+    outcome = run(plant=plant, settings=tm.VirtualTimeSettings(.005, .007, .0025), duration=.010,
+                  initial_command=np.full(7, .25))
+    assert outcome.status == 'timeout'
+    assert endpoints == pytest.approx([.003, .005, .008, .010])
+
+
+def test_anchored_requests_and_results_stay_between_the_boundary_hook_and_publication():
+    plant, events = Plant(), {}
+
+    def note(kind):
+        events.setdefault(plant.clock.now(), []).append(kind)
+
+    class ObservedMpc(Mpc):
+        def request(self, state, reference=None, updates=None):
+            note('request')
+            super().request(state, reference, updates)
+
+        def result(self, block=False):
+            note('result')
+            return super().result(block)
+
+    mpc = ObservedMpc()
+    outcome = run(mpc, plant, settings=tm.VirtualTimeSettings(.002, .005, .0035), duration=.198,
+                  start_time_s=1e6, before_tick_callbacks=[lambda state: note('gate')],
+                  tick_callbacks=[lambda tick: note('tick')])
+    assert outcome.status == 'timeout'
+    assert .198-1e-9 <= outcome.t <= .200+1e-9
+    np.testing.assert_allclose(np.diff(list(events)), .002, atol=1e-9, rtol=0.)
+    assert len(mpc.requests) > 30
+    assert sum(phases.count('result') for phases in events.values()) == len(mpc.requests)
+    for at, phases in events.items():
+        assert phases.count('gate') == phases.count('tick') == 1
+        assert phases.count('request') <= 1
+        gate, tick = phases.index('gate'), phases.index('tick')
+        for index, kind in enumerate(phases):
+            if kind not in ('request', 'result'):
+                continue
+            if kind == 'result' and at == plant.clock.now() and index > tick:
+                continue  # An outstanding solve is drained after the terminal Tick.
+            assert gate < index < tick
+
+
+def test_plant_substeps_that_round_below_a_command_boundary_have_no_tiny_extra_step():
+    plant = tm.SimConfig(integrator='euler', substep=.0003).build()
+    endpoints, boundaries, ticks = [0.], [], []
+    plant.step_callback = lambda state: endpoints.append(state.t) or []
+    outcome = run(plant=plant, settings=tm.VirtualTimeSettings(.003, .005, 0.), duration=.006,
+                  before_tick_callbacks=[lambda state: boundaries.append(state.t)],
+                  tick_callbacks=[ticks.append])
+    assert outcome.status == 'timeout'
+    intervals = np.diff(endpoints)
+    assert len(intervals) == 20 and all(interval > 0. for interval in intervals)
+    np.testing.assert_allclose(intervals, .0003, atol=1e-15, rtol=0.)
+    assert boundaries == pytest.approx([0., .003, .006])
+    assert [tick.t for tick in ticks] == pytest.approx(boundaries)
+
+
 class DeferredAsync(Mpc):
     """Identical synchronous or worker solves, with a reply retained until collection."""
     def __init__(self, plant, first_solve, latencies, *, asynchronous=True):

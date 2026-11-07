@@ -617,11 +617,40 @@ def test_the_warmup_runs_once_before_the_first_tick_and_counts_against_no_lease(
 
 # Both
 
-def test_schedule_skips_missed_slots_and_period_0_is_due_at_every_call():
-    due = Schedule(.01)
-    assert [due(t) for t in (5., 5.004, 5.01, 5.035, 5.039, 5.04)] == [True, False, True, True, False, True]
-    due = Schedule(0)
-    assert all(due(t) for t in (5., 5., 5.004))
+def test_schedule_skips_missed_slots_without_shifting_its_phase():
+    updates = Schedule(.01, start_at=5.)
+    for past, next_at in ((5., 5.01), (5.035, 5.04), (5.0799999995, 5.09)):
+        updates.advance(past=past)
+        assert updates.next_at == pytest.approx(next_at, abs=1e-12)
+    updates.advance()
+    assert updates.next_at == pytest.approx(5.1, abs=1e-12)
+
+
+@pytest.mark.parametrize('origin', [0., 1e6])
+def test_schedule_alignment_uses_the_rolling_cursor_and_absolute_tolerance_without_consuming_it(origin):
+    period = .002
+    commands = Schedule(period, start_at=origin)
+    for _ in range(137):  # The real command grid accumulates floating-point rounding.
+        commands.advance()
+    eligible = commands.next_at
+    for target, expected in ((eligible-.001, eligible),
+                             (eligible+.0001, eligible+period),
+                             (eligible+period+.5e-9, eligible+period),
+                             (eligible+period+2e-9, eligible+2*period)):
+        assert commands.align(target) == expected
+    assert commands.next_at == eligible
+
+
+def test_zero_period_schedule_stays_ready_and_alignment_does_not_advance_it():
+    updates = Schedule(0., start_at=5.)
+    updates.advance()
+    assert updates.next_at == 5.
+    updates.advance(past=5.004)
+    updates.advance(past=5.)
+    assert updates.next_at == 5.004
+    assert updates.align(5.002) == 5.004
+    assert updates.align(5.02) == 5.02
+    assert updates.next_at == 5.004
 
 
 @pytest.mark.parametrize("compensation", [None, LatencyCompensation(latency_s=.01)])

@@ -46,6 +46,7 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, law, s
 
 
 @pytest.mark.parametrize("settings", [dict(substep=0), dict(substep=-.001), dict(substep=np.nan),
+                                     dict(substep=np.inf), dict(substep=-np.inf),
                                      dict(integrator="other"), dict(friction=urdf_friction()),  # rk4, the default
                                      dict(integrator="rk4", friction=urdf_friction(), friction_law=StickSlip())])
 def test_invalid_integration_settings_fail_when_the_plant_is_built(settings):
