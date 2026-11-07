@@ -1,5 +1,5 @@
 """The data that crosses the pieces' interfaces (the plant's state, the MPC's plan, the
-loop's tick and its events) and the interfaces themselves: the protocols a plant, an MPC,
+loop's tick and its notifications) and the interfaces themselves: the protocols a plant, an MPC,
 a task and an execution safety policy satisfy (structurally, checked by mypy, never at run time) and the
 types of a control law and a tick callback.
 
@@ -112,7 +112,7 @@ class Fault:
 
 
 @dataclass(frozen=True)
-class Event:
+class Diagnostic:
     """Something the loop or a plant detected, at its own time t on the loop's clock: its
     kind, the message the console prints and small JSON data (record.py stores them)."""
     t: float
@@ -123,23 +123,16 @@ class Event:
 
 @dataclass(frozen=True)
 class Tick:
-    """What tick callbacks see once per command tick: its time t and the latest
-    state (state.t may be older and repeat); command is None before the first plan,
-    on the last tick and on a fault; new marks the tick at which the plan took effect,
-    update the tick at which a control update started (its request); events: what the
-    loop and the plant detected since the previous tick (usually none); faulted: the
-    plan that arrived at this tick and faulted (laws.validate_plan), which never takes
-    effect, else None. plan_request_t associates a new/faulted plan with its request
-    tick, independently of solver statistics; None when no plan is introduced."""
+    """A command tick's measured state, applied command and control-update status.
+
+    The measured state may be older than the tick and repeat.
+    """
     t: float
     state: State
-    command: np.ndarray | None
+    command: np.ndarray | None  # None before the first plan, on the last tick and on a fault.
     plan: Plan | None
-    new: bool
-    update: bool
-    events: tuple[Event, ...]
-    faulted: Plan | None
-    plan_request_t: float | None = None  # update tick that requested the new/faulted plan
+    plan_activated: bool  # The plan took effect at this tick.
+    update: bool  # A control-update request started at this tick.
     requested_command: np.ndarray | None = None  # before the loop's effort handling
     clipped: bool = False
 
@@ -148,7 +141,7 @@ class Tick:
 class SolveCompleted:
     """One returned solve, independently of whether its plan ever becomes active.
 
-    Request inputs are detached at submission when message observers are enabled.
+    Request inputs are detached at every submission.
     Native solve latency remains in plan.stats['wall_s'].
     """
     request_time_s: float
@@ -156,23 +149,22 @@ class SolveCompleted:
     reference: np.ndarray
     updates: dict[str, Any] | None
     plan: Plan
-    wall_s: float  # foreground preparation, submission and result waits; excludes physics and observer parking
 
 
 class PlantInterface(Protocol):
     """SimPlant (sim.py) and RosPlant (robot.py), built from their configs. A loop starts
     it on the loop's time (start(clock): VirtualClock or WallClock, which RosPlant needs),
     then per command tick reads its state, applies a command, which it holds, takes its
-    events (take_events: those emitted since the last call, on the loop's clock) and
+    diagnostics (take_diagnostics: those emitted since the last call, on the loop's clock) and
     advances to the next tick (the plant integrates to it, the clock reaches it); stop
-    comes first on exit (zero torque, handback), and its events are taken after the loop.
+    comes first on exit (zero torque, handback), and its diagnostics are taken after the loop.
     run_state: the plant's final values, which the record saves ({} for SimPlant)."""
     run_state: dict[str, Any]
 
     def start(self, clock: VirtualClock | WallClock) -> None: ...
     def state(self) -> State: ...
     def apply(self, command: np.ndarray) -> None: ...
-    def take_events(self) -> list[Event]: ...
+    def take_diagnostics(self) -> list[Diagnostic]: ...
     def advance(self, t: float) -> None: ...
     def stop(self) -> None: ...
     def close(self) -> None: ...
@@ -181,8 +173,12 @@ class PlantInterface(Protocol):
 class MpcInterface(Protocol):
     """Mpc and MpcProcess (mpc.py): plans of N knots dt apart. warmup prepares the
     solver from a state before the first request and returns when done (nothing when
-    params.warmup is off); request raises while the previous plan is unread; result
-    returns a plan once, None while it is pending, and raises if the solve failed.
+    params.warmup is off); request raises while the previous plan is unread. result
+    returns a checked plan once, None while it is pending, and raises if the solve
+    failed. With block=True it waits for an outstanding solve. A returned plan must
+    match the request and MPC dimensions, with finite native trajectories and a
+    finite nonnegative native solve duration in stats['wall_s']; custom MPCs must
+    provide the same checked result contract.
     A request takes the measured State or a Prediction of the future initial condition;
     either preserves the measurement time that bounds the resulting plan's lease.
     A reference replaces the menu's grasp-frame targets; None keeps its native targets."""
@@ -220,8 +216,9 @@ class TaskInterface(Protocol):
 
 ControlLaw = Callable[[Plan, float, State], Command | Fault]
 EffortHandling = Callable[[Command], Command | Fault]
-Callback = Callable[[Tick], None]  # sees every command tick, e.g. a RunRecord
-MessageCallback = Callable[[Tick | SolveCompleted | Event], None]
+TickCallback = Callable[[Tick], None]
+SolveCompletedCallback = Callable[[SolveCompleted], None]
+DiagnosticCallback = Callable[[Diagnostic], None]
 
 
 class SafetyInterface(Protocol):

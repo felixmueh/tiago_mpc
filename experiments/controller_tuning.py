@@ -108,7 +108,7 @@ def evaluate(record: tm.RunRecord) -> None:
     """Measure executed truth, preserve observations, and save the task results."""
     label = record.config['case'] + ' / ' + record.config['task_name'] + ' / ' + record.config['scenario']
     ticks, plans, params, task = record.ticks, record.plans, record.config['params'], record.config['task']
-    truth = [e for e in record.events if e.kind == 'plant_state']
+    truth = [e for e in record.diagnostics if e.kind == 'plant_state']
     if not len(ticks['t']):
         record.metadata['results']['tuning'] = dict(label=label, status=record.metadata['status'],
                                                     valid=False, output=str(record.out))

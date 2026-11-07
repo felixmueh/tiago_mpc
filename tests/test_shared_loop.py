@@ -30,7 +30,8 @@ def test_simulation_keeps_over_limit_predictions_and_clips_explicit_laws(law):
                 np.full_like(plan.torques, 1000.), plan.stats, measured_t=plan.measured_t)
 
     plant, messages = Plant(), []
-    outcome = run(Excess(), plant, law, message_callbacks=[messages.append])
+    outcome = run(Excess(), plant, law, tick_callbacks=[messages.append],
+                  solve_completed_callbacks=[messages.append])
     assert outcome.status == 'timeout'
     solves = [message for message in messages if isinstance(message, tm.SolveCompleted)]
     ticks = [message for message in messages if isinstance(message, tm.Tick) and message.command is not None]
@@ -46,13 +47,13 @@ def test_reject_on_effort_is_a_normal_command_refusal_with_recorded_request():
     messages, plant = [], Plant()
     outcome = run(plant=plant, law=lambda plan, t, state: tm.Command(np.full(7, 1000.), np.full(7, 1000.)),
                   effort_handling=tm.RejectOnEffort(),
-                  message_callbacks=[messages.append])
+                  tick_callbacks=[messages.append], diagnostic_callbacks=[messages.append])
     assert outcome.status == 'fault' and outcome.reason == 'effort_limit'
     assert not plant.applied
     tick = next(message for message in messages if isinstance(message, tm.Tick))
     assert tick.command is None
     np.testing.assert_array_equal(tick.requested_command, np.full(7, 1000.))
-    event = next(message for message in messages if isinstance(message, tm.Event))
+    event = next(message for message in messages if isinstance(message, tm.Diagnostic))
     assert event.kind == 'command_rejected' and event.data['reason'] == 'effort_limit'
 
 
@@ -110,20 +111,18 @@ def test_forecasting_uses_the_same_effort_policy_and_keeps_refusal_predictive(mo
     from tiago_mpc import prediction
     monkeypatch.setattr(prediction, 'plant_euler',
                         lambda model, data, q, v, u, h, friction, law: (q+u*h, v+u*h))
-    predictor = _Predictor(tm.LatencyCompensation(), tm.ExecutionSafety(None), handling)
+    predictor = _Predictor(tm.LatencyCompensation(), safety=tm.ExecutionSafety(None), effort_handling=handling)
     initial = tm.State(0., np.zeros(7), np.zeros(7))
     plan = tm.Plan(0., .03, np.zeros((32, 14)), np.ones((31, 7)), measured_t=0.)
     base = lambda plan, t, state: tm.Command(np.full(7, 1000.), np.full(7, 1000.))
-    history = tuple(predictor.history)
-    predicted = predictor.predict(initial, 0., .006, plan, base,
-                                  np.full(7, 2. if applied is None else applied), .002, .002)
+    predicted = predictor(initial, 0., .006, plan, base,
+                          np.full(7, 2. if applied is None else applied), .002, .002)
     if applied is None:
         assert predicted is None
     else:
         np.testing.assert_allclose(predicted.q, .006*applied)
         np.testing.assert_allclose(predicted.qd, .006*applied)
     np.testing.assert_array_equal(initial.q, np.zeros(7))
-    assert tuple(predictor.history) == history  # a forecast never records a publication
 
 
 def test_future_refusal_does_not_emit_an_actual_command_rejection():
@@ -133,11 +132,11 @@ def test_future_refusal_does_not_emit_an_actual_command_rejection():
     outcome = run(plant=plant, law=law, settings=settings, duration=.02,
                   compensation=tm.LatencyCompensation(latency_s=.004),
                   effort_handling=tm.RejectOnEffort(effort=(2.,)*7),
-                  message_callbacks=[messages.append])
+                  tick_callbacks=[messages.append], diagnostic_callbacks=[messages.append])
     assert outcome.status == 'fault' and outcome.reason == 'prediction_unavailable'
     assert outcome.t == pytest.approx(.008)
     assert plant.applied and all(np.all(command == 1.) for _, command in plant.applied)
-    assert not any(isinstance(message, tm.Event) and message.kind == 'command_rejected'
+    assert not any(isinstance(message, tm.Diagnostic) and message.kind == 'command_rejected'
                    for message in messages)
     tick = [message for message in messages if isinstance(message, tm.Tick)][-1]
     np.testing.assert_array_equal(tick.requested_command, np.ones(7))
@@ -156,10 +155,10 @@ def test_forecasting_does_not_copy_a_pure_callable_with_a_lock(monkeypatch):
             with self.lock:
                 return tm.Command(plan.torques[0], plan.torques[0])
 
-    predictor = _Predictor(tm.LatencyCompensation(), tm.ExecutionSafety(None))
+    predictor = _Predictor(tm.LatencyCompensation(), safety=tm.ExecutionSafety(None))
     initial = tm.State(0., np.zeros(7), np.zeros(7))
     plan = tm.Plan(0., .01, np.zeros((4, 14)), np.ones((3, 7)), measured_t=0.)
-    predicted = predictor.predict(initial, 0., .006, plan, Law(), np.ones(7), .002, .002)
+    predicted = predictor(initial, 0., .006, plan, Law(), np.ones(7), .002, .002)
     np.testing.assert_allclose(predicted.q, .006)
     np.testing.assert_allclose(predicted.qd, .006)
 
@@ -173,7 +172,7 @@ def test_solve_messages_keep_unused_plans_and_exact_reference_snapshots():
 
     messages, ticks, task = [], [], Reference()
     tm.run_virtual_time(Plant(), Mpc(), task, tick_callbacks=[ticks.append],
-        message_callbacks=[messages.append], settings=replace(SETTINGS, solve_latency_s=.006), duration=.008)
+        solve_completed_callbacks=[messages.append], settings=replace(SETTINGS, solve_latency_s=.006), duration=.008)
     solves = [message for message in messages if isinstance(message, tm.SolveCompleted)]
     active = {id(tick.plan) for tick in ticks if tick.command is not None}
     assert len(solves) == 2 and sum(id(message.plan) not in active for message in solves) == 1
@@ -181,6 +180,144 @@ def test_solve_messages_keep_unused_plans_and_exact_reference_snapshots():
     assert not solves[0].reference.flags.writeable
     assert solves[1].request_time_s == pytest.approx(.006)
     np.testing.assert_array_equal(solves[1].updates['external_force'], np.full(6, .006))
+
+
+@pytest.mark.parametrize('loop, settings', [
+    (tm.run_virtual_time, SETTINGS),
+    (tm.run_real_time, tm.RealTimeSettings(.002, .002)),
+])
+def test_each_notification_stream_receives_its_payload_once(loop, settings, wall):
+    class Emitting(Plant):
+        def advance(self, t):
+            super().advance(t)
+            self.diagnostics.append(tm.Diagnostic(t, 'physics', 'integrated'))
+
+    plant, mpc, ticks, solves, diagnostics = Emitting(), Mpc(), [], [], []
+
+    def tick(value):
+        assert isinstance(value, tm.Tick)
+        ticks.append(value)
+
+    def solved(value):
+        assert isinstance(value, tm.SolveCompleted)
+        solves.append(value)
+
+    def diagnostic(value):
+        assert isinstance(value, tm.Diagnostic)
+        diagnostics.append(value)
+
+    outcome = loop(plant, mpc, Task(), settings=settings, compensation=None, duration=.006,
+                   tick_callbacks=[tick], solve_completed_callbacks=[solved], diagnostic_callbacks=[diagnostic])
+    assert outcome.status == 'timeout'
+    assert [value.t for value in ticks] == pytest.approx([0., .002, .004, .006])
+    assert [value.request_time_s for value in solves] == pytest.approx([0., .002, .004])
+    assert [value.t for value in diagnostics if value.kind == 'physics'] == pytest.approx([.002, .004, .006])
+    assert len({id(value) for value in [*ticks, *solves, *diagnostics]}) == len(ticks)+len(solves)+len(diagnostics)
+    for value, initial in zip(solves, mpc.requested_states):
+        assert value.initial is initial and value.plan.t0 == initial.t
+        assert not value.initial.q.flags.writeable and not value.reference.flags.writeable
+        np.testing.assert_array_equal(value.reference, np.zeros((11, 6)))
+        assert value.updates is None
+    assert plant.take_diagnostics() == []
+
+
+@pytest.mark.parametrize('loop, settings', [
+    (tm.run_virtual_time, SETTINGS),
+    (tm.run_real_time, tm.RealTimeSettings(.002, .002)),
+])
+def test_requests_own_stable_snapshots_without_observers(loop, settings, wall):
+    class MutablePlant(Plant):
+        def __init__(self):
+            super().__init__()
+            self.q, self.qd = np.zeros(7), np.zeros(7)
+            self.positions = {'joint': 0.}
+
+        def state(self):
+            return tm.State(self.clock.now(), self.q, self.qd, self.positions)
+
+    class MutableTask(Task):
+        def __init__(self):
+            self.reference = np.zeros((11, 6))
+            self.updates = {'external_force': np.zeros(6), 'nested': {'values': []}}
+
+        def at(self, t, n, dt):
+            self.reference.fill(t)
+            self.updates['external_force'].fill(t)
+            return self.reference, self.updates
+
+    plant, task, submitted = MutablePlant(), MutableTask(), []
+
+    class Capturing(Mpc):
+        def request(self, state, reference=None, updates=None):
+            assert not state.q.flags.writeable and not state.qd.flags.writeable
+            assert not reference.flags.writeable
+            submitted.append((state, reference, updates))
+            plant.q += 1.
+            plant.qd += 2.
+            plant.positions['joint'] += 1.
+            task.reference.fill(100.)
+            task.updates['external_force'].fill(200.)
+            task.updates['nested']['values'].append(len(submitted))
+            super().request(state, reference, updates)
+
+    outcome = loop(plant, Capturing(), task, settings=settings, compensation=None, duration=.006)
+    assert outcome.status == 'timeout' and len(submitted) == 3
+    for index, (state, reference, updates) in enumerate(submitted):
+        np.testing.assert_array_equal(state.q, np.full(7, index))
+        np.testing.assert_array_equal(state.qd, np.full(7, 2*index))
+        assert state.joint_positions == {'joint': index}
+        np.testing.assert_array_equal(reference, np.full((11, 6), state.t))
+        np.testing.assert_array_equal(updates['external_force'], np.full(6, state.t))
+        assert updates['nested']['values'] == list(range(1, index+1))
+
+
+@pytest.mark.parametrize('real', [False, True])
+def test_each_actual_request_forecasts_once_while_an_early_plan_waits(monkeypatch, wall, real):
+    forecasts = []
+
+    def predict(self, state, now, at, *args):
+        forecasts.append((now, at))
+        return tm.Prediction(at, state.q, state.qd, measured_t=state.t)
+
+    class CheckingMpc(Mpc):
+        def request(self, state, reference=None, updates=None):
+            assert len(forecasts) == len(self.requests)+1
+            assert forecasts[-1][1] == state.t
+            super().request(state, reference, updates)
+
+    monkeypatch.setattr(_Predictor, '__call__', predict)
+    plant, mpc, ticks = Plant(), CheckingMpc(), []
+    loop = tm.run_real_time if real else tm.run_virtual_time
+    settings = tm.RealTimeSettings(.002, 0.) if real else tm.VirtualTimeSettings(.002, 0., .002)
+    outcome = loop(plant, mpc, Task(), settings=settings, duration=.018,
+                   compensation=tm.LatencyCompensation(latency_s=.006), tick_callbacks=[ticks.append])
+    assert outcome.status == 'timeout'
+    assert len(forecasts) == len(mpc.requests) == 3
+    assert [now for now, _ in forecasts] == pytest.approx([0., .006, .012])
+    assert [at for _, at in forecasts] == pytest.approx([.006, .012, .018])
+    assert all(tick.command is None for tick in ticks if tick.t < .006)
+
+
+def test_real_observers_follow_publication(wall):
+    order = []
+
+    class Emitting(Plant):
+        def apply(self, command):
+            super().apply(command)
+            order.append(('apply', self.clock.now()))
+            self.diagnostics.append(tm.Diagnostic(self.clock.now(), 'activated', 'activated'))
+
+    def observer(value):
+        order.append((type(value).__name__, wall.now))
+        wall.now += .12
+
+    plant = Emitting()
+    outcome = tm.run_real_time(plant, Mpc(), Task(), settings=tm.RealTimeSettings(.002, 1.),
+        compensation=tm.LatencyCompensation(latency_s=.002), duration=1.,
+        solve_completed_callbacks=[observer], diagnostic_callbacks=[observer])
+    assert outcome.reason == 'lease_expired'
+    assert order[:3] == [('apply', .002), ('SolveCompleted', .002), ('Diagnostic', pytest.approx(.122))]
+    assert [t for t, _ in plant.applied] == [.002]
 
 
 @pytest.mark.parametrize('where', ['result', 'solve_message', 'tick_message', 'tick_callback'])
@@ -204,13 +341,37 @@ def test_cancellation_during_a_tick_finishes_its_command_and_physics(where):
         if where == 'tick_callback':
             cancelled.set()
 
-    outcome = run(Cancelling(), plant, cancelled=cancelled.is_set, before_tick=boundaries.append,
-                  message_callbacks=[callback], tick_callbacks=[tick_callback])
+    outcome = run(Cancelling(), plant, cancelled=cancelled.is_set, before_tick_callbacks=[boundaries.append],
+                  solve_completed_callbacks=[callback], tick_callbacks=[callback, tick_callback])
     assert outcome == tm.Outcome('interrupted', 'stop_requested', .002)
     assert [state.t for state in boundaries] == [0., .002]
     assert [t for t, _ in plant.applied] == [0.] and plant.clock.now() == .002
     assert [type(message) for message in messages] == [tm.SolveCompleted, tm.Tick]
     assert messages[-1].command is not None and plant.calls == ['start', 'stop']
+
+
+def test_before_tick_callbacks_run_in_order_before_cancellation_prevents_work():
+    calls, advances, cancelled = [], [], threading.Event()
+
+    class TracedPlant(Plant):
+        def advance(self, t):
+            advances.append(t)
+            super().advance(t)
+
+    def first(state):
+        calls.append(('first', state))
+        cancelled.set()
+
+    def second(state):
+        calls.append(('second', state))
+
+    plant, mpc = TracedPlant(), Mpc()
+    outcome = run(mpc, plant, before_tick_callbacks=[first, second], cancelled=cancelled.is_set)
+    assert outcome == tm.Outcome('interrupted', 'stop_requested', 0.)
+    assert [name for name, _ in calls] == ['first', 'second']
+    assert calls[0][1] is calls[1][1] and isinstance(calls[0][1], tm.State) and calls[0][1].t == 0.
+    assert not mpc.requests and not plant.applied and not advances
+    assert plant.calls == ['start', 'stop']
 
 
 def test_paused_callback_wakes_for_cancellation_without_an_extra_command():
@@ -223,7 +384,7 @@ def test_paused_callback_wakes_for_cancellation_without_an_extra_command():
             assert wake.wait(5)
 
     thread = threading.Thread(target=lambda: outcome.append(run(mpc, plant, duration=1.,
-        before_tick=before, cancelled=cancelled.is_set)))
+        before_tick_callbacks=[before], cancelled=cancelled.is_set)))
     thread.start()
     try:
         assert parked.wait(5)
@@ -250,7 +411,7 @@ def test_local_runtime_limit_override_keeps_gc_disabled_and_restores_its_policy(
     try:
         outcome = run(Mpc(N=32, dt=100.), duration=700.,
             settings=tm.VirtualTimeSettings(100., 0., 0.), safety=tm.ExecutionSafety(None),
-            before_tick=lambda state: policies.append(gc.isenabled()))
+            before_tick_callbacks=[lambda state: policies.append(gc.isenabled())])
         assert outcome == tm.Outcome('timeout', None, 700.)
         assert policies == [False]*8 and gc.isenabled() == enabled
     finally:
@@ -296,7 +457,7 @@ def test_anchor_forecast_uses_the_actual_initial_held_command():
     settings = replace(SETTINGS, solve_latency_s=.002)
     outcome = run(mpc, plant, duration=.004, settings=settings,
         compensation=tm.LatencyCompensation(latency_s=.002),
-        start_time_s=10., initial_command=np.zeros(7), before_tick=boundaries.append)
+        start_time_s=10., initial_command=np.zeros(7), before_tick_callbacks=[boundaries.append])
     assert outcome.status == 'timeout' and mpc.warmups == [10.]
     predicted = mpc.requested_states[0]
     assert predicted.t == pytest.approx(10.002) and predicted.measured_t == 10.
@@ -304,22 +465,23 @@ def test_anchor_forecast_uses_the_actual_initial_held_command():
     np.testing.assert_allclose(predicted.qd, boundaries[1].qd, atol=1e-12)
 
 
-def test_physics_events_keep_detection_time_and_arrive_before_the_next_command():
+def test_physics_diagnostics_keep_detection_time_and_arrive_before_the_next_boundary():
     plant, observed, order = tm.SimConfig(integrator='euler').build(), [], []
 
     def step(state):
         observed.append(state.t)
-        return [tm.Event(state.t, 'limit_breach', 'detected', dict(q=state.q.tolist()))] if state.t < .0015 else []
+        return [tm.Diagnostic(state.t, 'limit_breach', 'detected', dict(q=state.q.tolist()))] if state.t < .0015 else []
 
     plant.step_callback = step
 
-    def message(value):
-        if isinstance(value, tm.Event): order.append(('event', value.t, plant.t))
+    def diagnostic(value):
+        order.append(('diagnostic', value.t, plant.t))
 
     run(plant=plant, initial_command=np.zeros(7), duration=.004,
-        message_callbacks=[message], before_tick=lambda state: order.append(('boundary', state.t, plant.t)))
+        diagnostic_callbacks=[diagnostic],
+        before_tick_callbacks=[lambda state: order.append(('boundary', state.t, plant.t))])
     assert observed == pytest.approx([.001, .002, .003, .004])
-    assert order.index(('event', .001, .002)) < order.index(('boundary', .002, .002))
+    assert order.index(('diagnostic', .001, .002)) < order.index(('boundary', .002, .002))
 
 
 def test_real_time_rejects_an_excessive_law_command_without_clipping(wall):
@@ -334,23 +496,39 @@ def test_real_time_rejects_an_excessive_law_command_without_clipping(wall):
 
 
 @pytest.mark.parametrize('done_at, expected_status', [(float('inf'), 'timeout'), (.002, 'done')])
-def test_normal_completion_collects_an_async_result_and_leaves_the_mpc_reusable(done_at, expected_status):
+def test_normal_completion_collects_an_async_result_and_leaves_the_mpc_reusable(tmp_path, done_at, expected_status):
     class Deferred(Mpc):
         def warmup(self, state, reference=None):
             self.warmups.append(state.t)
 
         def result(self, block=False):
+            assert isinstance(messages[-1], tm.Tick) and messages[-1].command is None
             return super().result(True) if block else None
 
     mpc = Deferred()
-    for _ in range(2):
+    for index in range(2):
         plant, messages = Plant(), []
+        record = tm.RunRecord(tmp_path / str(index))
         outcome = tm.run_virtual_time(plant, mpc, Task(done_at), settings=replace(SETTINGS, solve_latency_s=.1),
-            duration=.004, message_callbacks=[messages.append])
+            duration=.004, tick_callbacks=[record, messages.append],
+            solve_completed_callbacks=[record.solve_completed, messages.append])
         assert outcome.status == expected_status and mpc.waiting is None
         assert not plant.applied and plant.calls == ['start', 'stop']
         solved = [message for message in messages if isinstance(message, tm.SolveCompleted)]
         assert len(solved) == 1 and solved[0].request_time_s == 0.
+        assert messages[-1] is solved[0] and isinstance(messages[-2], tm.Tick)
+        terminal = messages[-2]
+        assert terminal.command is None and terminal.plan is None
+        assert plant.clock.now() == terminal.t == pytest.approx(.002 if done_at == .002 else .004)
+        assert [message.t for message in messages if isinstance(message, tm.Tick)] == pytest.approx(
+            [0., .002] if done_at == .002 else [0., .002, .004])
+        record.save()
+        assert record.plans['update_t'] == [0.] and record.plans['t0'] == [0.]
+        np.testing.assert_array_equal(record.plans['torques'][0], solved[0].plan.torques)
+        assert np.all(record.ticks['plan'] == -1)
+        loaded = tm.load_run(record.out)
+        np.testing.assert_array_equal(loaded.ticks['plan'], record.ticks['plan'])
+        np.testing.assert_array_equal(loaded.plans['torques'], record.plans['torques'])
 
 
 def test_effort_fault_collects_the_outstanding_solve_without_applying_its_plan():
@@ -366,12 +544,15 @@ def test_effort_fault_collects_the_outstanding_solve_without_applying_its_plan()
         plant, messages = Plant(), []
         outcome = run(mpc, plant, lambda plan, t, state: tm.Command(np.full(7, 1000.), np.full(7, 1000.)),
                       settings=replace(SETTINGS, solve_latency_s=.002), effort_handling=tm.RejectOnEffort(),
-                      message_callbacks=[messages.append])
+                      tick_callbacks=[messages.append],
+                      solve_completed_callbacks=[messages.append])
         assert outcome.status == 'fault' and outcome.reason == 'effort_limit'
         assert outcome.t == pytest.approx(.002) and mpc.waiting is None
         assert not plant.applied and plant.clock.now() == pytest.approx(.002)
         solved = [message for message in messages if isinstance(message, tm.SolveCompleted)]
         assert [message.request_time_s for message in solved] == pytest.approx([0., .002])
+        assert isinstance(messages[-2], tm.Tick) and messages[-2].command is None
+        assert messages[-1] is solved[-1] and messages[-2].t == plant.clock.now()
 
 
 @pytest.mark.parametrize('latency, wall_s, first_command, forecast', [
@@ -403,12 +584,41 @@ def test_async_solver_waits_at_the_first_possible_activation_tick(latency, wall_
     mpc = Deferred(wall=wall_s)
     outcome = run(mpc, plant, settings=replace(SETTINGS, solve_latency_s=latency), duration=.012,
                   compensation=None if forecast is None else tm.LatencyCompensation(latency_s=forecast),
-                  message_callbacks=[observe])
+                  solve_completed_callbacks=[observe])
     assert outcome.status == 'timeout'
     assert plant.applied[0][0] == pytest.approx(first_command)
     assert blocking[0] == pytest.approx(max(forecast or 0., .002 if latency == 'measured' else first_command))
     assert len(notified) == len(mpc.requests) == len(set(request_t for request_t, _ in notified))
     assert [t for _, t in notified] == blocking
+
+
+def test_zero_delay_requests_once_per_boundary_and_uses_each_result_immediately():
+    plant, boundaries, ticks, solves = Plant(), [], [], []
+
+    class Distinct(Mpc):
+        def request(self, state, reference=None, updates=None):
+            assert len(self.requests) < len(boundaries)
+            super().request(state, reference, updates)
+
+        def result(self, block=False):
+            plan = super().result(block)
+            return tm.Plan(plan.t0, plan.dt, plan.states, np.full_like(plan.torques, len(self.requests)),
+                           plan.stats, measured_t=plan.measured_t)
+
+    mpc = Distinct()
+    outcome = run(mpc, plant, settings=replace(SETTINGS, update_period=0.), duration=.006,
+                  before_tick_callbacks=[lambda state: boundaries.append(state.t)],
+                  tick_callbacks=[ticks.append], solve_completed_callbacks=[solves.append])
+    assert outcome.status == 'timeout'
+    assert boundaries == pytest.approx([0., .002, .004, .006])
+    assert [request_t for request_t, _ in mpc.requests] == pytest.approx([0., .002, .004])
+    assert [tick.t for tick in ticks] == pytest.approx(boundaries)
+    assert len(solves) == len(mpc.requests) == len(plant.applied) == 3
+    for index, (tick, solved) in enumerate(zip(ticks, solves), start=1):
+        assert tick.plan_activated and tick.update and tick.plan is solved.plan
+        assert tick.t == solved.plan.t0 == solved.request_time_s
+        np.testing.assert_array_equal(tick.command, np.full(7, index))
+    assert ticks[-1].command is None and not ticks[-1].update
 
 
 def test_an_immediate_ideal_result_replaces_the_plan_activated_at_the_same_boundary():
@@ -420,14 +630,15 @@ def test_an_immediate_ideal_result_replaces_the_plan_activated_at_the_same_bound
 
     plant, messages, mpc = Plant(), [], Distinct()
     outcome = run(mpc, plant, duration=.006, compensation=tm.LatencyCompensation(initial_latency_s=.004),
-                  message_callbacks=[messages.append])
+                  tick_callbacks=[messages.append], solve_completed_callbacks=[messages.append])
     assert outcome.status == 'timeout'
     solves = [message for message in messages if isinstance(message, tm.SolveCompleted)]
     assert [message.request_time_s for message in solves] == [0., .004]
     assert plant.applied[0][0] == .004
     np.testing.assert_array_equal(plant.applied[0][1], np.full(7, 2.))
     tick = next(message for message in messages if isinstance(message, tm.Tick) and message.command is not None)
-    assert tick.new and tick.plan_request_t == .004 and tick.plan is solves[1].plan
+    assert tick.plan_activated and tick.plan is solves[1].plan
+    assert solves[1].request_time_s == .004
 
 
 class MovingPlant(Plant):
@@ -449,7 +660,7 @@ class MovingPlant(Plant):
         if self.command is not None:
             self.q = self.q+self.qd*h+.5*self.command*h*h
             self.qd = self.qd+self.command*h
-        self.events.append(tm.Event(t, 'physics', 'integrated', dict(q=self.q.tolist())))
+        self.diagnostics.append(tm.Diagnostic(t, 'physics', 'integrated', dict(q=self.q.tolist())))
         self.advanced.append(t)
         super().advance(t)
 
@@ -529,14 +740,23 @@ def test_async_worker_finishes_inside_an_independent_physics_interval():
             worker.join(5)
 
 
-def numerical_trace(monkeypatch, latency, native_latencies, compensated, *, paused=False, asynchronous=True):
+def numerical_trace(
+    monkeypatch,
+    latency,
+    native_latencies,
+    compensated,
+    *,
+    paused=False,
+    asynchronous=True,
+    observed=True,
+):
     from tiago_mpc import prediction
     monkeypatch.setattr(prediction, 'plant_euler', lambda model, data, q, v, u, h, friction, law:
                         (q+v*h+.5*u*h*h, v+u*h))
     first_solve, parked, wake, pause_requested = (threading.Event() for _ in range(4))
     if not paused:
         first_solve.set()
-    plant, messages, boundaries, outcomes, errors = MovingPlant(), [], [], [], []
+    plant, messages, ticks, boundaries, outcomes, errors = MovingPlant(), [], [], [], [], []
     mpc = DeferredAsync(plant, first_solve, native_latencies, asynchronous=asynchronous)
 
     def message(value):
@@ -556,7 +776,10 @@ def numerical_trace(monkeypatch, latency, native_latencies, compensated, *, paus
             outcomes.append(run(mpc, plant, duration=.024,
                 settings=replace(SETTINGS, update_period=.004, solve_latency_s=latency),
                 compensation=tm.LatencyCompensation(initial_latency_s=.004) if compensated else None,
-                initial_command=np.full(7, .2), before_tick=before, message_callbacks=[message]))
+                initial_command=np.full(7, .2), before_tick_callbacks=[before],
+                tick_callbacks=[ticks.append]+([message] if observed else []),
+                solve_completed_callbacks=[message] if observed else [],
+                diagnostic_callbacks=[message] if observed else []))
         except BaseException as error:
             errors.append(error)
 
@@ -566,6 +789,8 @@ def numerical_trace(monkeypatch, latency, native_latencies, compensated, *, paus
         if paused:
             assert parked.wait(5)
             assert boundaries == [0., .002] and mpc.waiting is not None
+            assert [value.t for value in messages if isinstance(value, tm.Diagnostic)
+                    and value.kind == 'physics'] == [.002]
             snapshot = state_trace(plant.state()), len(plant.applied), len(mpc.inputs), list(mpc.reads)
             assert not mpc.ready.is_set()
             first_solve.set()
@@ -585,35 +810,40 @@ def numerical_trace(monkeypatch, latency, native_latencies, compensated, *, paus
         for worker in mpc.workers:
             worker.join(5)
 
-    ticks = [value for value in messages if isinstance(value, tm.Tick)]
     solves = [value for value in messages if isinstance(value, tm.SolveCompleted)]
-    events = [value for value in messages if isinstance(value, tm.Event)]
+    diagnostics = [value for value in messages if isinstance(value, tm.Diagnostic)]
     assert boundaries == pytest.approx(np.arange(13)*.002)
     assert len(set(boundaries)) == len(boundaries) and mpc.warmups == [0.]
-    assert len(solves) == len(mpc.inputs) == len(mpc.warm_states) > 2
+    assert len(mpc.inputs) == len(mpc.warm_states) > 2
     assert all(a < b for a, b in zip(mpc.warm_states, mpc.warm_states[1:]))
-    assert [event for tick in ticks for event in tick.events] == events
-    assert len([event for event in events if event.kind == 'physics']) == len(plant.advanced) == 12
-    overruns = [event for event in events if event.kind == 'overrun']
-    assert len(overruns) == (len(solves) if latency == .002 else 0)
-    assert len({event.data['plan'] for event in overruns}) == len(overruns)
+    assert len(plant.advanced) == 12
+    if observed:
+        assert [value for value in messages if isinstance(value, tm.Tick)] == ticks
+        assert len(solves) == len(mpc.inputs)
+        assert len({id(value) for value in messages}) == len(messages)
+        assert len([event for event in diagnostics if event.kind == 'physics']) == len(plant.advanced)
+        overruns = [event for event in diagnostics if event.kind == 'overrun']
+        assert len(overruns) == (len(solves) if latency == .002 else 0)
+        assert len({event.data['plan'] for event in overruns}) == len(overruns)
+    else:
+        assert not messages
     assert any(np.any(tick.state.qd != ticks[0].state.qd) for tick in ticks[1:])
     if compensated:
-        assert all(isinstance(value.initial, tm.Prediction) for value in solves)
-        assert any(value.initial.t > value.initial.measured_t for value in solves)
+        assert all(isinstance(value, tm.Prediction) for value in mpc.requested_states)
+        assert any(value.t > value.measured_t for value in mpc.requested_states)
     else:
-        assert all(isinstance(value.initial, tm.State) for value in solves)
+        assert all(isinstance(value, tm.State) for value in mpc.requested_states)
     # Foreground wall duration and notification interleaving are observer-dependent;
     # native solve durations, event timestamps and the numerical trace are not.
     return dict(outcome=outcomes[0], requests=mpc.inputs, warm_states=mpc.warm_states,
         commands=[(t, command.tolist()) for t, command in plant.applied],
         ticks=[(tick.t, state_trace(tick.state), None if tick.command is None else tick.command.tolist(),
-                tick.new, tick.update, tick.plan_request_t, None if tick.plan is None else tick.plan.t0,
+                tick.plan_activated, tick.update, None if tick.plan is None else tick.plan.t0,
                 None if tick.requested_command is None else tick.requested_command.tolist(), tick.clipped)
                for tick in ticks],
         solves=[(value.request_time_s, state_trace(value.initial), value.reference.tolist(), value.updates,
                  value.plan.t0, value.plan.measured_t, value.plan.states.tolist(), value.plan.torques.tolist(),
-                 value.plan.stats) for value in solves], events=events, boundaries=boundaries)
+                 value.plan.stats) for value in solves], diagnostics=diagnostics, boundaries=boundaries)
 
 
 @pytest.mark.parametrize('latency, native_latencies', [(.002, (.003,)), (.0055, (.001,)),
@@ -637,6 +867,16 @@ def test_synchronous_and_asynchronous_solves_keep_the_same_numerical_trace(
         numerical_trace(monkeypatch, latency, native_latencies, compensated))
 
 
+@pytest.mark.parametrize('latency, native_latencies', [(0., (0.,)), (.0055, (.001,)),
+                                                      ('measured', (.003, .005, .001, .004))])
+def test_message_observation_preserves_the_numerical_trace(monkeypatch, latency, native_latencies):
+    observed = numerical_trace(monkeypatch, latency, native_latencies, True)
+    unobserved = numerical_trace(monkeypatch, latency, native_latencies, True, observed=False)
+    for trace in (observed, unobserved):
+        del trace['solves'], trace['diagnostics']
+    assert observed == unobserved
+
+
 def test_cancellation_wakes_a_parked_gate_and_leaves_its_reply_for_caller_teardown():
     first_solve, parked, wake, cancelled = (threading.Event() for _ in range(4))
     plant, outcomes, messages = MovingPlant(), [], []
@@ -648,8 +888,9 @@ def test_cancellation_wakes_a_parked_gate_and_leaves_its_reply_for_caller_teardo
             assert wake.wait(5)
 
     thread = threading.Thread(target=lambda: outcomes.append(run(mpc, plant, duration=1.,
-        settings=replace(SETTINGS, solve_latency_s=.006), before_tick=before,
-        message_callbacks=[messages.append], cancelled=cancelled.is_set)))
+        settings=replace(SETTINGS, solve_latency_s=.006), before_tick_callbacks=[before],
+        tick_callbacks=[messages.append], solve_completed_callbacks=[messages.append],
+        diagnostic_callbacks=[messages.append], cancelled=cancelled.is_set)))
     thread.start()
     try:
         assert parked.wait(5)
@@ -706,10 +947,10 @@ def test_forecast_custom_refusal_emits_no_actual_rejection(refusal):
 
     outcome = run(plant=plant, law=law, safety=Safety(), settings=replace(SETTINGS, update_period=.008),
                   compensation=tm.LatencyCompensation(latency_s=.004), duration=.02,
-                  message_callbacks=[messages.append])
+                  diagnostic_callbacks=[messages.append])
     assert outcome.reason == 'prediction_unavailable' and outcome.t == pytest.approx(.008)
     assert plant.applied and all(np.all(command == 1.) for _, command in plant.applied)
-    assert not any(isinstance(value, tm.Event) and value.kind == 'command_rejected' for value in messages)
+    assert not any(isinstance(value, tm.Diagnostic) and value.kind == 'command_rejected' for value in messages)
 
 
 @pytest.mark.parametrize('handling', [None, lambda value: tm.Command(value.requested, np.zeros(7))])
@@ -735,7 +976,7 @@ def test_real_time_retains_100ms_lease_with_custom_permissive_safety(wall):
 
 
 @pytest.mark.parametrize('knots, expiry', [(4, .012), (32, .1)])
-def test_real_waiting_plan_expires_before_user_safety_or_law_runs(wall, knots, expiry):
+def test_real_waiting_plan_expires_before_user_safety_or_law_runs(tmp_path, wall, knots, expiry):
     class SkippingPlant(Plant):
         def advance(self, t):
             super().advance(t)
@@ -749,15 +990,24 @@ def test_real_waiting_plan_expires_before_user_safety_or_law_runs(wall, knots, e
     def unreachable(*args):
         pytest.fail('a waiting or expired plan must not evaluate its law')
 
-    plant, ticks = SkippingPlant(), []
+    plant, ticks, solves = SkippingPlant(), [], []
+    record = tm.RunRecord(tmp_path / 'expired')
     outcome = tm.run_real_time(plant, Mpc(N=knots, dt=.002), Task(), unreachable,
                                settings=tm.RealTimeSettings(.002, 1.),
                                compensation=tm.LatencyCompensation(latency_s=.006),
-                               safety=Safety(), duration=.2, tick_callbacks=[ticks.append])
+                               safety=Safety(), duration=.2, tick_callbacks=[record, ticks.append],
+                               solve_completed_callbacks=[record.solve_completed, solves.append])
     assert outcome.reason == 'lease_expired' and outcome.t == pytest.approx(expiry)
     assert not plant.applied and all(tick.plan is None for tick in ticks)
-    assert ticks[-1].faulted.t0 == pytest.approx(.006) and ticks[-1].plan_request_t == 0.
-    assert all(tick.faulted is None for tick in ticks[:-1])
+    assert len(solves) == 1 and solves[0].plan.t0 == pytest.approx(.006)
+    assert solves[0].request_time_s == 0. and isinstance(solves[0].initial, tm.Prediction)
+    assert solves[0].initial.t == pytest.approx(.006) and solves[0].initial.measured_t == 0.
+    record.save()
+    assert record.plans['update_t'] == [0.] and record.plans['t0'] == pytest.approx([.006])
+    assert np.all(record.ticks['plan'] == -1)
+    loaded = tm.load_run(record.out)
+    np.testing.assert_array_equal(loaded.ticks['plan'], record.ticks['plan'])
+    np.testing.assert_array_equal(loaded.plans['torques'][0], solves[0].plan.torques)
 
 
 def test_real_time_rejects_clipping_before_plant_start():

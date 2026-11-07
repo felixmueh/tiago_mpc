@@ -36,12 +36,12 @@ def limit_excess(ticks: Mapping[str, np.ndarray]) -> dict[str, float]:
 
 
 def common_results(record: tm.RunRecord) -> dict[str, Any]:
-    """The results every run has, from its ticks, plans and events: the raw-limit excess,
+    """The results every run has, from its ticks, plans and diagnostics: the raw-limit excess,
     the largest torque, the solves and their work (a run without solves has no median and
-    zero work), the counts of ticks and plans, and of the loops' event kinds."""
+    zero work), the counts of ticks and plans, and of the loops' diagnostic kinds."""
     ticks, plans = record.ticks, record.plans
     excess, times = limit_excess(ticks), plans.get("solve_time_us")
-    kinds = Counter(event.kind for event in record.events)
+    kinds = Counter(diagnostic.kind for diagnostic in record.diagnostics)
     return dict(limits_pass=max(excess.values()) <= 1e-5, max_limit_excess=excess,
                 max_abs_torque_nm=float(np.nanmax(np.abs(ticks["command"]), initial=0.)),
                 solve_calls=len(plans["t0"]),
@@ -64,6 +64,9 @@ def run_experiment(
     effort_handling: tm.EffortHandling | None | Literal["default"] = "default",
     duration: float | None = None,
     out: str | Path | None = None,
+    tick_callbacks: Sequence[tm.TickCallback] = (),
+    solve_completed_callbacks: Sequence[tm.SolveCompletedCallback] = (),
+    diagnostic_callbacks: Sequence[tm.DiagnosticCallback] = (),
     **pieces: Any,
 ) -> tm.RunRecord:
     """Run an experiment with explicit timing, loop and execution policies.
@@ -97,9 +100,12 @@ def run_experiment(
         record = tm.RunRecord(out, task=task, params=solver.params, plant=plant, law=law, settings=settings,
                               loop=loop.__name__, compensation=compensation, safety=safety,
                               effort_handling=effort_handling, duration=duration, **pieces)
+        diagnostics: list[tm.DiagnosticCallback] = [record.diagnostic, console, *diagnostic_callbacks]
         built = plant.build()  # inside the try: a failed build is a saved error
-        outcome = loop(built, solver, task, law, [record, console], settings=settings,
-                       compensation=compensation, safety=safety, effort_handling=effort_handling, duration=duration)
+        outcome = loop(built, solver, task, law, tick_callbacks=[record, *tick_callbacks], settings=settings,
+                       compensation=compensation, safety=safety, effort_handling=effort_handling, duration=duration,
+                       solve_completed_callbacks=[record.solve_completed, *solve_completed_callbacks],
+                       diagnostic_callbacks=diagnostics)
         record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t,
                                results=common_results(record))
     except BaseException as exc:  # a real error, or the hard abort
@@ -108,17 +114,20 @@ def run_experiment(
                                    error=traceback.format_exc())
         raise
     finally:
-        if built is not None and record is not None:
-            late = built.take_events()  # the handback, after the last tick
-            record.add_events(late)
-            console.add_events(late)
-            record.metadata["plant"] = built.run_state
-            built.close()
-        if owned is not None:  # a passed MPC is the caller's
-            owned.close()
-        if record is not None:
-            record.save()  # a faulted or failed run is never lost
-            export_replay(record)  # so a faulted run keeps its replay
+        try:
+            if built is not None and record is not None:
+                for diagnostic in built.take_diagnostics():  # the handback, after the last tick
+                    for callback in diagnostics:
+                        callback(diagnostic)
+        finally:
+            if built is not None and record is not None:
+                record.metadata["plant"] = built.run_state
+                built.close()
+            if owned is not None:  # a passed MPC is the caller's
+                owned.close()
+            if record is not None:
+                record.save()  # a faulted or failed run is never lost
+                export_replay(record)  # so a faulted run keeps its replay
     return record
 
 

@@ -45,13 +45,18 @@ defaults to none. The standard reach, figure-eight and random100 experiments use
 forecast, while measured latency uses the previous observed delay with that seed.
 `compensation=None` turns it off.
 Its physical friction and armature model is independent of the optimizer's model.
+Each compensated request makes one call to a frozen predictor. The loop keeps
+the delay estimate; the predictor keeps no execution history. An older measurement
+is propagated under the currently held command until the next command tick,
+then under the active plan's command law on predicted feedback.
 
 A run ends without an exception: the task done, the time up, a fault or a stop
 request (Ctrl-C, SIGTERM or a run-owned cancellation flag) ends the loop, which
-returns an `Outcome(status, reason, t)`. Robot execution rejects every over-limit
-plan and command. Virtual-time simulation handles effort after evaluating the
-command law: `effort_handling=EffortClip()` is the default, including when an
-experiment supplies its own law. `RejectOnEffort()` stops on an excessive command;
+returns an `Outcome(status, reason, t)`. Robot execution validates the requested
+and applied torque of each command. Effort handling follows evaluation of the
+command law. Virtual-time simulation uses `effort_handling=EffortClip()` by
+default, including when an experiment supplies its own law.
+`RejectOnEffort()` stops on an excessive command;
 `None` explicitly disables effort handling. Both policies accept configurable
 per-joint effort limits. Neither rejects a prediction merely because an unapplied
 future knot exceeds an effort limit. Command laws return `Command | Fault` and
@@ -89,22 +94,43 @@ can provide a different pure `validate(plan, t, state) -> Fault | None` check.
 Validation runs before the law, and the loop applies only an accepted command.
 Duration, callbacks, cancellation and initial conditions are also loop arguments.
 
-Existing `tick_callbacks` receive each command decision. Optional
-`message_callbacks` receive `SolveCompleted` for every completed noncancelled
-solve, queued plant `Event` objects before the next command, and the same `Tick`
-after its command decision. A `SolveCompleted` retains detached request inputs
-and the returned native `Plan`, including a result which never activates. Its
-`wall_s` includes foreground forecast/request preparation, submission and result
-waiting; it excludes overlapped physics and observer parking. Native
-`plan.stats['wall_s']` remains the measured solve latency. `Tick.requested_command`
+Both loops expose three independent notification streams:
+
+| Parameter | Payload | Reports |
+| --- | --- | --- |
+| `tick_callbacks` | `Tick` | Measured state and command decision |
+| `solve_completed_callbacks` | `SolveCompleted` | Returned plan and its request |
+| `diagnostic_callbacks` | `Diagnostic` | Overruns, lateness, breaches and plant diagnostics |
+
+The loop receives plans directly from `mpc.result()` and updates their scheduling
+before notifying observers. Each notification goes only to its own callback
+group; diagnostics are not bundled into `Tick`. `before_tick_callbacks` is a
+separate group of control hooks for pausing and capacity handling.
+Real-time notifications follow the command decision and publication. Virtual-time
+plant diagnostics reach observers before the pause checkpoint.
+
+Every request keeps an owned `last_mpc_request_snapshot` of its state, reference
+and solver updates, including when no observers are registered. A `SolveCompleted`
+reports that snapshot and the returned native `Plan`, including a result which
+never activates. `plan.stats['wall_s']` supplies the measured solve latency;
+foreground timing belongs to optional profiling. `Tick.requested_command`
 and `Tick.clipped` distinguish requested torque from `Tick.command` applied to
 the plant. Observers should enqueue these owned numerical values and format them
 outside the numerical path.
 
-`before_tick(state)` may block on a condition/event to pause virtual time without
-losing pending plans or controller warm state. It runs once per command boundary,
-before result collection or another command. An outstanding solve may finish
-while the loop is parked; its reply is consumed normally after resume. Set
+`RunRecord` records every returned plan through `record.solve_completed`, including
+plans that never activate. Its tick callback records which plan was active;
+`ticks['plan']` indexes the completed-plan rows. `run_experiment` registers both
+callbacks, plus `record.diagnostic`, automatically.
+`Tick.plan` is the active plan; `Tick.plan_activated` marks only the tick where it
+takes effect. A returned plan may remain pending until its activation time while
+the active plan continues supplying commands.
+
+Each callback in `before_tick_callbacks` receives the boundary `State` and may
+block on a condition/event to pause virtual time without losing pending plans or
+controller warm state. Callbacks run once in registration order per command
+boundary, before cancellation, result collection or another command. An outstanding
+solve may finish while the loop is parked; its reply is consumed normally after resume. Set
 `cancelled` to a run-owned flag's `is_set` method, then wake a paused callback to
 terminate it. Cancellation is checked at this one boundary checkpoint. Once a
 tick is admitted, it completes its command decision and physics interval before
@@ -121,9 +147,12 @@ declared latency this is the first eligible command tick; measured latency
 conservatively waits at least until the next command tick to learn the result's
 delay. This includes a measured duration of zero. Zero declared latency waits
 immediately. A collected plan waits for its scheduled availability and predicted
-origin before activation.
-Normal completion collects any outstanding solve without activating it or
-advancing physics, leaving a caller-owned MPC ready for another run.
+origin before activation. Each tick checks for an eligible previous result,
+optionally submits one request, then checks whether the new result is already
+eligible. Both collection positions use the same time inequalities, including
+zero declared latency; there is no inner scheduling loop.
+After the final tick, completion or a fault collects any outstanding solve without
+activating it or advancing physics, leaving a caller-owned MPC ready for another run.
 
 For full-physics observation, assign `SimPlant.step_callback(state)`. It returns
 events to queue at each integrated endpoint. Events retain their detection time;
@@ -136,11 +165,12 @@ tiago_mpc/    __init__.py (the root: `import tiago_mpc as tm` re-exports what ex
               tiago.py (TIAGo facts, the derived URDFs), dynamics.py (friction laws),
               mpc.py (MpcParams, TIAGO, plant names, find_binary, compile_binary, SolverSettings,
               Mpc, MpcProcess),
-              interfaces.py (State, Plan, Command, Fault, Event, Tick, SolveCompleted; the protocols PlantInterface,
-              MpcInterface, TaskInterface, SafetyInterface; ControlLaw, EffortHandling, Callback),
+              interfaces.py (State, Plan, Command, Fault, Diagnostic, Tick, SolveCompleted; the protocols PlantInterface,
+              MpcInterface, TaskInterface, SafetyInterface; ControlLaw, EffortHandling,
+              TickCallback, SolveCompletedCallback, DiagnosticCallback),
               clock.py (VirtualClock, WallClock), laws.py (SampleKnot, HoldFirst,
               PlanFeedback, FrictionFeedforward, ExecutionSafety, RealTimeSafety, RealTimeEffort,
-              EffortClip, RejectOnEffort, validate_plan, decide_command),
+              EffortClip, RejectOnEffort, decide_command),
               loops.py (run_real_time, run_virtual_time, RealTimeSettings, VirtualTimeSettings, Outcome,
               STOP, default_compensation),
               prediction.py (LatencyCompensation and physical state propagation),
@@ -300,16 +330,17 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   separately. Until the first command, `SimPlant` holds
   its start state, as PAL's position controller holds the arm until effort
   control starts.
-- **Events:** what the loop or a plant detects at its own time (`late_tick`,
+- **Diagnostics:** what the loop or a plant detects at its own time (`late_tick`,
   `overrun`, `late_plan`, `pacing_behind`; the robot's `activated` and `handback`)
-  rides on the tick (`Tick.events`; a plant hands its events over with
-  `take_events()`) into the record's `events.json`. The console prints the first
-  event of each kind (`Console`); the common results count `late_ticks`,
+  reaches `diagnostic_callbacks` independently of command ticks. A plant hands
+  its diagnostics over with `take_diagnostics()`. `RunRecord.diagnostic` records
+  them in `events.json`; `Console` prints the first diagnostic of each kind.
+  The common results count `late_ticks`,
   `overruns` and `late_plans`.
 - **Stopping:** Ctrl-C or SIGTERM sets `tm.STOP` (`handle_stop_signals`, which every
   main that runs the simulation or the arm calls first): the run ends as
-  `interrupted` and is saved. Virtual time checks after callbacks and blocking
-  work and can exit without a terminal Tick; real time records its next tick
+  `interrupted` and is saved. Virtual time checks at its ordinary command-boundary
+  checkpoint and can exit without a terminal Tick; real time records its next tick
   without a command. Later runs stop while the flag remains set. A second
   signal raises `KeyboardInterrupt`, the hard abort for blocking calls (compiling,
   the robot's first state); the run is still saved. The MPC process and the safety
@@ -409,8 +440,9 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   (`tm.SampleKnot()`, `tm.HoldFirst()`, `tm.PlanFeedback(kp, kd)`,
   `tm.FrictionFeedforward(friction, base_law)`); **timing settings** are plain data
   passed to an explicitly selected loop. **Tick callbacks** see every `Tick` (the
-  tick's time, state, command, plan, whether it is new, whether a control update
-  started, its events). The pieces' interfaces are typed in `tiago_mpc/interfaces.py`:
+  tick's time, state, command, plan, whether the plan activated, whether a control update
+  started, and requested/applied torque handling). The pieces' interfaces are
+  typed in `tiago_mpc/interfaces.py`:
   plants, MPCs, tasks and safety checks need no base class, only what the protocols
   `PlantInterface`, `MpcInterface`, `TaskInterface` and `SafetyInterface` declare.
 - `SimConfig(friction=..., friction_law=..., integrator=...)` sets the **plant's** losses,
@@ -490,8 +522,9 @@ print(record.metadata["status"], record.metadata["results"]["final_distance_m"])
   a `tm.Outcome` and accepts the explicit execution components.
   Per-plan data of an own loop travels in `plan.stats` (every key a `plans`
   column). Without `run_experiment`, `tm.RunRecord(out, **pieces)` is used on its
-  own: pass it and `tm.Console()` as tick callbacks, and set the status, take the plant's
-  events after the loop and save in a `finally` yourself.
+  own: pass the record as a tick callback and its `diagnostic` method plus
+  `tm.Console()` as diagnostic callbacks. Set the status and take the plant's
+  diagnostics after the loop and save in a `finally` yourself.
 - **Many runs:** an experiment's own frozen study classes, written once with
   `to_dict` before the first run, one `RunRecord` per case; `random100` is the
   example (`experiments/random100/run.py`).
@@ -588,8 +621,8 @@ provenance and configuration at the start and buffers one entry per command tick
   when none was sent), `plan` (the plan in effect, −1 before the first), `update`
   (the control update started there, −1 for none), plus experiment columns.
 - `plans.npz`, per plan: `t0`, `update_t` (the tick of its control update), `states`,
-  `torques`, every solve stat, plus experiment columns. A plan that faulted is the
-  last row; it never took effect, so no tick's `plan` points at it.
+  `torques`, every solve stat, plus experiment columns. A waiting plan that expired
+  before activation is the last row; no tick's `plan` points at it.
 - `events.json`: every event, `{"t", "kind", "message", "data"}`.
 - `replay.npz`: the visualizer replay on the run's time, exported from the record by
   `experiments/replay.py:export_replay` (`../tiago_mpc_visualizer/docs/replay-format.md`),
@@ -597,7 +630,7 @@ provenance and configuration at the start and buffers one entry per command tick
   also has its rotation vectors (`reference_rotvec_rad`, NaN at a tick without one).
 
 `tm.load_run(path, classes=[Reach])` reads a run back with the same interface
-(`run.ticks["q"]`, `run.config["settings"]`, `run.metadata["status"]`, `run.events`):
+(`run.ticks["q"]`, `run.config["settings"]`, `run.metadata["status"]`, `run.diagnostics`):
 a metric added later is the same code, and `run.save()` writes it back.
 The loader rejects other format versions before reconstructing their configuration.
 Format-2 runs remain readable with WIP `f66172f`; their files are unchanged.

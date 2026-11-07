@@ -35,7 +35,7 @@ def test_advance_holds_the_command_over_substeps_up_to_the_tick(friction, law, s
                  else plant_rk4(plant.model, plant.data, q, qd, U, h, friction, law))
         t += h
     s = plant.state()
-    assert s.t == plant.clock.now() == .01 and plant.run_state == {} and plant.take_events() == []
+    assert s.t == plant.clock.now() == .01 and plant.run_state == {} and plant.take_diagnostics() == []
     np.testing.assert_array_equal(s.q, q)
     np.testing.assert_array_equal(s.qd, qd)
     plant.apply(-U)  # the state is at the virtual time: nothing to integrate
@@ -147,20 +147,20 @@ def test_sync_real_time_waits_for_the_wall_clock_has_an_event_behind_and_keeps_t
     wall.now = first + .014  # the wait, then 4 ms of computing: wait 6 ms for the tick at 20 ms
     paced.advance(5.02)
     assert wall.slept[1] == pytest.approx(.006)
-    assert paced.take_events() == []
+    assert paced.take_diagnostics() == []
     wall.now = first + .045  # 15 ms behind at 30 ms: no wait, one event
     paced.advance(5.03)
-    behind, = paced.take_events()
+    behind, = paced.take_diagnostics()
     assert behind.kind == "pacing_behind" and behind.t == 5.03 and behind.data["behind_s"] == pytest.approx(.015)
     assert "15.0 ms behind the wall clock" in behind.message
     wall.now += .02
     paced.advance(5.04)  # still behind: the same occurrence
-    assert wall.slept[2:] == [0., 0.] and paced.take_events() == []
+    assert wall.slept[2:] == [0., 0.] and paced.take_diagnostics() == []
     wall.now = first + .04
     paced.advance(5.05)  # caught up: it waits again
     wall.now = first + .07
     paced.advance(5.06)  # behind again: a new occurrence
-    assert [e.kind for e in paced.take_events()] == ["pacing_behind"]
+    assert [e.kind for e in paced.take_diagnostics()] == ["pacing_behind"]
     for t in (5.01, 5.02, 5.03, 5.04, 5.05, 5.06):
         plain.advance(t)
     np.testing.assert_array_equal(paced.q, plain.q)
@@ -188,5 +188,5 @@ def test_run_real_time_on_a_simplant():
                             settings=RealTimeSettings(.01, .01), compensation=None, duration=.2)
     assert outcome.status == "timeout" and time.monotonic() - start >= .2 and len(ticks) == 21
     # Each plan is used from the tick after its request, which makes the next request.
-    assert ticks[0].command is None and all(k.command is not None and k.new for k in ticks[1:-1])
+    assert ticks[0].command is None and all(k.command is not None and k.plan_activated for k in ticks[1:-1])
     np.testing.assert_allclose(plant.q, q0, atol=1e-3)

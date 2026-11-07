@@ -6,7 +6,7 @@ import pytest
 
 import tiago_mpc as tm
 from tiago_mpc.laws import (FrictionFeedforward, HoldFirst, PlanFeedback, RealTimeEffort, RealTimeSafety, SampleKnot,
-                            decide_command, validate_plan)
+                            decide_command)
 from tiago_mpc.interfaces import Command, Fault, Plan
 
 sample_knot, hold_first = SampleKnot(), HoldFirst()
@@ -29,17 +29,6 @@ def test_sample_knot_holds_each_knot_from_the_state_time():
 def test_hold_first_ignores_the_time():
     for t in (10., 10.005, 11.):
         np.testing.assert_array_equal(hold_first(PLAN, t, None).applied, [1., 1.])
-
-
-def test_whole_plan_validation_checks_future_knots_against_raw_effort_limits():
-    effort = tm.limits().effort
-    accepted = Plan(0., .01, np.zeros((3, 14)), np.array([effort, -effort]), measured_t=0.)
-    assert tm.validate_plan is validate_plan and validate_plan(accepted) is None
-    torques = np.ones((2, 7))
-    torques[-1, -1] = effort[-1] + .1
-    refused = Plan(0., .01, np.zeros((3, 14)), torques, measured_t=0.)
-    fault = validate_plan(refused)
-    assert isinstance(fault, Fault) and fault.reason == "effort_limit" and fault.requested is None
 
 
 @pytest.mark.parametrize("source", ["law", "handler"])

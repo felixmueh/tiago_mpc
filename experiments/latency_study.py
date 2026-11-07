@@ -75,7 +75,7 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
 def row(out, task, case, ms, compensate):
     """One run's outcome. The takeover error is the plant's state at the tick each plan took
     effect minus the state it was requested from: the prediction error when compensated
-    (the experiment's requested-state events), otherwise
+    (the experiment's requested-state diagnostics), otherwise
     how far the arm moved during the latency. Not
     the plan's knot 0: GATO returns it only as close to the requested state as the solve
     converged. fault: the fault's or interruption's reason, else an error's last line."""

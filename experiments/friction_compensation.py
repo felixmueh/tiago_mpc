@@ -47,13 +47,13 @@ class SampledSimConfig:
 class SampledSim:
     """The existing plant with held observations and separately recorded true states.
 
-    Sensor events occur at their own times, also between command ticks. This wrapper
+    Sensor diagnostics occur at their own times, also between command ticks. This wrapper
     supports virtual time only. No observation noise or additional transport delay.
     """
     def __init__(self, config):
         self.config, self.physical = config, config.physical.build()
         self.run_state = self.physical.run_state
-        self._events = []
+        self._diagnostics = []
 
     def start(self, clock):
         if not isinstance(clock, tm.VirtualClock):
@@ -63,13 +63,13 @@ class SampledSim:
         self._start, self._sample_index = clock.now(), 1
         self._sample = self.physical.state()
         self._last_truth_t = None
-        self._events.clear()
+        self._diagnostics.clear()
 
     def state(self):
         truth = self.physical.state()
         if truth.t != self._last_truth_t:
-            self._events.append(tm.Event(truth.t, 'plant_state', 'True simulated state recorded separately',
-                                         dict(q=truth.q.tolist(), qd=truth.qd.tolist())))
+            self._diagnostics.append(tm.Diagnostic(truth.t, 'plant_state', 'True simulated state recorded separately',
+                                                 dict(q=truth.q.tolist(), qd=truth.qd.tolist())))
             self._last_truth_t = truth.t
         return tm.State(self._sample.t, self._sample.q.copy(), self._sample.qd.copy())
 
@@ -86,9 +86,9 @@ class SampledSim:
     def apply(self, command):
         self.physical.apply(command)
 
-    def take_events(self):
-        events, self._events = self._events, []
-        return events + self.physical.take_events()
+    def take_diagnostics(self):
+        diagnostics, self._diagnostics = self._diagnostics, []
+        return diagnostics + self.physical.take_diagnostics()
 
     def stop(self):
         self.physical.stop()
@@ -154,7 +154,7 @@ def export_and_measure(record, destination, case):
     """Keep observed results, add true motion columns/results and export executed truth."""
     evaluate(record)  # measured-state metrics remain independently available
     ticks, plans = record.ticks, record.plans
-    truth = [event for event in record.events if event.kind == 'plant_state']
+    truth = [diagnostic for diagnostic in record.diagnostics if diagnostic.kind == 'plant_state']
     if len(ticks['t']) == 0:
         return dict(case=case, status=record.metadata['status'], samples=0, replay=None)
     np.testing.assert_allclose([event.t for event in truth], ticks['t'], rtol=0, atol=1e-9)

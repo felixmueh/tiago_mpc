@@ -13,8 +13,7 @@ from tiago_mpc.dynamics import Friction
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.loops import STOP, RealTimeSettings, Schedule, VirtualTimeSettings, run_real_time, run_virtual_time
-from tiago_mpc.interfaces import Command, Plan, Prediction, State
-from tiago_mpc.record import Event
+from tiago_mpc.interfaces import Command, Diagnostic, Plan, Prediction, State
 
 
 class FakeTime:
@@ -38,10 +37,9 @@ def wall(monkeypatch):
 
 
 class Plant:
-    """On the loop's clock; measure(t) is the time of the latest state at time t; events:
-    what take_events hands out next."""
+    """On the loop's clock; measure(t) gives the latest state's measurement time."""
     def __init__(self, measure=lambda t: t):
-        self.measure, self.calls, self.applied, self.run_state, self.events = measure, [], [], {}, []
+        self.measure, self.calls, self.applied, self.run_state, self.diagnostics = measure, [], [], {}, []
 
     def start(self, clock):
         self.clock = clock
@@ -53,9 +51,9 @@ class Plant:
     def apply(self, command):
         self.applied.append((self.clock.now(), command))
 
-    def take_events(self):
-        events, self.events = self.events, []
-        return events
+    def take_diagnostics(self):
+        diagnostics, self.diagnostics = self.diagnostics, []
+        return diagnostics
 
     def advance(self, t):
         self.clock.reach(t)
@@ -244,7 +242,16 @@ def test_physical_friction_and_armature_do_not_count_as_double_compensation(loop
     assert outcome.status == 'timeout' and mpc.requests
 
 
-def go(mpc, task=Task(), loop=run_virtual_time, duration=.1, update_period=.01, plant=None, **kw):
+def go(
+    mpc,
+    task=Task(),
+    loop=run_virtual_time,
+    duration=.1,
+    update_period=.01,
+    plant=None,
+    diagnostics=None,
+    **kw,
+):
     """Run test fakes at 10 ms command ticks with the chosen loop's settings."""
     plant, ticks = plant or Plant(), []
     options = {key: kw.pop(key) for key in ("compensation", "safety", "effort_handling") if key in kw}
@@ -254,7 +261,9 @@ def go(mpc, task=Task(), loop=run_virtual_time, duration=.1, update_period=.01, 
     elif loop is run_real_time:
         compensation = settings.pop("compensation", None)
         settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
-    outcome = loop(plant, mpc, task, tick_callbacks=[ticks.append], duration=duration, **settings, **options)
+    outcome = loop(plant, mpc, task, tick_callbacks=[ticks.append],
+                   diagnostic_callbacks=[] if diagnostics is None else [diagnostics.append],
+                   duration=duration, **settings, **options)
     return plant, ticks, outcome
 
 
@@ -263,44 +272,48 @@ def commanded(ticks):
     return [(round(k.t, 6), k.command[0]) for k in ticks if k.command is not None]
 
 
-def events(ticks, kind):
-    """The events of kind on the ticks."""
-    return [e for k in ticks for e in k.events if e.kind == kind]
+def diagnostics_of(diagnostics, kind):
+    """The diagnostics of one kind."""
+    return [diagnostic for diagnostic in diagnostics if diagnostic.kind == kind]
 
 
 # Virtual time (run_virtual_time)
 
 def test_zero_latency_commands_each_plan_at_its_own_tick():
+    diagnostics = []
     mpc = Mpc()
-    plant, ticks, outcome = go(mpc, duration=.03, solve_latency_s=0.)
+    plant, ticks, outcome = go(mpc, diagnostics=diagnostics, duration=.03, solve_latency_s=0.)
     assert outcome == (outcome.__class__("timeout", None, pytest.approx(.03)))
     assert plant.calls == ["start", "stop"] and mpc.warmups == [0.]
     assert commanded(ticks) == [(0., 1.), (.01, 1.), (.02, 1.)]
-    assert [k.new for k in ticks] == [True, True, True, False]
+    assert [k.plan_activated for k in ticks] == [True, True, True, False]
     assert [k.update for k in ticks] == [True, True, True, False]  # a control update at each tick but the last
     assert ticks[-1].command is None and ticks[-1].t == pytest.approx(.03)
-    assert not any(k.events for k in ticks)
+    assert not diagnostics
 
 
 def test_each_plan_that_skips_its_knot_0_is_a_late_plan_event():
-    _, ticks, _ = go(Mpc(), solve_latency_s=.01, duration=.08)  # every plan from its knot 1
-    late = events(ticks, "late_plan")
+    diagnostics = []
+    _, ticks, _ = go(Mpc(), diagnostics=diagnostics, solve_latency_s=.01, duration=.08)  # every plan from its knot 1
+    late = diagnostics_of(diagnostics, "late_plan")
     assert [e.data["plan"] for e in late] == list(range(7)) and late[0].data["delay_s"] == pytest.approx(.01)
-    assert [round(e.t, 6) for e in late] == [round(k.t, 6) for k in ticks[:-1] if k.new]  # the last sends nothing
+    assert [round(e.t, 6) for e in late] == [round(k.t, 6) for k in ticks[:-1] if k.plan_activated]  # the last sends nothing
     assert "10.0 ms after its state" in late[0].message and "docs/robot.md" in late[0].message
-    _, ticks, _ = go(Mpc(), duration=.08, solve_latency_s=0.)  # zero latency: every plan from its knot 0
-    assert not events(ticks, "late_plan")
+    diagnostics.clear()
+    _, ticks, _ = go(Mpc(), diagnostics=diagnostics, duration=.08, solve_latency_s=0.)  # zero latency: every plan from its knot 0
+    assert not diagnostics_of(diagnostics, "late_plan")
 
 
 @pytest.mark.parametrize("solve_latency", [.025, "measured"])
 def test_a_plan_takes_effect_at_the_first_tick_after_its_latency_and_blocks_requests(solve_latency):
+    diagnostics = []
     mpc = Mpc(wall=.025)
-    plant, ticks, outcome = go(mpc, solve_latency_s=solve_latency, duration=.08)
+    plant, ticks, outcome = go(mpc, diagnostics=diagnostics, solve_latency_s=solve_latency, duration=.08)
     # Requested at 0, effective at 30 ms (knot 3); no request while it is pending.
     assert [round(t, 6) for t, _ in mpc.requests] == [0., .03, .06]
     assert [round(k.t, 6) for k in ticks if k.update] == [0., .03, .06]
     assert commanded(ticks)[:4] == [(.03, 4.), (.04, 5.), (.05, 6.), (.06, 4.)]
-    assert all(k.command is None for k in ticks[:3]) and not events(ticks, "overrun")
+    assert all(k.command is None for k in ticks[:3]) and not diagnostics_of(diagnostics, "overrun")
 
 
 def test_measured_latency_uses_the_plans_own_wall_time():
@@ -318,14 +331,16 @@ def test_measured_zero_waits_one_tick_while_explicit_ideal_zero_is_immediate():
 
 
 def test_each_solve_longer_than_a_declared_latency_is_an_overrun_event():
-    _, ticks, _ = go(Mpc(wall=.025), solve_latency_s=.01, duration=.08)
-    overruns = events(ticks, "overrun")
+    diagnostics = []
+    _, ticks, _ = go(Mpc(wall=.025), diagnostics=diagnostics, solve_latency_s=.01, duration=.08)
+    overruns = diagnostics_of(diagnostics, "overrun")
     assert len(overruns) == 8  # requests at 0, 10, ..., 70 ms
     assert overruns[0].data == dict(plan=0, wall_s=.025, solve_latency_s=.01)
     assert "longer than solve_latency_s=10 ms" in overruns[0].message
     assert commanded(ticks)[0] == (.01, 2.)  # the declared latency, not the solve's time
-    _, ticks, _ = go(Mpc(wall=.025), solve_latency_s=0., duration=.08)  # the explicit ideal
-    assert not events(ticks, "overrun")
+    diagnostics.clear()
+    _, ticks, _ = go(Mpc(wall=.025), diagnostics=diagnostics, solve_latency_s=0., duration=.08)  # the explicit ideal
+    assert not diagnostics_of(diagnostics, "overrun")
 
 
 def test_update_period_0_requests_at_the_tick_the_previous_plan_takes_effect():
@@ -459,13 +474,14 @@ def test_a_run_longer_than_max_runtime_raises_before_it_starts_the_plant(wall, m
 # Wall time (run_real_time)
 
 def test_no_command_before_the_first_plan_and_each_plan_from_the_tick_after_it_arrives(wall):
+    diagnostics = []
     mpc = Mpc(delay=2)  # arrives at the third poll after its request
-    _, ticks, outcome = go(mpc, loop=run_real_time, duration=.06)
+    _, ticks, outcome = go(mpc, diagnostics=diagnostics, loop=run_real_time, duration=.06)
     assert [k.command is None for k in ticks[:4]] == [True, True, True, False]
     assert commanded(ticks)[0] == (.03, 4.)
     assert [round(t, 6) for t, _ in mpc.requests] == [0., .03]
     assert [round(k.t, 6) for k in ticks if k.update] == [0., .03]  # requested after the tick callbacks
-    assert outcome.status == "timeout" and not events(ticks, "late_tick")
+    assert outcome.status == "timeout" and not diagnostics_of(diagnostics, "late_tick")
 
 
 def test_the_lease_ends_100_ms_after_the_plans_state(wall):
@@ -488,28 +504,31 @@ class Late(Plant):
 
 
 def test_ticks_keep_their_rate_and_a_late_tick_skips_the_missed_ones(wall):
-    _, ticks, _ = go(Mpc(), loop=run_real_time, plant=Late(wall), duration=.07)
+    diagnostics = []
+    _, ticks, _ = go(Mpc(), diagnostics=diagnostics, loop=run_real_time, plant=Late(wall), duration=.07)
     assert [round(k.t, 6) for k in ticks] == [0., .01, .025, .03, .055, .065, .075]
-    late, = events(ticks, "late_tick")  # 5 ms is not late
+    late, = diagnostics_of(diagnostics, "late_tick")  # 5 ms is not late
     assert late.t == pytest.approx(.055) and late.data == dict(late_s=pytest.approx(.015), skipped=1)
     assert "15.0 ms after its deadline" in late.message
 
 
 def test_the_tick_after_the_first_command_is_late_without_an_event(wall):
+    diagnostics = []
     class Activating(Plant):  # the robot's first command switches controllers: 25 ms
         def apply(self, command):
             super().apply(command)
             wall.now += .025 if len(self.applied) == 1 else 0.
 
-    _, ticks, _ = go(Mpc(), loop=run_real_time, plant=Activating(), duration=.05)
-    assert [round(k.t, 6) for k in ticks][:4] == [0., .01, .035, .045] and not events(ticks, "late_tick")
+    _, ticks, _ = go(Mpc(), diagnostics=diagnostics, loop=run_real_time, plant=Activating(), duration=.05)
+    assert [round(k.t, 6) for k in ticks][:4] == [0., .01, .035, .045] and not diagnostics_of(diagnostics, "late_tick")
 
     class Both(Activating, Late):  # and 15 ms late at 65 ms: that one is an event
         pass
 
     wall.now = 0.
-    _, ticks, _ = go(Mpc(), loop=run_real_time, plant=Both(wall, {.065: .08}), duration=.1)
-    assert [round(e.t, 6) for e in events(ticks, "late_tick")] == [.08]
+    diagnostics.clear()
+    _, ticks, _ = go(Mpc(), diagnostics=diagnostics, loop=run_real_time, plant=Both(wall, {.065: .08}), duration=.1)
+    assert [round(e.t, 6) for e in diagnostics_of(diagnostics, "late_tick")] == [.08]
 
 
 def test_past_the_plans_end_faults_and_stops(wall):
@@ -546,30 +565,34 @@ class Blocking(Mpc):
 
 def test_a_blocking_solve_ends_the_run_or_the_lease_at_the_tick_after_it(wall):
     """A 120 ms solve, requested at 0, outlasts the 50 ms run and the plan's 100 ms lease."""
-    _, ticks, outcome = go(Blocking(wall, [.12]), loop=run_real_time, duration=.05)
-    assert outcome.status == "timeout" and len(events(ticks, "late_tick")) == 1
+    diagnostics = []
+    _, ticks, outcome = go(Blocking(wall, [.12]), diagnostics=diagnostics, loop=run_real_time, duration=.05)
+    assert outcome.status == "timeout" and len(diagnostics_of(diagnostics, "late_tick")) == 1
     assert [(round(k.t, 6), k.command) for k in ticks] == [(0., None), (.12, None)]
+    diagnostics.clear()
     plant = Plant()  # a 310 ms plan: its lease ends first
-    _, ticks, outcome = go(Blocking(wall, [.12], N=32), loop=run_real_time, plant=plant, duration=1.)
-    assert outcome.reason == "lease_expired" and len(events(ticks, "late_tick")) == 1
+    _, ticks, outcome = go(Blocking(wall, [.12], N=32), diagnostics=diagnostics, loop=run_real_time, plant=plant, duration=1.)
+    assert outcome.reason == "lease_expired" and len(diagnostics_of(diagnostics, "late_tick")) == 1
     assert not plant.applied and plant.calls == ["start", "stop"]
 
 
 def test_after_a_short_blocking_solve_the_next_tick_is_behind_but_not_late(wall):
     """One 12 ms solve, requested at 0: the tick due at 10 ms runs at 12 ms with knot 1,
     2 ms behind but within its period, so the ticks keep their times."""
+    diagnostics = []
     plant = Plant()
-    _, ticks, _ = go(Blocking(wall, [.012]), loop=run_real_time, plant=plant, duration=.03, update_period=1.)
-    assert commanded(ticks) == [(.012, 2.), (.02, 3.)] and not events(ticks, "late_tick")
+    _, ticks, _ = go(Blocking(wall, [.012]), diagnostics=diagnostics, loop=run_real_time, plant=plant, duration=.03, update_period=1.)
+    assert commanded(ticks) == [(.012, 2.), (.02, 3.)] and not diagnostics_of(diagnostics, "late_tick")
 
 
 def test_a_blocking_solve_comes_after_the_command_so_no_command_goes_out_past_its_lease(wall):
     """The plan of the request at 0 takes effect at 10 ms; the request there blocks for
     120 ms, past that plan's lease (100 ms). Its command went out before, at 10 ms; the
     next tick, at 130 ms, faults on the next plan's lease (10 ms + 100 ms)."""
+    diagnostics = []
     plant = Plant()
-    _, ticks, outcome = go(Blocking(wall, [0., .12], N=32), loop=run_real_time, plant=plant, duration=1.)
-    assert outcome.reason == "lease_expired" and not events(ticks, "late_tick")  # late after the first command
+    _, ticks, outcome = go(Blocking(wall, [0., .12], N=32), diagnostics=diagnostics, loop=run_real_time, plant=plant, duration=1.)
+    assert outcome.reason == "lease_expired" and not diagnostics_of(diagnostics, "late_tick")  # late after the first command
     assert [round(t, 6) for t, _ in plant.applied] == [.01]
 
 
@@ -601,16 +624,44 @@ def test_schedule_skips_missed_slots_and_period_0_is_due_at_every_call():
     assert all(due(t) for t in (5., 5., 5.004))
 
 
-def test_real_time_rejects_a_plan_above_the_raw_effort_limit_before_any_knot_is_commanded(wall):
-    """Only plan 2's last knot is over the limit; the run stops on its arrival, sending nothing."""
+@pytest.mark.parametrize("compensation", [None, LatencyCompensation(latency_s=.01)])
+def test_real_time_uses_and_replaces_a_plan_with_an_unused_excessive_future_knot(wall, compensation):
     mpc, plant, ticks = Mpc(delay=1, over=2), Plant(), []
     outcome = run_real_time(plant, mpc, Task(), tick_callbacks=[ticks.append],
-                            settings=RealTimeSettings(.01, .01), compensation=None, duration=.1)
-    assert outcome.status == "fault" and outcome.reason == "effort_limit"
-    assert len(mpc.requests) == 2 and mpc.waiting is None and plant.calls[-1] == "stop"
-    assert all(command[1] == 1. for _, command in plant.applied)  # plan 2 is never commanded
-    assert ticks[-1].command is None and all(k.plan is None or k.plan.torques[0, 1] == 1. for k in ticks)
-    assert ticks[-1].faulted.torques[-1, 6] == 26.1 and all(k.faulted is None for k in ticks[:-1])  # for the record
+                            settings=RealTimeSettings(.01, .01), compensation=compensation, duration=.08)
+    assert outcome.status == "timeout" and outcome.reason is None
+    selected = next(k.plan for k in ticks if k.plan_activated and k.plan.torques[0, 1] == 0.)
+    assert selected.torques[-1, 6] == 26.1
+    assert [(round(k.t, 6), k.command[1]) for k in ticks if k.plan is selected] == [(.04, 0.), (.05, 0.)]
+    assert any(k.command is not None and k.plan is not selected for k in ticks if k.t > .05)
+    assert all(command[6] == 1. for _, command in plant.applied)
+    assert plant.calls == ["start", "stop"]
+
+
+@pytest.mark.parametrize("compensation", [None, LatencyCompensation(latency_s=.01)])
+@pytest.mark.parametrize("transform", [False, True])
+def test_real_time_checks_the_selected_command_after_its_law(wall, compensation, transform):
+    def scaled(plan, t, state):
+        command = SampleKnot()(plan, t, state)
+        return Command(command.requested * .5, command.applied * .5)
+
+    plant, ticks = Plant(), []
+    origin = 0. if compensation is None else .01
+    outcome = run_real_time(plant, Mpc(N=4, replies=1, over=1), Task(),
+                            scaled if transform else SampleKnot(), [ticks.append],
+                            settings=RealTimeSettings(.01, 1.), compensation=compensation, duration=origin + .03)
+    assert any(k.plan is not None and k.plan.torques[-1, 6] == 26.1 for k in ticks)
+    assert plant.calls == ["start", "stop"]
+    selected = next(k for k in ticks if abs(k.t - origin - .02) < 1e-9)
+    if transform:
+        assert outcome.status == "timeout" and outcome.reason is None
+        assert selected.command[6] == pytest.approx(13.05)
+        assert plant.applied[-1][0] == selected.t
+    else:
+        assert outcome.status == "fault" and outcome.reason == "effort_limit"
+        assert ticks[-1] is selected and selected.command is None
+        assert selected.requested_command[6] == 26.1
+        assert all(t < selected.t for t, _ in plant.applied)
 
 
 @pytest.mark.parametrize("loop, kw", [
@@ -629,15 +680,29 @@ def test_a_stop_request_ends_the_run_without_a_later_command(wall, loop, kw):
     assert plant.calls == ["start", "stop"]
 
 
-def test_the_plants_events_ride_on_the_next_tick(wall):
-    """take_events once per tick, before the tick is built: an event from advance arrives with the next."""
+def test_plant_diagnostics_arrive_before_the_next_tick_once(wall):
     class Emitting(Plant):
         def advance(self, t):
             super().advance(t)
-            self.events.append(Event(t, "pacing_behind", "behind", dict(behind_s=.001)))
+            self.diagnostics.append(Diagnostic(t, "pacing_behind", "behind", dict(behind_s=.001)))
 
-    _, ticks, _ = go(Mpc(), plant=Emitting(), duration=.02, solve_latency_s=0.)
-    assert [[e.t for e in k.events] for k in ticks] == [[], [.01], [pytest.approx(.02)]]
+    plant, ticks, diagnostics, order = Emitting(), [], [], []
+
+    def diagnostic(value):
+        diagnostics.append(value)
+        order.append(('diagnostic', value.t))
+
+    def tick(value):
+        ticks.append(value)
+        order.append(('tick', value.t))
+
+    run_virtual_time(plant, Mpc(), Task(), tick_callbacks=[tick], diagnostic_callbacks=[diagnostic],
+                     settings=VirtualTimeSettings(.01, .01, 0.), duration=.02)
+    assert [value.t for value in diagnostics] == pytest.approx([.01, .02])
+    assert order == [('tick', 0.), ('diagnostic', .01), ('tick', .01),
+                     ('diagnostic', pytest.approx(.02)), ('tick', pytest.approx(.02))]
+    assert all(isinstance(value, Diagnostic) for value in diagnostics)
+    assert plant.take_diagnostics() == []
 
 
 def test_timing_presets_and_explicit_loop_selection(wall):
@@ -654,7 +719,7 @@ def test_timing_presets_and_explicit_loop_selection(wall):
         outcome = loop(plant, Mpc(delay=2), Task(), HoldFirst(), [ticks.append], settings=timing,
                        compensation=None, duration=.08)
         assert outcome.status == "timeout" and len(ticks) == 9 and type(plant.clock).__name__ == clock
-        assert [round(k.t, 6) for k in ticks if k.new][0] == .03  # 25 ms declared; the third poll
+        assert [round(k.t, 6) for k in ticks if k.plan_activated][0] == .03  # 25 ms declared; the third poll
 
 
 def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
@@ -673,6 +738,7 @@ def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
     stamps, plant, task = [], Timed(), Reach(timeout_s=10.)
     record = RunRecord(tmp_path / "r", task=task, params=TIAGO)
     run_virtual_time(plant, Mpc(N=32, dt=.002), task, tick_callbacks=[record],
+                     solve_completed_callbacks=[record.solve_completed],
                      settings=VirtualTimeSettings(.002, .002, 0.), duration=2.)
     body = np.diff(stamps) * 1e3
     print(f"tick body ms: median {np.median(body):.3f}, p99 {np.percentile(body, 99):.3f}, max {body.max():.3f}")
@@ -688,4 +754,4 @@ def test_compensated_plans_take_effect_at_a_tick_a_rounding_error_before_their_o
     timing, ticks = VirtualTimeSettings(.002, .02, .02), []
     outcome = run_virtual_time(Plant(), Mpc(N=32, dt=.03), Task(), SampleKnot(), [ticks.append], settings=timing,
                                compensation=LatencyCompensation(latency_s=.02), duration=2.2)
-    assert outcome.status == "timeout" and sum(k.new for k in ticks) == 110
+    assert outcome.status == "timeout" and sum(k.plan_activated for k in ticks) == 110

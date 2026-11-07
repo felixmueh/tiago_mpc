@@ -371,6 +371,7 @@ class Controller:
 
     def __init__(self):
         self.events, self.torque, self.gate = [], np.arange(7, dtype=float), None
+        self.wall_s = .002
         self.solver = NS(params=PARAMS.solver.native(), admm_iters=10, admm_eps_abs=0., admm_eps_rel=.01, admm_check_every=1,
                          get_row_groups=lambda: [dict(kind=k, rho=np.float32(r)) for k, r in enumerate((.1, .03, 5e-4))],
                          **{name: (lambda *a, name=name, **k: self.events.append((name, a, k)))
@@ -395,7 +396,7 @@ class Controller:
         xu = np.concatenate([np.r_[(k + 1) * x, self.torque + k] for k in range(N - 1)] + [N * x])
         raw = NS(sqp_iters=np.array([2]), pcg_iters=np.array([[3], [0]]),
                  admm_iters=np.array([5]), admm_linsys_iters=np.array([20]))
-        return NS(xu_best=xu, solve=NS(stats=raw, solve_time_us=1234.), wall_s=.002, iterations=2,
+        return NS(xu_best=xu, solve=NS(stats=raw, solve_time_us=1234.), wall_s=self.wall_s, iterations=2,
                   budget_hit=False, row_viol=np.array([.01, .02]), admm_linsys="pcg", pred_err=.01)
 
 
@@ -497,10 +498,39 @@ def test_a_plan_above_the_raw_effort_limit_is_returned(controller):
     assert np.all(np.abs(m.result().torques) > 26.)
 
 
+@pytest.mark.parametrize('worker', [False, True])
+@pytest.mark.parametrize('wall_s', [-.001, np.nan, np.inf, None], ids=['negative', 'nan', 'inf', 'missing'])
+def test_result_refuses_invalid_native_solve_duration(controller, process, monkeypatch, worker, wall_s):
+    if wall_s is None:
+        solve = Mpc._solve
+
+        def without_duration(self, *args):
+            plan = solve(self, *args)
+            del plan.stats['wall_s']
+            return plan
+
+        monkeypatch.setattr(Mpc, '_solve', without_duration)
+    else:
+        controller.wall_s = wall_s
+    m = process() if worker else Mpc(PARAMS, BINARY)
+    m.request(state(), REFERENCE)
+    with pytest.raises(KeyError if wall_s is None else ValueError, match='wall_s'):
+        m.result(block=True)
+
+
+@pytest.mark.parametrize('worker', [False, True])
+def test_result_accepts_zero_native_solve_duration(controller, process, worker):
+    controller.wall_s = 0.
+    m = process() if worker else Mpc(PARAMS, BINARY)
+    m.request(state(), REFERENCE)
+    assert m.result(block=True).stats['wall_s'] == 0.
+
+
 @pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite"])
 def test_every_knot_is_checked(controller, bad):
     m = Mpc(PARAMS, BINARY)
-    fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)), measured_t=1.)
+    fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)),
+                  stats=dict(wall_s=0.), measured_t=1.)
     assert mpc._checked(m, Plan(**fields), 1., 1.)
     if bad == "shape":
         fields.update(states=np.zeros((N + 1, 14)), torques=np.ones((N, 7)))

@@ -12,7 +12,7 @@ from test_loops import Mpc, Plant, Task, commanded, go
 from tiago_mpc.dynamics import Tanh
 from tiago_mpc.laws import PlanFeedback, SampleKnot
 from tiago_mpc.util import inertia_gains
-from tiago_mpc.interfaces import Plan, State
+from tiago_mpc.interfaces import Diagnostic, Plan, Prediction, SolveCompleted, State, Tick
 from tiago_mpc.record import RunRecord, from_dict, load_run, to_dict
 from tiago_mpc.tiago import Q_START, arm_urdf, urdf_friction
 
@@ -27,10 +27,11 @@ def test_study_retains_an_error_before_the_first_recorded_tick(tmp_path, compens
     assert result["fault"] == "RuntimeError: first plan rejected"
 
 
-def run_example(mpc, settings, duration=.1, plant=None):
+def run_example(mpc, settings, duration=.1, plant=None, diagnostics=None):
     plant, ticks = plant or Plant(), []
     outcome = run_compensated(plant, mpc, Task(), tick_callbacks=[ticks.append],
-                              settings=settings, duration=duration)
+                              settings=settings, duration=duration,
+                              diagnostic_callbacks=[] if diagnostics is None else [diagnostics.append])
     return plant, ticks, outcome
 
 
@@ -56,12 +57,12 @@ def test_plan_feedback_follows_the_plans_constant_acceleration_between_knots():
 @pytest.mark.parametrize("latency", [0., .02, .025])
 def test_uncompensated_it_times_requests_and_plans_as_run_virtual_time(latency):
     """The same request times and commands as virtual settings with the declared latency."""
-    stock, mine = Mpc(), Mpc()
-    _, a, _ = go(stock, solve_latency_s=latency, duration=.12)
-    _, b, _ = run_example(mine, Compensated(latency, .01, .01, False), duration=.12)
+    stock, mine, a_diagnostics, b_diagnostics = Mpc(), Mpc(), [], []
+    _, a, _ = go(stock, solve_latency_s=latency, duration=.12, diagnostics=a_diagnostics)
+    _, b, _ = run_example(mine, Compensated(latency, .01, .01, False), duration=.12, diagnostics=b_diagnostics)
     assert stock.requests == mine.requests and commanded(a) == commanded(b)
-    assert [(k.t, k.new, k.update) for k in a] == [(k.t, k.new, k.update) for k in b]
-    assert [[e.kind for e in k.events] for k in a] == [[e.kind for e in k.events] for k in b]  # late_plan
+    assert [(k.t, k.plan_activated, k.update) for k in a] == [(k.t, k.plan_activated, k.update) for k in b]
+    assert a_diagnostics == b_diagnostics  # late_plan
 
 
 class Moving(Plant):
@@ -97,13 +98,14 @@ class Predicting(Mpc):
 def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp_path, substep):
     plant, mpc, ticks = Moving(), Predicting(), []
     record = RunRecord(tmp_path / "r", task=Task())
-    run_compensated(plant, mpc, Task(), SampleKnot(), tick_callbacks=[record, ticks.append],
+    run_compensated(plant, mpc, Task(), SampleKnot(), tick_callbacks=[record, ticks.append], diagnostic_callbacks=[record.diagnostic],
+                    solve_completed_callbacks=[record.solve_completed],
                     settings=Compensated(.02, .01, .01, prediction_substep_s=substep, predictor="gpu"),
                     duration=.1)  # the fake sim_forward is the plant's model
     # Requested at 0, 20, ..., 80 ms, each from the state predicted 20 ms on, dated then.
     assert [round(t, 6) for t, _ in mpc.requests] == [.02, .04, .06, .08, .1]
     assert commanded(ticks)[:4] == [(.02, 1.), (.03, 2.), (.04, 1.), (.05, 2.)]  # knot 0 runs
-    assert all(e.kind == 'prediction_request' for k in ticks for e in k.events)  # no plan is late
+    assert all(d.kind == 'prediction_request' for d in record.diagnostics)  # no plan is late
     np.testing.assert_allclose(record.plans["update_t"], [0., .02, .04, .06, .08])
     np.testing.assert_allclose(record.plans["t0"], [.02, .04, .06, .08, .1])
     effect = first_tick_of_each_plan(record)
@@ -111,7 +113,7 @@ def test_compensated_plans_start_at_the_predicted_state_and_run_their_knot_0(tmp
     actual = np.c_[record.ticks["q"][effect], record.ticks["qd"][effect]]
     np.testing.assert_allclose(requested_states(record), actual, atol=1e-6)
     assert 'requested_state' not in record.plans
-    assert all(set(k.plan.stats) == {'wall_s'} for k in ticks if k.new)
+    assert all(set(k.plan.stats) == {'wall_s'} for k in ticks if k.plan_activated)
     record.save()
     loaded = load_run(record.out)
     np.testing.assert_array_equal(requested_states(loaded), requested_states(record))
@@ -129,17 +131,44 @@ def test_compensation_runs_on_virtual_time_and_returns_an_outcome():
     assert from_dict(to_dict(timing), [Compensated]) == timing
 
 
-def test_faulted_plan_does_not_enter_active_prediction_error_or_replace_active_tick_plan(tmp_path):
-    record, ticks = RunRecord(tmp_path/'faulted', task=Task()), []
+@pytest.mark.parametrize('compensated', [False, True])
+def test_custom_loop_keeps_typed_solve_context_and_separate_diagnostics(compensated):
+    mpc, ticks, solves, diagnostics = Predicting(), [], [], []
+    outcome = run_compensated(Moving(), mpc, Task(), SampleKnot(), [ticks.append],
+        settings=Compensated(.02, .01, .01, compensate=compensated, predictor='gpu'), duration=.03,
+        solve_completed_callbacks=[solves.append], diagnostic_callbacks=[diagnostics.append])
+    assert outcome.status == 'timeout'
+    assert len(solves) == len(mpc.requests) == 2
+    assert all(isinstance(value, Tick) for value in ticks)
+    assert all(isinstance(value, SolveCompleted) for value in solves)
+    assert diagnostics and all(isinstance(value, Diagnostic) for value in diagnostics)
+    assert len({id(value) for value in [*ticks, *solves, *diagnostics]}) == len(ticks)+len(solves)+len(diagnostics)
+    assert [value.request_time_s for value in solves] == pytest.approx([0., .02])
+    assert [value.initial.t for value in solves] == pytest.approx([.02, .04] if compensated else [0., .02])
+    for value, initial in zip(solves, mpc.requested_states):
+        assert value.initial is initial and value.plan.t0 == initial.t
+        assert isinstance(initial, Prediction if compensated else State)
+        np.testing.assert_array_equal(value.reference, np.zeros((11, 6)))
+        assert not value.reference.flags.writeable and not value.initial.q.flags.writeable
+        assert value.updates is None
+
+
+def test_unused_excessive_future_knot_keeps_activation_and_prediction_metrics(tmp_path):
+    record, ticks = RunRecord(tmp_path/'unused-knot', task=Task()), []
     outcome = run_compensated(Moving(), Predicting(over=4), Task(), SampleKnot(), [record, ticks.append],
-                              settings=Compensated(.02, .01, .01, predictor='gpu'), duration=.1)
-    assert outcome.reason == 'effort_limit'
-    assert ticks[-1].plan is ticks[-2].plan and not ticks[-1].new
+                              settings=Compensated(.02, .01, .01, predictor='gpu'), duration=.1,
+                              solve_completed_callbacks=[record.solve_completed],
+                              diagnostic_callbacks=[record.diagnostic])
+    assert outcome.status == 'timeout' and outcome.reason is None
+    selected = next(k.plan for k in ticks if k.plan_activated and k.plan.torques[-1, 6] == 26.1)
+    assert any(k.command is not None and k.plan is selected for k in ticks)
+    assert ticks[-1].plan_activated and ticks[-1].plan is not selected
     record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t)
     record.save()
-    assert len(first_tick_of_each_plan(record)) == 2 and len(record.plans['t0']) == 3
+    assert len(first_tick_of_each_plan(record)) == len(record.plans['t0']) == 5
+    assert record.plans['torques'][3, -1, 6] == 26.1
     result = row(record.out, 'reach', 'compensated', 20., True)
-    assert result['fault'] == 'effort_limit' and result['takeover_q_mrad'] == 0.
+    assert result['status'] == 'timeout' and result['fault'] is None and result['takeover_q_mrad'] == 0.
     assert result['takeover_qd_rad_s'] == 0.
 
 

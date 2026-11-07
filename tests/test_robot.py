@@ -146,10 +146,10 @@ def test_the_first_apply_activates_and_stop_hands_back(rig):
     assert rig.arm.calls[-1] == "handback" and rig.arm.owner == "arm_right_controller"
     assert all(not u.any() for u in rig.arm.published[-5:])
     assert plant.run_state == dict(activated=True, restored=True, cleanup_errors=[])
-    activated, handback = plant.take_events()
+    activated, handback = plant.take_diagnostics()
     assert activated.kind == "activated" and activated.data["switch_s"] == pytest.approx(.015, abs=1e-3)
     assert handback.kind == "handback" and handback.data == dict(restored=True, errors=[])
-    assert plant.take_events() == []
+    assert plant.take_diagnostics() == []
 
 
 def test_stop_before_activation_publishes_nothing_and_keeps_the_controller(rig):
@@ -232,7 +232,7 @@ def test_a_failed_activation_hands_back_but_never_claims_restoration(rig, fault,
         plant.stop()
     assert rig.arm.calls[-1] == "handback" and plant.run_state["restored"] is False
     assert not rig.arm.published[-1].any()
-    handback, = plant.take_events()  # the switch failed: no activated event
+    handback, = plant.take_diagnostics()  # the switch failed: no activated event
     assert handback.kind == "handback" and not handback.data["restored"] and "uncertain" in handback.data["errors"][-1]
 
 
@@ -268,15 +268,16 @@ def test_the_robot_refuses_virtual_time_before_any_ros_call(rig):
 
 
 def test_run_real_time_activates_once_and_hands_back(rig):
-    plant, ticks = robot.RosPlant(robot.RobotConfig(execute=True)), []
+    plant, ticks, diagnostics = robot.RosPlant(robot.RobotConfig(execute=True)), [], []
     outcome = run_real_time(plant, Mpc(N=32), Task(), tick_callbacks=[ticks.append],
+                            diagnostic_callbacks=[diagnostics.append],
                             settings=RealTimeSettings(.01, .01), compensation=None, duration=.1)
     assert outcome.status == "timeout"
-    assert [e.kind for k in ticks for e in k.events if e.kind != "late_plan"] == ["activated"]  # behind, not late
+    assert [d.kind for d in diagnostics if d.kind != "late_plan"] == ["activated"]  # behind, not late
     assert rig.arm.calls.count("switch") == 1 and rig.arm.calls[-1] == "handback"
     assert plant.run_state["restored"] is True and not rig.arm.published[-1].any()
     assert sum(u.any() for u in rig.arm.published) >= 10
-    assert [e.kind for e in plant.take_events()] == ["handback"]  # after the loop
+    assert [e.kind for e in plant.take_diagnostics()] == ["handback"]  # after the loop
 
 
 def test_run_real_time_never_activates_for_a_goal_already_met(rig):
@@ -347,7 +348,7 @@ def test_confirmed_execution_runs_on_the_robot_and_records_the_handback(rig, mon
     assert (task.target_m if module is rc else task.start_m) == (.5, .1, .2)
     assert run.metadata["status"] == "timeout" and run.metadata["plant"] == dict(activated=True, restored=True,
                                                                                  cleanup_errors=[])
-    assert [e.kind for e in run.events if e.kind != "late_plan"] == ["activated", "handback"]
+    assert [e.kind for e in run.diagnostics if e.kind != "late_plan"] == ["activated", "handback"]
     assert run.provenance["ros_distro"] is None
     with np.load(tmp_path / "r" / "replay.npz") as replay:
         assert json.loads(str(replay["metadata_json"]))["time_basis"] == "wall"

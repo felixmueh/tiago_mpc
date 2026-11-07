@@ -204,6 +204,90 @@ def test_duration_caps_the_tasks_own(tmp_path):
     assert f8.Figure8(period_s=4.).duration_s == 4.
 
 
+@pytest.mark.parametrize('faulted', [False, True])
+def test_common_runner_forwards_each_stream_and_drains_handback_once(tmp_path, monkeypatch, capsys, faulted):
+    from test_loops import Mpc as FakeMpc, Plant, Task
+
+    class Emitting(Plant):
+        def start(self, clock):
+            super().start(clock)
+            self.diagnostics.append(rc.tm.Diagnostic(clock.now(), 'startup', 'starting'))
+
+        def stop(self):
+            super().stop()
+            self.diagnostics.append(rc.tm.Diagnostic(self.clock.now(), 'handback', 'handed back'))
+
+    plant, ticks, solves, diagnostics, order = Emitting(), [], [], [], []
+    mpc = FakeMpc()
+    mpc.params = replace(rc.tm.TIAGO, N=mpc.N, dt_s=mpc.dt, cost=rc.tm.default_cost(mpc.N))
+    monkeypatch.setattr(SimConfig, 'build', lambda self: plant)
+
+    def diagnostic(value):
+        assert isinstance(value, rc.tm.Diagnostic)
+        diagnostics.append(value)
+        order.append(value.kind)
+
+    def tick(value):
+        assert isinstance(value, rc.tm.Tick)
+        ticks.append(value)
+        order.append('tick')
+
+    def solved(value):
+        assert isinstance(value, rc.tm.SolveCompleted)
+        solves.append(value)
+
+    handling = rc.tm.RejectOnEffort(effort=(.01,)*7) if faulted else rc.tm.EffortClip()
+    record = common.run_experiment(SimConfig(), mpc, Task(), SampleKnot(), VirtualTimeSettings(.002, .002, 0.),
+        effort_handling=handling,
+        duration=.004, out=tmp_path / 'r', tick_callbacks=[tick], solve_completed_callbacks=[solved],
+        diagnostic_callbacks=[diagnostic])
+    assert record.metadata['status'] == ('fault' if faulted else 'timeout')
+    assert order[0] == 'startup' and order[-1] == 'handback'
+    assert len(ticks) == len(record.ticks['t']) == (1 if faulted else 3)
+    assert len(solves) == len(mpc.requests) == len(record.plans['t0']) == (1 if faulted else 2)
+    assert record.plans['update_t'] == pytest.approx([value.request_time_s for value in solves])
+    np.testing.assert_array_equal(record.ticks['plan'], [0] if faulted else [0, 1, 1])
+    assert [value.kind for value in diagnostics].count('startup') == 1
+    assert [value.kind for value in diagnostics].count('handback') == 1
+    assert record.diagnostics == diagnostics == load_run(record.out).diagnostics
+    assert plant.take_diagnostics() == [] and plant.calls == ['start', 'stop']
+    printed = capsys.readouterr().err
+    assert printed.count('starting (') == printed.count('handed back (') == 1
+
+
+def test_a_failing_handback_observer_still_closes_and_saves_the_run(tmp_path, monkeypatch):
+    from test_loops import Mpc as FakeMpc, Plant, Task
+
+    closed = []
+
+    class Emitting(Plant):
+        def stop(self):
+            super().stop()
+            self.diagnostics.append(rc.tm.Diagnostic(self.clock.now(), 'handback', 'handed back'))
+
+        def close(self):
+            closed.append('plant')
+
+    plant, mpc = Emitting(), FakeMpc()
+    params = replace(rc.tm.TIAGO, N=mpc.N, dt_s=mpc.dt, cost=rc.tm.default_cost(mpc.N))
+    mpc.params, mpc.close = params, lambda: closed.append('mpc')
+    monkeypatch.setattr(SimConfig, 'build', lambda self: plant)
+    monkeypatch.setattr(rc.tm, 'Mpc', NS(compile=lambda params: mpc))
+
+    def fail(diagnostic):
+        assert diagnostic.kind == 'handback'
+        raise RuntimeError('handback observer failed')
+
+    out = tmp_path / 'r'
+    with pytest.raises(RuntimeError, match='handback observer failed'):
+        common.run_experiment(SimConfig(), params, Task(), SampleKnot(), VirtualTimeSettings(.002, .002, 0.),
+                              duration=.004, out=out, diagnostic_callbacks=[fail])
+    assert closed == ['plant', 'mpc'] and plant.calls == ['start', 'stop']
+    run = load_run(out)
+    assert [value.kind for value in run.diagnostics] == ['handback']
+    assert plant.take_diagnostics() == [] and (out / 'replay.npz').exists()
+
+
 def test_a_run_without_solves_reports_zero_work(tmp_path):
     """The goal met at the start, or a zero duration: one tick, no solve."""
     params, timing = replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)), VirtualTimeSettings.ideal()

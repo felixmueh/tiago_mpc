@@ -68,6 +68,12 @@ continues during solving and early-result waiting, within its existing lease.
 There is one pending plan; back-to-back updates do not queue future plans while
 one is waiting to activate.
 
+A collected result can activate when
+`tick_time >= max(request_time + solve_latency, predicted_origin)`. Zero declared
+latency can therefore activate at the request tick through the same time
+inequality as any other delay. Each command tick admits at most one new request,
+including ideal back-to-back updates.
+
 ## Physical propagation and feedback
 
 Propagation has its own friction coefficients, Coulomb law, armature and maximum
@@ -77,12 +83,20 @@ armature (`ARMATURE_KG_M2`), as are the predictor's and the simulated plant's; e
 friction explicitly, as above. The optimizer's model
 and the real/simulated plant remain separately configured.
 
-From an older measurement to the request time, propagation replays the commands
-the loop actually sent, splitting partial command intervals. For the future it
-forecasts the previous execution law on the propagated state. Before effort
+Each loop calls the predictor once before submitting a compensated MPC request.
+The predictor is a frozen callable with a prepared physical model; it keeps no
+command history or delay estimate. The loop chooses the target time from its
+fixed forecast or previous observed solve delay.
+
+Propagation starts from the latest measured state under the currently held
+command. At each future command tick it evaluates the active plan's command law
+on the predicted state, including the selected effort handling. Before effort
 control starts, the arm is treated as held by its onboard position controller.
-Future feedback is a model assumption: a forecast cannot know later sensor noise,
-disturbances or how an unexpected delay will change the actual feedback.
+In virtual time the measurement is already at the current command boundary.
+For an older measurement, propagation assumes the current command was held since
+that measurement; it does not reconstruct earlier publications or plan changes.
+Future feedback is also a model assumption: a forecast cannot know later sensor
+noise, disturbances or how an unexpected delay will change the actual feedback.
 
 Actual `PlanFeedback` continues to use the latest measured state at every command
 tick. Prediction does not replace the measured feedback used by PD or the robot's
@@ -126,7 +140,7 @@ state-freshness and robot safety checks remain in force. A non-compensated plan
 uses its original state time for both timestamps.
 
 An unsupported forecast ends the loop with `prediction_unavailable`: for example,
-the observation is outside retained command history, the target is beyond a valid
+the observation is later than the current time, the target is beyond a valid
 lease, or a forecast command would fail validity or effort checks. Simulation
 uses the same law and separate effort policy for actual and predicted commands:
 `effort_handling=EffortClip()` means propagation uses the clipped torque, and
@@ -141,9 +155,11 @@ lease, law and effort checks in both execution and forecasting, returning
 wall time this preparation happens after the current valid command and callbacks;
 the loop stops and hands back immediately if preparation fails.
 
-`Plan.stats` contains solver statistics. Request association belongs to
-`Tick.plan_request_t` when a new or faulted plan is recorded; `RunRecord` uses it
-for `plans.update_t`, including when an early result is superseded before use.
+`Plan.stats` contains solver statistics. `SolveCompleted` carries the plan and
+its request time; `RunRecord.solve_completed` uses that time for `plans.update_t`.
+Every completed plan is saved, including an early result superseded before use
+or a returned plan whose lease expires before activation. Tick records identify
+the active plan by its row in this completed-plan table.
 Execution does not copy plans to add arrival/activation timestamps to their
 statistics. Run records retain the compensation configuration and measured and
 predicted origin times. Robot `State.t` is still monotonic receipt time; delay before receipt and

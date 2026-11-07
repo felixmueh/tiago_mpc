@@ -1,8 +1,7 @@
-"""Optional latency prediction: an independent physical model and sent-command history."""
+"""Optional latency prediction under the current command and future control updates."""
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Literal
 
@@ -54,42 +53,24 @@ def _tick_at_or_after(t: float, first: float, period: float) -> float:
     return first + max(0, math.ceil((t - first) / period - _TOLERANCE)) * period
 
 
+@dataclass(frozen=True)
 class _Predictor:
-    """One run's physical model and bounded successful-publication history."""
+    """Predict from explicit inputs with one reusable physical model and workspace."""
 
-    def __init__(
-        self,
-        config: LatencyCompensation,
-        safety: SafetyInterface = ExecutionSafety(),
-        effort_handling: EffortHandling | None = RejectOnEffort(),
-    ) -> None:
-        self.config, self.safety = config, safety
-        self.effort_handling = effort_handling
-        self.model = pin.buildModelFromUrdf(str(arm_urdf()))
-        self.model.armature = np.asarray(config.armature)
-        self.data = self.model.createData()
-        self.history: deque[tuple[float, np.ndarray | None]] = deque([(-math.inf, None)])
-        self.previous_latency_s = config.initial_latency_s
-        self.observed_time_s: float | None = None
+    # TODO: decide if this should be kept as simple as it is or combined with the simulator.
+    config: LatencyCompensation
+    safety: SafetyInterface = ExecutionSafety()
+    effort_handling: EffortHandling | None = RejectOnEffort()
+    model: pin.Model = field(init=False, repr=False, compare=False)
+    data: pin.Data = field(init=False, repr=False, compare=False)
 
-    @property
-    def latency_s(self) -> float:
-        delay = self.config.latency_s
-        return self.previous_latency_s if delay == "previous" else float(delay)
+    def __post_init__(self) -> None:
+        model = pin.buildModelFromUrdf(str(arm_urdf()))
+        model.armature = np.asarray(self.config.armature)
+        object.__setattr__(self, "model", model)
+        object.__setattr__(self, "data", model.createData())
 
-    def sent(self, t: float, command: np.ndarray) -> None:
-        value = np.array(command, dtype=float)
-        value.flags.writeable = False
-        self.history.append((t, value))
-        # Retain the command already held at the oldest usable observation time.
-        cutoff = self.observed_time_s
-        while len(self.history) > 1 and cutoff is not None and self.history[1][0] <= cutoff:
-            self.history.popleft()
-
-    def arrived(self, delay_s: float) -> None:
-        self.previous_latency_s = delay_s
-
-    def predict(
+    def __call__(
         self,
         state: State,
         now: float,
@@ -100,49 +81,33 @@ class _Predictor:
         next_tick: float,
         command_period: float,
     ) -> Prediction | None:
-        """Replay publications to now, then forecast from the actually held command.
+        """Propagate the held command, then decide future commands on predicted states.
 
-        None: the observation/history or committed plan cannot support the forecast.
+        The current held command approximates the whole stale-measurement interval;
+        no earlier publications are retained. Future ticks use the current plan.
+        None means the observation or committed plan cannot support the forecast.
         Unknown startup effort is onboard position hold, matching SimPlant.command=None.
         During startup, execution safety is checked when the first plan arrives.
         No observation or plan timestamp is changed.
         """
-        if (state.t > now + _TOLERANCE or state.t < self.history[0][0]
-                or at < now - _TOLERANCE):
+        if state.t > now + _TOLERANCE or at < now - _TOLERANCE:
             return None
-        self.observed_time_s = state.t
-        while len(self.history) > 1 and self.history[1][0] <= state.t:
-            self.history.popleft()
         if plan is not None:
             expires = plan.t0 + len(plan.torques)*plan.dt
             if at > expires + _TOLERANCE:
                 return None
         q, qd, t = np.array(state.q, copy=True), np.array(state.qd, copy=True), state.t
-
-        def advance(until: float, torque: np.ndarray | None) -> None:
-            nonlocal q, qd, t
-            while t < until - 1e-12:
-                h = min(self.config.substep, until - t)
-                if torque is not None:
-                    q, qd = plant_euler(self.model, self.data, q, qd, torque, h,
-                                       self.config.friction, self.config.friction_law)
-                t += h
-            t = until
-
-        held = None
-        for changed_at, torque in self.history:
-            if changed_at <= state.t:
-                held = torque
-            elif changed_at <= now:
-                advance(changed_at, held)
-                held = torque
-            else:
-                break
-        advance(now, held)
         held = command
         tick = _tick_at_or_after(now + 1e-9, next_tick, command_period)
         while t < at - 1e-12:
-            advance(min(at, tick), held)
+            until = min(at, tick)
+            while t < until - 1e-12:
+                h = min(self.config.substep, until - t)
+                if held is not None:
+                    q, qd = plant_euler(self.model, self.data, q, qd, held, h,
+                                       self.config.friction, self.config.friction_law)
+                t += h
+            t = until
             if t >= at - 1e-12:
                 break
             if plan is not None:

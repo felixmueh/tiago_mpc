@@ -383,7 +383,7 @@ def _position(reference: np.ndarray | None, n: int) -> np.ndarray:
 
 
 def _checked(mpc, plan, t, measured_t):
-    """The plan answers the request, is well formed and finite; effort is run's check."""
+    """Check the returned trajectory and native solve duration against the request."""
     if plan.t0 != t:
         raise RuntimeError("MPC result does not match the request")
     if plan.measured_t != measured_t:
@@ -393,6 +393,9 @@ def _checked(mpc, plan, t, measured_t):
     if (plan.states.shape != (mpc.N, 14) or plan.torques.shape != (mpc.N - 1, 7)
             or not np.isfinite(plan.states).all() or not np.isfinite(plan.torques).all()):
         raise RuntimeError("invalid MPC plan")
+    took = plan.stats["wall_s"]
+    if not isinstance(took, (float, int)) or not math.isfinite(took) or took < 0:
+        raise ValueError("MPC wall_s must be finite nonnegative seconds")
     return plan
 
 

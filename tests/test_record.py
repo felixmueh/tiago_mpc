@@ -14,12 +14,13 @@ from experiments.random100.run import Case, Random100Config, Random100Study
 from experiments.reach import Reach
 from gato.cost_menu import CostMenu, LinearTerm, Term
 from test_loops import Mpc, Plant, Task
+from tiago_mpc.interfaces import Diagnostic, State, Tick
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
 from tiago_mpc.laws import EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback, RejectOnEffort, SampleKnot
 from tiago_mpc.loops import RealTimeSettings, VirtualTimeSettings, run_virtual_time
 from tiago_mpc.mpc import TIAGO, AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
-from tiago_mpc.record import CLASSES, FORMAT, Event, RunRecord, from_dict, load_run, to_dict
+from tiago_mpc.record import CLASSES, FORMAT, Console, RunRecord, from_dict, load_run, to_dict
 from tiago_mpc.robot import Checks, RobotConfig
 from tiago_mpc.safety import CollisionSafetySettings
 from tiago_mpc.sim import SimConfig
@@ -32,7 +33,7 @@ def test_a_run_is_written_and_read_back(tmp_path):
     class Emitting(Plant):
         def advance(self, t):
             super().advance(t)
-            self.events.append(Event(t, "pacing_behind", "behind", dict(behind_s=.001)))
+            self.diagnostics.append(Diagnostic(t, "pacing_behind", "behind", dict(behind_s=.001)))
 
     plant, mpc, task, timing = Emitting(measure=lambda t: t - .002), Mpc(wall=.004), Task(), VirtualTimeSettings(.01, .02, .01)
     record = RunRecord(tmp_path / "r", task=task, params=TIAGO,
@@ -42,8 +43,10 @@ def test_a_run_is_written_and_read_back(tmp_path):
     assert written["format"] == FORMAT and written["metadata"]["status"] == "running"
     assert written["config"]["settings"] == dict(type="VirtualTimeSettings", command_period=.01, update_period=.02,
                                                solve_latency_s=.01)
-    outcome = run_virtual_time(plant, mpc, task, SampleKnot(), [record], settings=timing, duration=.05)
-    record.add_events([Event(plant.clock.now(), "handback", "handed back", dict(restored=True, errors=[]))])
+    outcome = run_virtual_time(plant, mpc, task, SampleKnot(), [record],
+                               solve_completed_callbacks=[record.solve_completed],
+                               diagnostic_callbacks=[record.diagnostic], settings=timing, duration=.05)
+    record.diagnostic(Diagnostic(plant.clock.now(), "handback", "handed back", dict(restored=True, errors=[])))
     record.ticks["distance_m"] = np.arange(len(record.ticks["t"])) * .1
     record.plans["label"] = np.array([f"plan {i}" for i in range(len(record.plans["t0"]))])
     record.metadata.update(status=outcome.status, end_t=outcome.t, results=dict(final_distance_m=.5))
@@ -57,14 +60,14 @@ def test_a_run_is_written_and_read_back(tmp_path):
     np.testing.assert_allclose(plans["update_t"], [.002, .022, .042], atol=1e-12)  # the requests' ticks
     np.testing.assert_allclose(plans["t0"], [0., .02, .04], atol=1e-12)  # their states
     assert set(plans) == {"t0", "measured_t", "update_t", "states", "torques", "wall_s", "label"}
-    assert [(e.kind, round(e.t, 6)) for e in record.events] == [
+    assert [(e.kind, round(e.t, 6)) for e in record.diagnostics] == [
         ("pacing_behind", .012), ("late_plan", .012), ("pacing_behind", .022), ("pacing_behind", .032),
         ("late_plan", .032), ("pacing_behind", .042), ("pacing_behind", .052), ("handback", .052)]
 
     run = load_run(tmp_path / "r", classes=[Task])
     assert run.out == record.out and run.config == record.config and run.config["task"] == task
     assert run.config["case"] == "first" and run.provenance == record.provenance and run.metadata == record.metadata
-    assert run.events == record.events
+    assert run.diagnostics == record.diagnostics
     for loaded, saved in ((run.ticks, ticks), (run.plans, plans)):
         assert set(loaded) == set(saved)
         for key, value in saved.items():
@@ -79,9 +82,48 @@ def test_a_run_is_written_and_read_back(tmp_path):
     assert "speed" in again.ticks and again.metadata["results"] == dict(final_distance_m=.5, later=1.)
 
 
+def test_diagnostics_before_the_first_tick_use_its_state_time_on_read_and_save(tmp_path):
+    record = RunRecord(tmp_path / 'r')
+    early = Diagnostic(12.5, 'activated', 'activated', {'switch_s': .01})
+    record.diagnostic(early)
+    assert record.diagnostics == [early]
+    record(Tick(13., State(12., np.zeros(7), np.zeros(7)), None, None, False, False))
+    record.diagnostic(Diagnostic(14., 'handback', 'handed back', {'restored': True, 'errors': []}))
+    expected = [Diagnostic(.5, 'activated', 'activated', {'switch_s': .01}),
+                Diagnostic(2., 'handback', 'handed back', {'restored': True, 'errors': []})]
+    assert record.diagnostics == expected and early.t == 12.5
+    record.save()
+    saved = json.loads((record.out / 'events.json').read_text())
+    assert saved == [dict(t=.5, kind='activated', message='activated', data={'switch_s': .01}),
+                     dict(t=2., kind='handback', message='handed back', data={'restored': True, 'errors': []})]
+    loaded = load_run(record.out)
+    assert loaded.diagnostics == expected
+    loaded.save()
+    assert json.loads((record.out / 'events.json').read_text()) == saved
+    assert load_run(record.out).diagnostics == expected
+
+
+def test_console_formats_each_diagnostic_kind_once_or_every_occurrence(capsys):
+    first = Diagnostic(1., 'late_plan', 'first late plan')
+    repeated = Diagnostic(2., 'late_plan', 'second late plan')
+    handback = Diagnostic(3., 'handback', 'handed back')
+    console = Console()
+    for diagnostic in (first, repeated, handback):
+        console(diagnostic)
+    assert capsys.readouterr().err.splitlines() == [
+        'first late plan (further late_plan diagnostics are recorded only)',
+        'handed back (further handback diagnostics are recorded only)',
+    ]
+    console = Console(only_first=False)
+    console(first)
+    console(repeated)
+    assert capsys.readouterr().err.splitlines() == ['first late plan', 'second late plan']
+
+
 def test_save_refuses_a_column_of_the_wrong_length(tmp_path):
     record = RunRecord(tmp_path / "r", task=Task())
-    run_virtual_time(Plant(), Mpc(), Task(), tick_callbacks=[record],
+    run_virtual_time(Plant(), Mpc(), Task(), tick_callbacks=[record], diagnostic_callbacks=[record.diagnostic],
+                     solve_completed_callbacks=[record.solve_completed],
                      settings=VirtualTimeSettings(.01, .01, 0.), duration=.03)
     record.ticks["short"] = np.zeros(2)
     with pytest.raises(ValueError, match="rows"):

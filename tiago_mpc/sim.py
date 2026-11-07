@@ -23,7 +23,7 @@ from gato.common import rk4
 
 from tiago_mpc.clock import VirtualClock, WallClock
 from tiago_mpc.dynamics import CoulombLaw, Friction, StickSlip, plant_euler, plant_rk4
-from tiago_mpc.interfaces import Event, State
+from tiago_mpc.interfaces import Diagnostic, State
 from tiago_mpc.tiago import ARMATURE_KG_M2, Q_START, arm_urdf
 
 
@@ -66,7 +66,7 @@ class SimPlant:
     State.t is when the state is read. sync_real_time=True paces a virtual-time run for
     watching: advance also waits until the wall clock, counted from the first tick
     (after the warm-up), has caught up with the virtual time. Each time it falls behind
-    is a pacing_behind event; it never changes the results. On wall time it raises.
+    is a pacing_behind diagnostic; it never changes the results. On wall time it raises.
     model and data are the Pinocchio handles.
     """
 
@@ -85,8 +85,8 @@ class SimPlant:
         self.q, self.qd = np.array(config.q, dtype=float), np.array(config.qd, dtype=float)
         self.command: np.ndarray | None = None
         self.run_state: dict[str, Any] = {}
-        self._events: list[Event] = []
-        self.step_callback: Callable[[State], Sequence[Event]] | None = None
+        self._diagnostics: list[Diagnostic] = []
+        self.step_callback: Callable[[State], Sequence[Diagnostic]] | None = None
 
     def start(self, clock: VirtualClock | WallClock) -> None:
         if self.config.sync_real_time and isinstance(clock, WallClock):
@@ -104,10 +104,10 @@ class SimPlant:
         self._integrate(self.clock.now())
         self.command = np.array(command, dtype=float)
 
-    def take_events(self) -> list[Event]:
-        """The events since the last call (pacing_behind), forgotten here."""
-        events, self._events = self._events, []
-        return events
+    def take_diagnostics(self) -> list[Diagnostic]:
+        """The diagnostics since the last call (pacing_behind), forgotten here."""
+        diagnostics, self._diagnostics = self._diagnostics, []
+        return diagnostics
 
     def advance(self, t: float) -> None:
         """Integrate to t with the held command, then let the clock reach t: virtual time
@@ -121,7 +121,7 @@ class SimPlant:
             wall, start = self._paced_from
             wait = wall + (t - start) - time.monotonic()
             if wait < 0 and not self._behind:  # fell behind; caught up again when it can wait
-                self._events.append(Event(t, "pacing_behind", f"sync_real_time: the run fell {-1e3 * wait:.1f} ms "
+                self._diagnostics.append(Diagnostic(t, "pacing_behind", f"sync_real_time: the run fell {-1e3 * wait:.1f} ms "
                                                               "behind the wall clock (the results are unaffected)",
                                           dict(behind_s=-wait)))
             self._behind = wait < 0
@@ -150,7 +150,7 @@ class SimPlant:
             if self.step_callback is not None:
                 # Only observers need detached endpoint states. The command-loop
                 # clock advances after the complete command interval as usual.
-                self._events.extend(self.step_callback(State(self.t, q.copy(), qd.copy())))
+                self._diagnostics.extend(self.step_callback(State(self.t, q.copy(), qd.copy())))
         self.t = t  # instead of accumulating substep rounding
 
     def stop(self) -> None:

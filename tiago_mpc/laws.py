@@ -26,14 +26,6 @@ def _validate_lease(plan: Plan, t: float, max_plan_age_s: float | None) -> Fault
     return Fault("lease_expired") if t >= expires else None
 
 
-def validate_plan(plan: Plan) -> Fault | None:
-    """Refuse a plan with any knot torque beyond the robot's raw effort limits.
-
-    Every knot is checked on arrival because it may be commanded before the lease ends.
-    """
-    return Fault("effort_limit") if np.any(np.abs(plan.torques) > limits().effort) else None
-
-
 @dataclass(frozen=True)
 class ExecutionSafety:
     """Check a plan's finite horizon and age from its original measured observation.

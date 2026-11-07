@@ -126,12 +126,12 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     `--solve-latency`. `record.FORMAT` became 2: `load_run` refuses a run saved before
     (format 1, the old keys) and names the code that wrote it (22 October: old
     recordings stay readable only by their own code).
-  - **`tick_callbacks`:** the loops', `run_compensated`'s and the timings' `callbacks`
-    became `tick_callbacks`, the callbacks that see every `Tick` (the `Callback` alias
-    stays). Interactive execution also offers typed message observers, including
-    solve completion (2026-11-03).
+  - **Callbacks:** `tick_callbacks`, `solve_completed_callbacks` and
+    `diagnostic_callbacks` receive `Tick`, `SolveCompleted` and `Diagnostic`
+    respectively. Their aliases are `TickCallback`, `SolveCompletedCallback` and
+    `DiagnosticCallback`.
   - **`tiago_mpc/interfaces.py`**, renamed from `plan.py` (Felix's option a): one module
-    for the data that crosses the interfaces (`State`, `Plan`, `Event`, `Tick`) and the
+    for the data that crosses the interfaces (`State`, `Plan`, `Diagnostic`, `Tick`) and the
     protocols, the leaf of the import graph. `Law` became `ControlLaw` (`tm.ControlLaw`).
   - **`hz_to_s(hz)`** (`util.py`, `tm.hz_to_s`) writes a period as a rate:
     `hz_to_s(500)` and `hz_to_s(100)` are the timings' default command and
@@ -163,9 +163,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (two loops, `VirtualClock` and `WallClock`).
 - **2026-10-23: the effort check belongs to the execution side.** `Mpc` and
   `MpcProcess` return what they planned (`result()` checks only that the plan is
-  well formed and finite); real-time execution checks every knot of a plan when it
-  arrives and each command before it is sent. Virtual time delegates effort
-  handling to the composed command law (2026-11-03). Reason: a simulator such as the visualizer must
+  well formed and finite); execution validates each command before it is sent.
+  Virtual time delegates effort handling to the selected command policy.
+  Reason: a simulator such as the visualizer must
   be able to execute, clip or inspect an over-limit plan. Clipping stays a
   simulation setting: the robot path never clips a torque.
 - **2026-10-24: the root re-exports with plain imports.** Felix chose proposal A: ordinary
@@ -460,10 +460,108 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   vectors in `ROOT_FRAME`, with NaN for no orientation target (README, "Costs").
   Weight tuning and arrival criteria remain open below.
 - **Limits through ADMM are approximate:** returned plans can exceed the
-  planning bounds, so the planning margins and the independent raw-limit checks
-  on knots and commands stay. An ADMM return is no feasibility certificate.
+  planning bounds, so the planning margins and independent command-policy
+  checks stay. An ADMM return is no feasibility certificate.
 
 ## Execution
+
+- **2026-11-07: name loop state by its role** (Felix).
+  Use `active_plan` for the plan supplying commands and `pending_plan` for a
+  completed plan waiting for its activation time. These can coexist. Remove
+  the extra `new` plan reference; a per-tick `plan_activated` boolean records
+  activation and supplies `Tick.plan_activated`. Name request decisions, unread
+  solves, collection times and counters explicitly. Keep short `s` and `t` for
+  measured state and command time. Naming changes do not alter saved columns or
+  introduce additional execution state. Add short comments where timing semantics
+  or estimator policy need context; do not repeat self-explanatory variable names.
+
+- **2026-11-07: keep virtual-time command ticks linear** (Felix).
+  Receive and activate eligible previous work, optionally forecast and submit one
+  due request, receive and activate a newly submitted result if already eligible,
+  then apply the command, emit Tick and advance physics. Keep these ordered
+  checks visible in one command loop. A few repeated result-handling assignments
+  are preferable to an inner scheduling loop or hidden state updates in helpers.
+  Both collection positions use the same time inequalities; zero declared
+  latency needs no distinct timing rule. Retain the measured-mode collection
+  bound, per-tick request limit and independent physics overlap.
+  Normal completion and fault drainage run after the final tick, outside the
+  command loop, and never apply the drained plan or advance physics. Cancellation
+  returns from the single boundary checkpoint and leaves teardown to the owner.
+
+- **2026-11-06: record plans only through completed-solve callbacks** (Felix).
+  `RunRecord.solve_completed` records every returned plan and its request time,
+  including unused, expired and terminally drained results. Ticks record the
+  active plan, mapped by identity to its saved row. Remove `Tick.faulted` and
+  `Tick.plan_request_t` and the corresponding loop bookkeeping. A normal fault
+  still ends execution before applying a refused command. `run_experiment`
+  registers the recorder with all three notification groups. The saved columns
+  and format stay the same; plan rows now cover every completed solve.
+
+- **2026-11-06: remove foreground timing from the numerical loops** (Felix).
+  Drop `controller_wall_s`, its `perf_counter` accumulation and the separate
+  `SolveCompleted.wall_s` field. Completed solves retain their request snapshot
+  and native plan, whose `stats['wall_s']` supplies the solver duration. Keep the
+  observed real request-to-result delay used for compensation and virtual-time
+  availability unchanged. Detailed foreground costs belong to optional profiling;
+  the visualizer already measures its solver child's controller duration.
+
+- **2026-11-06: use a sequence of before-tick callbacks** (Felix).
+  `run_virtual_time` accepts `before_tick_callbacks=()`, matching the other
+  callback groups. Each receives the boundary `State` in registration order,
+  once per command boundary. Callbacks may block to pause the retained loop.
+  Cancellation is checked after the group, before result collection and command
+  evaluation. Keep this ordinary sequence without a callback dispatcher.
+
+- **2026-11-06: make prediction one calculation before each MPC request** (Felix).
+  Use a frozen callable predictor with a prepared physical model and explicit
+  inputs. Remove its publication history, `sent` and `arrived` methods and hidden
+  delay estimator. The loop owns the fixed or previous observed delay and chooses
+  the prediction target. Propagate the latest measurement under the held command,
+  then evaluate the active plan's command law and effort policy on predicted
+  feedback at future command ticks. A virtual measurement is already at the
+  command boundary. For older measurements, accept the approximation that the
+  currently held command covered the interval since observation; do not add
+  machinery to reconstruct earlier publications or plan changes. The physical
+  workspace is reused, but predictions do not depend on previous calls.
+
+- **2026-11-06: keep the university experiment framework straightforward** (Felix).
+  Fix correctness issues when the solution is simple. Accept minor edge cases
+  rather than complicating the numerical loop. Ordinary `try/finally` cleanup is
+  sufficient; do not add special machinery to choose between competing observer
+  and execution exceptions.
+
+- **2026-11-06: separate typed notifications and keep every request snapshot** (Felix).
+  The loops expose independent tick, solve-completed and diagnostic callbacks.
+  `Diagnostic` replaces the generic `Event` payload; `Tick` contains no diagnostic
+  bundle. Each notification has one delivery path, with no dispatcher or generic
+  message callback. The plant supplies diagnostics through `take_diagnostics`.
+  Keep an owned `last_mpc_request_snapshot` for every request, even without
+  observers, and use it for the solve-completed notification. The clear name
+  needs no explanatory comment. Snapshotting detaches mutable producer arrays
+  once; it does not depend on which observers are registered.
+  Real-time notifications run after command publication, preserving the execution
+  order. Virtual-time plant diagnostics are delivered before the pause checkpoint.
+  `RunRecord` receives ticks, completed solves and diagnostics separately. It
+  normalizes diagnostic timestamps relative to the first recorded state, including diagnostics received
+  before that tick. Console is a diagnostic callback. The saved `events.json`
+  payload and replay schema stay unchanged.
+
+- **2026-11-06: receive plans directly and emit notifications afterwards** (Felix).
+  MPC owns request/result transport and result validation. The loop owns virtual
+  availability, plan activation and the forecast's delay estimate. Keep those
+  assignments visible in the loop instead of state-mutating nested functions.
+  Notification helpers only report completed numerical work to observers; events
+  do not supply plans or drive internal scheduling. A small amount of repeated
+  result-handling code is preferable to hidden changes through `nonlocal`.
+
+- **2026-11-06: leave effort and lease validation to execution policies** (Felix).
+  Remove whole-plan effort rejection and `validate_plan` from the loops and
+  public API. Unapplied excessive knot torques do not reject a plan. The command
+  law and effort policy decide the command; real-time execution still checks
+  requested and applied torque against the raw limits. Solver results remain
+  structurally checked and finite. Remove the separate forecast-age preflight
+  from the real-time loop; a requested plan may later be refused by the ordinary
+  lease policy. Forecast commands use the same execution policies.
 
 - **2026-11-06: keep finite durations and the runtime guard in native loops** (Felix).
   Both loops require finite, nonnegative seconds and retain the ten-minute
@@ -474,12 +572,12 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   process; its migration remains deferred until the native layout is final.
 
 - **2026-11-06: pause the retained simulation loop at one ordinary checkpoint** (Felix).
-  `before_tick` runs once per command boundary before result collection or command
-  evaluation. It may block while an outstanding solve finishes in the worker;
-  the ordinary result path consumes that reply after resume. Remove the separate
+  Before-tick callbacks run once per command boundary before result collection or
+  command evaluation. They may block while an outstanding solve finishes in the
+  worker. The ordinary result path consumes that reply after resume. Remove the separate
   quiescence flag, repeated boundary callback and deferred completion events.
-  Pause retains the plant, solver, clock, schedule and forecast history. The
-  cancellation flag is checked only after this callback at each boundary. Once
+  Pause retains the plant, solver, clock, schedule and forecast delay estimate. The
+  cancellation flag is checked only after these callbacks at each boundary. Once
   admitted, a tick completes its command decision and physics interval before
   cancellation or pause is acknowledged; waiting for a solve is acceptable.
   Detected breaches may request a pause at an ordinary command boundary.
@@ -493,7 +591,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   first possible activation boundary. Declared zero latency collects immediately;
   measured latency collects no earlier than the next command tick, even for a
   reported zero duration. A result still waits for its measured availability and
-  predicted origin. Update the predictor's previous delay once per result.
+  predicted origin. Update the loop's previous delay once per result.
   Activate an eligible plan before preparing the next request and reuse the
   current command decision for forecasting and application. An immediate ideal
   result invalidates that decision. Retain terminal drainage for controller reuse.
@@ -510,9 +608,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   use ordinary `ExecutionSafety.validate` without calling user safety early.
 
 - **2026-11-06: consolidate execution checks outside the loops** (Felix).
-  `validate_plan` returns `Fault | None` for whole-plan arrival checks.
-  `RealTimeSafety` binds the mandatory lease and raw effort checks around the
-  selected user policies and is shared by execution and forecasting. The
+  `RealTimeSafety` binds the mandatory lease and `RealTimeEffort` binds the raw
+  effort checks around the selected user policies. Execution and forecasting
+  share these policies. The
   string-returning plan, lease and command fault helpers are removed from the
   loops and public API. Waiting plans keep their mandatory expiry check before
   activation, without evaluating their law or user safety early.
@@ -536,9 +634,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   evaluates its control law, then applies the effort policy. Its result is
   `Command(requested, applied)` or `Fault(reason, requested=None)`. The optional
   requested torque retains refused commands for observers. Forecast refusals
-  make the prediction unavailable without an execution event. Whole-plan checks
-  on real-time arrival remain separate, including waiting-plan expiry before
-  activation. Real-time commands retain the strict 100 ms lease and raw effort
+  make the prediction unavailable without an execution event. Waiting-plan expiry
+  before activation remains separate. Real-time commands retain the strict 100 ms lease and raw effort
   rejection. No plan-modifier chain or general result framework is introduced.
   `RealTimeSettings` replaces the `RealTime` name; `run_real_time` requires
   `settings=`; the settings object is plain data.
@@ -585,7 +682,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   inputs. No consumer fallback or separate optional prediction argument.
   Remove `_arrived`/`_activated` and lifecycle timing data from `Plan.stats`;
   it contains solver statistics. Keep only the recorder's request association
-  on `Tick.plan_request_t`, so superseded results retain the correct request.
+  on `SolveCompleted.request_time_s`, so superseded results retain the correct request.
 
 - **2026-10-28: integrate optional latency prediction on main**
   (Felix; implementation delegated, KISS). Keep the two loops and their independent
@@ -593,8 +690,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   for MPC; measured `State` stays unchanged for feedback and checks. Fixed forecast
   delay or previous completed request's delay with an initial estimate; no access
   to the current solve's future duration. CPU propagation reuses the simulator's
-  Euler step with explicit independent friction/law/armature and actual sent-command
-  history for old measurements. Early replies wait; late replies retain their
+  Euler step with explicit independent friction/law/armature and a held-command
+  approximation for old measurements. Early replies wait; late replies retain their
   predicted origin. `Plan.measured_t` preserves the measurement-age lease while
   `Plan.t0` defines trajectory time. Compensation defaults off (on since
   2026-10-30, the next entry); no solver,
@@ -752,22 +849,21 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     `ROS_DISTRO`; `gato_source` became its internal `_gato_source`), `Console`,
     `RunRecord(out, **pieces)` (renamed from `Record`) and `load_run(path,
     classes)`, which share one read interface (`config`, `ticks`, `plans`,
-    `events`, `metadata`), and `FORMAT = 1` (2 since 2026-10-26). `Event` lives in `plan.py`, beside
+    `diagnostics`, `metadata`), and `FORMAT = 1` (2 since 2026-10-26). `Diagnostic` lives in `interfaces.py`, beside
     `Tick`, so that inside the package only the root imports `record.py`, and no
     import is lazy (Felix, same day).
   - **A run directory:** `summary.json` (`format`, `provenance`, `config`, the
     pieces written at the start, and `metadata`: `status`, `reason`, `end_t`, one
     flat `results`, `error`, `plant`), `ticks.npz` (with `plan` and `update`
     indices), `plans.npz` (with `update_t`), `events.json`, and `replay.npz`, the
-    visualizer's contract, exported from the record. A plan that faulted
-    (`validate_plan`) is saved as the last row of `plans.npz`; it never takes effect,
-    so no tick's `plan` index points at it, and the faulting tick carries it as
-    `Tick.faulted` (Felix, same day). Old recordings stay readable only by their own
+    visualizer's contract, exported from the record. Every returned plan is saved
+    from `SolveCompleted`, including plans that never activate; no tick's `plan`
+    index points at an unused plan. Old recordings stay readable only by their own
     code (22 October).
-  - **Events, not warnings:** the loops and plants emit `late_tick`, `overrun`,
+  - **Diagnostics, not warnings:** the loops and plants emit `late_tick`, `overrun`,
     `late_plan`, `pacing_behind`, `activated` and `handback`; every occurrence is
     recorded, the console prints the first of each kind. Plants hand theirs to the
-    loop with `take_events()`, once per tick and once after the loop (`stop()`'s).
+    loop with `take_diagnostics()`, once per tick and once after the loop (`stop()`'s).
     The late tick after the robot's activation is not emitted; its delay is the
     `activated` event's `switch_s`. `PlantInterface.settings` became `run_state`,
     the plant's final values.

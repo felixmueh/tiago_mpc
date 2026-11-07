@@ -64,7 +64,7 @@ class ContinuousPlant:
     def apply(self, command):
         self.commands.append((self.t, command.copy()))
 
-    def take_events(self):
+    def take_diagnostics(self):
         return []
 
     def stop(self):
@@ -84,7 +84,7 @@ def test_feedback_samples_between_command_ticks_and_holds_original_timestamps(mo
     plant.start(tm.VirtualClock())
     plant.state()  # warmup
     plant.state()  # first tick: no duplicate truth event
-    first, = plant.take_events()
+    first, = plant.take_diagnostics()
     assert first.t == 0 and first.kind == 'plant_state'
     saved = plant.state()
     for t in (.008, .016):
@@ -101,7 +101,7 @@ def test_feedback_samples_between_command_ticks_and_holds_original_timestamps(mo
     assert plant.state().t == pytest.approx(.04)
     assert plant.clock.now() == .04 - 1e-16  # no advance beyond deadline/backwards clock
     plant.start(tm.VirtualClock())  # reset clears the old sampled state and truth events
-    assert plant.state().t == 0 and len(plant.take_events()) == 1
+    assert plant.state().t == 0 and len(plant.take_diagnostics()) == 1
     with pytest.raises(ValueError, match='virtual time'):
         plant.start(tm.WallClock())
 
