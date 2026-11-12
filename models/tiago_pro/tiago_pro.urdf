@@ -8,8 +8,9 @@ Copyright (c) 2024 PAL Robotics S.L. All rights reserved. Licensed under the Apa
 http://www.apache.org/licenses/LICENSE-2.0
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License. -->
 <!-- Modified for tiago_mpc (Apache-2.0, section 4b): the friction and damping of
-     both arms' seven joints are questionable values supplied on 2026-10-21, not
-     PAL's 1.0. Origin and values: models/tiago_pro/README.md. -->
+     both arms' seven joints are not PAL's 1.0: the right arm's are fitted from real
+     chirps (2026-10-30), the left arm's are questionable values supplied on
+     2026-10-21. Origin and values: models/tiago_pro/README.md. -->
 <robot name="tiago_pro">
   <!-- ARGUMENTS -->
   <!-- PROPERTIES -->
@@ -1767,7 +1768,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_1_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="43.0" lower="-4.71238898038469" upper="0.5235987755982988" velocity="2.5"/>
-    <dynamics damping="4.7" friction="1.66"/> <!-- supplied, see the README -->
+    <dynamics damping="4.96" friction="2.06"/> <!-- fitted 2026-10-30, see the README -->
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-4.642388980384689" soft_upper_limit="0.4535987755982988"/>
   </joint>
   <!-- ARM 2 LINK -->
@@ -1798,7 +1799,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_2_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="43.0" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
-    <dynamics damping="9.69" friction="1.15"/> <!-- supplied, see the README -->
+    <dynamics damping="6.67" friction="2.25"/> <!-- fitted 2026-10-30, see the README -->
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.3734609527920614" soft_upper_limit="1.0644640137963142"/>
   </joint>
   <!-- ARM 3 LINK -->
@@ -1829,7 +1830,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_3_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.6179938779914944" upper="2.6179938779914944" velocity="2.5"/>
-    <dynamics damping="5.3" friction="1.16"/> <!-- supplied, see the README -->
+    <dynamics damping="3.21" friction="1.93"/> <!-- fitted 2026-10-30, see the README -->
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.5479938779914946" soft_upper_limit="2.5479938779914946"/>
   </joint>
   <!-- ARM 4 LINK -->
@@ -1860,7 +1861,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_4_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.443460952792061" upper="1.1344640137963142" velocity="2.5"/>
-    <dynamics damping="4.2" friction="0.912"/> <!-- supplied, see the README -->
+    <dynamics damping="2.66" friction="1.62"/> <!-- fitted 2026-10-30, see the README -->
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.3734609527920614" soft_upper_limit="1.0644640137963142"/>
   </joint>
   <!-- ARM 5 LINK -->
@@ -1892,7 +1893,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_5_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-1.5707963267948966" upper="3.6651914291880923" velocity="2.5"/>
-    <dynamics damping="3.66" friction="1.25"/> <!-- supplied, see the README -->
+    <dynamics damping="3.57" friction="1.78"/> <!-- fitted 2026-10-30, see the README -->
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-1.5007963267948965" soft_upper_limit="3.5951914291880924"/>
   </joint>
   <!-- ARM 6 LINK -->
@@ -1923,7 +1924,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_6_link"/>
     <axis xyz="0 0 -1"/>
     <limit effort="26" lower="-1.8849555921538759" upper="3.001966313430247" velocity="2.5"/>
-    <dynamics damping="2.95" friction="0.473"/> <!-- supplied, see the README -->
+    <dynamics damping="1.86" friction="1.03"/> <!-- fitted 2026-10-30, see the README -->
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-1.8149555921538758" soft_upper_limit="2.931966313430247"/>
   </joint>
   <!-- ARM 7 LINK -->
@@ -1954,7 +1955,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
     <child link="arm_right_7_link"/>
     <axis xyz="0 0 1"/>
     <limit effort="26" lower="-2.6179938779914944" upper="2.6179938779914944" velocity="2.5"/>
-    <dynamics damping="2.95" friction="0.56"/> <!-- supplied, see the README -->
+    <dynamics damping="2.16" friction="0.94"/> <!-- fitted 2026-10-30, see the README -->
     <safety_controller k_position="20" k_velocity="20" soft_lower_limit="-2.5479938779914946" soft_upper_limit="2.5479938779914946"/>
   </joint>
   <!--***********************-->

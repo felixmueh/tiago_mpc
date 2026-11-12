@@ -2,28 +2,38 @@
 this module is the one that writes and reads it. (Small single purpose serialization library.)
 
 - RunRecord records a run. Created before the run, it writes where the code came from
-  (provenance()), the run's configuration and timeseries data recorded every
-  command tick; save() writes the files.
+  (provenance()), the run's configuration, every command tick and completed solve;
+  save() writes the files.
 - load_run reads a saved run back with the same interface.
-- Console prints the first event of each kind as it happens.
-- to_dict and from_dict turn configurations (frozen dataclasses) into JSON and back;
+- Console prints the first diagnostic of each kind as it happens.
+- to_dict and from_dict turn configurations (dataclasses) into JSON and back;
   they also work on their own, e.g. for a study's configuration.
 
 Usually experiments.common.run_experiment creates the record, runs the loop and saves,
 also after a fault or an error. By hand, given an mpc, a task (a Reach), a law, a
-timing, a plant_config and the run directory out (None: _expr_data/<task type>/<UTC
+settings, a plant_config and the run directory out (None: _expr_data/<task type>/<UTC
 time>/);
 
 >>> import numpy as np
 >>> import tiago_mpc as tm
 >>> from experiments.reach import Reach
+>>> safety, effort = tm.ExecutionSafety(), tm.EffortClip()
 >>> record = tm.RunRecord(out, task=task, params=mpc.params, plant=plant_config, law=law,
-...                       timing=timing, duration=1.)  # every piece the loop gets
+...                       settings=settings, compensation=None, safety=safety,
+...                       effort_handling=effort, duration=1.)  # every piece the loop gets
 >>> plant = plant_config.build()
+>>> console = tm.Console()
 >>> try:
-...     outcome = timing.run(plant, mpc, task, law, [record, tm.Console()], duration=1.)
+...     outcome = tm.run_virtual_time(plant, mpc, task, law, tick_callbacks=[record],
+...                                   settings=settings, compensation=None, safety=safety,
+...                                   effort_handling=effort, duration=1.,
+...                                   solve_completed_callbacks=[record.solve_completed],
+...                                   diagnostic_callbacks=[record.diagnostic, console])
 ...     record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t)
 ... finally:
+...     for diagnostic in plant.take_diagnostics():
+...         record.diagnostic(diagnostic)
+...         console(diagnostic)
 ...     plant.close()
 ...     record.save()
 >>> record.ticks["distance_m"] = np.array([task.distance(q) for q in record.ticks["q"]])
@@ -32,38 +42,44 @@ time>/);
 
 >>> run = tm.load_run(record.out, classes=[Reach])  # Reach: rebuild the task piece too
 >>> list(run.config)
-['task', 'params', 'plant', 'law', 'timing', 'duration']
->>> run.config["timing"] == timing
+['task', 'params', 'plant', 'law', 'settings', 'compensation', 'safety', 'effort_handling', 'duration']
+>>> run.config["settings"] == settings
 True
 >>> sorted(run.ticks)
 ['command', 'distance_m', 'plan', 'q', 'qd', 'state_t', 't', 'update']
 >>> run.metadata["results"]
 {'final_distance_m': ...}
 
->>> data = tm.to_dict(tm.VirtualTime.ideal())
+>>> data = tm.to_dict(tm.VirtualTimeSettings.ideal())
 >>> data
-{'type': 'VirtualTime', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0, 'compensation': None}
->>> tm.from_dict(data) == tm.VirtualTime.ideal()
+{'type': 'VirtualTimeSettings', 'command_period': 0.002, 'update_period': 0.01, 'solve_latency_s': 0.0}
+>>> tm.from_dict(data) == tm.VirtualTimeSettings.ideal()
 True
+>>> real = tm.to_dict(tm.RealTimeSettings())
+>>> real
+{'type': 'RealTimeSettings', 'command_period': 0.002, 'update_period': 0.01}
+>>> tm.from_dict(real) == tm.RealTimeSettings()
+True
+>>> tm.from_dict(tm.to_dict(tm.ExecutionSafety(None)))
+ExecutionSafety(max_plan_age_s=None)
 
-A run directory holds (FORMAT 3):
+A run directory holds (FORMAT 4):
 - summary.json: format; provenance (provenance()); config, the named pieces given to
   RunRecord, each to_dict-ed, written at the start; metadata: status, reason, end_t,
   results, error and plant (the plant's run_state);
 - ticks.npz, one row per command tick: t, state_t, q, qd, command (NaN when none was
   sent), plan (the index of the plan in effect, -1 before the first), update (the index
   of the control update started at that tick, -1 for none), plus experiment columns;
-- plans.npz, one row per plan: t0 (the predicted origin when compensated), measured_t
-  (the original observation time), update_t (the tick whose update started it),
+- plans.npz, one row per completed solve in completion order: t0 (the predicted origin
+  when compensated), measured_t (the original observation time), update_t (the request
+  time from SolveCompleted),
   states (P, N, 14), torques (P, N - 1, 7), every key of plan.stats that no plan has as
-  None, plus experiment columns; a plan that faulted is the last row (Tick.faulted), and
-  no tick's plan index points at it. update_t comes from the new/faulted plan's
-  Tick.plan_request_t, preserving its request association even if another result
-  was superseded before use. Plan.stats contains solver statistics only;
-- events.json: every event, a list of {"t", "kind", "message", "data"}.
+  None, plus experiment columns. Returned plans remain recorded even if the run ends,
+  their lease expires or another result supersedes them before activation; no tick's
+  plan index points at an unused plan. Plan.stats contains solver statistics only;
+- events.json: every diagnostic, a list of {"t", "kind", "message", "data"}.
 Times count from the first state's time. The files are plain JSON and npz, readable
-without this package. Importing this module loads no ROS and no compiled GATO module;
-nothing in the package imports it (Event lives in interfaces.py, beside Tick).
+without this package. Importing this module loads no ROS and no compiled GATO module.
 """
 from __future__ import annotations
 
@@ -82,25 +98,29 @@ import urllib.parse
 import urllib.request
 
 import gato
-from gato import SolverParams
+from gato.cost_menu import CostMenu, LinearTerm, Term
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
-from tiago_mpc.loops import RealTime, VirtualTime
-from tiago_mpc.mpc import AdmmLimits, MpcParams
+from tiago_mpc.laws import (EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback,
+                            RejectOnEffort, SampleKnot)
+from tiago_mpc.collision import Collision, cover_hashes
+from tiago_mpc.loops import RealTimeSettings, VirtualTimeSettings
+from tiago_mpc.mpc import AdmmLimits, MpcParams, SolverSettings
 from tiago_mpc.prediction import LatencyCompensation
-from tiago_mpc.interfaces import Event, Tick
+from tiago_mpc.interfaces import Diagnostic, Plan, SolveCompleted, Tick
 from tiago_mpc.robot import Checks, RobotConfig
 from tiago_mpc.safety import CollisionSafetySettings
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import ROOT
 
-FORMAT = 3
+FORMAT = 4
 CLASSES: tuple[type, ...] = (  # the package's configuration classes that from_dict rebuilds
-    SolverParams, MpcParams, AdmmLimits, Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
-    PlanFeedback, FrictionFeedforward,
-    VirtualTime, RealTime, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
+    SolverSettings, MpcParams, AdmmLimits, CostMenu, Term, LinearTerm,
+    Friction, Tanh, Sign, StickSlip, SampleKnot, HoldFirst,
+    PlanFeedback, FrictionFeedforward, EffortClip, RejectOnEffort, ExecutionSafety,
+    VirtualTimeSettings, RealTimeSettings, LatencyCompensation, SimConfig, RobotConfig, Checks, CollisionSafetySettings,
+    Collision,
 )
 
 
@@ -165,44 +185,46 @@ def _gato_source() -> dict[str, Any]:
 
 def provenance() -> dict[str, Any]:
     """Where the code came from: this repository's commit and source status, the package
-    versions, the GATO this environment runs (_gato_source) and ROS_DISTRO (None without ROS)."""
+    versions, the GATO this environment runs (_gato_source), ROS_DISTRO (None without ROS)
+    and the content hash of each stored collision cover (collision.cover_hashes), which a
+    Collision names."""
     return dict(repository_commit=_git("rev-parse", "HEAD"), repository_status=_git("status", "--short"),
                 versions={k: importlib.metadata.version(k) for k in ("gato-mpc", "grid-rbd", "pin", "numpy")},
-                gato=_gato_source(), ros_distro=os.environ.get("ROS_DISTRO"))
+                gato=_gato_source(), ros_distro=os.environ.get("ROS_DISTRO"), collision_covers=cover_hashes())
 
 
 class Console:
-    """A tick callback that prints each event's message to stderr; only_first: only the first
-    event of each kind. add_events takes events from outside a tick (a plant's after the
-    loop)."""
+    """Print diagnostics to stderr.
+
+    only_first prints only the first diagnostic of each kind.
+    """
 
     def __init__(self, only_first: bool = True) -> None:
         self.only_first = only_first
         self.seen: set[str] = set()
 
-    def __call__(self, tick: Tick) -> None:
-        self.add_events(tick.events)
-
-    def add_events(self, events: Iterable[Event]) -> None:
-        for event in events:
-            if not self.only_first:
-                print(event.message, file=sys.stderr)
-            elif event.kind not in self.seen:
-                self.seen.add(event.kind)
-                print(f"{event.message} (further {event.kind} events are recorded only)", file=sys.stderr)
+    def __call__(self, diagnostic: Diagnostic) -> None:
+        """Print one diagnostic according to only_first."""
+        if not self.only_first:
+            print(diagnostic.message, file=sys.stderr)
+        elif diagnostic.kind not in self.seen:
+            self.seen.add(diagnostic.kind)
+            print(f"{diagnostic.message} (further {diagnostic.kind} diagnostics are recorded only)", file=sys.stderr)
 
 
 class RunRecord:
-    """RunRecord(out, **pieces): a tick callback that buffers each command tick and its events;
-    save() writes the run. out=None is _expr_data/<task type>/<UTC time>/ ("run" without a
-    task piece). The pieces are the run's configuration, frozen dataclasses or JSON values;
+    """Buffer command ticks, completed solves and diagnostics and save the run.
+
+    out=None is _expr_data/<task type>/<UTC time>/ ("run" without a
+    task piece). The pieces are the run's configuration, dataclasses or JSON values;
     the record writes provenance() and to_dict of each at once, with status "running".
 
     The read interface, which load_run gives a saved run too: config (the pieces as
-    objects), ticks and plans (columns, built from the buffered ticks on first read, after
-    the loop), events (their times counted from the first state's) and metadata. An
-    experiment adds columns to ticks and plans and results to metadata["results"], then
-    saves again; save() refuses a column of the wrong length.
+    objects), ticks and plans (columns, built from the buffered ticks and completed
+    solves on first read, after the loop), diagnostics (their times counted from the
+    first state's) and metadata. An experiment adds columns to ticks and plans and
+    results to metadata["results"], then saves again; save() refuses a column of the
+    wrong length. Register solve_completed with the loop to record its returned plans.
 
     Not validated for long runs: every tick stays in memory until the run ends (about
     2 KB per tick in simulation, 4 GB for an hour at 500 Hz).
@@ -210,7 +232,6 @@ class RunRecord:
     out: Path
     provenance: dict[str, Any]
     config: dict[str, Any]
-    events: list[Event]
     metadata: dict[str, Any]
 
     def __init__(self, out: str | Path | None, **pieces: Any):
@@ -218,46 +239,52 @@ class RunRecord:
         kind = type(pieces["task"]).__name__.lower() if "task" in pieces else "run"
         self.out = Path(out) if out else ROOT / "_expr_data" / kind / stamp
         self.out.mkdir(parents=True, exist_ok=False)
-        self.provenance, self.config, self.events = provenance(), pieces, []
+        self.provenance, self.config = provenance(), pieces
         self.metadata = dict(status="running", reason=None, end_t=None, results={}, error=None, plant={})
         self._ticks: list[Tick] = []
+        self._plans: list[tuple[float, Plan]] = []
+        self._diagnostics: list[Diagnostic] = []
         self._write_summary()
 
     def __call__(self, tick: Tick) -> None:
         self._ticks.append(tick)
-        self.add_events(tick.events)
 
-    def add_events(self, events: Iterable[Event]) -> None:
-        """Store events, their times counted from the first state's."""
+    def solve_completed(self, completed: SolveCompleted) -> None:
+        """Buffer a returned plan and its request time in completion order."""
+        self._plans.append((completed.request_time_s, completed.plan))
+
+    def diagnostic(self, diagnostic: Diagnostic) -> None:
+        """Buffer one diagnostic on the loop's clock."""
+        self._diagnostics.append(diagnostic)
+
+    @property
+    def diagnostics(self) -> list[Diagnostic]:
+        """The diagnostics with times relative to the first recorded state."""
         t0 = self._ticks[0].state.t if self._ticks else 0.
-        self.events.extend(dataclasses.replace(event, t=event.t - t0) for event in events)
+        return [dataclasses.replace(diagnostic, t=diagnostic.t - t0) for diagnostic in self._diagnostics]
 
     @cached_property
     def ticks(self) -> dict[str, np.ndarray]:
         ticks = self._ticks
         t0 = ticks[0].state.t if ticks else 0.
         updates = np.array([k.update for k in ticks], dtype=bool)
+        plan_rows = {id(plan): index for index, (_, plan) in enumerate(self._plans)}
         columns = dict(t=np.array([k.t - t0 for k in ticks]), state_t=np.array([k.state.t - t0 for k in ticks]),
                        q=np.array([k.state.q for k in ticks]).reshape(-1, 7),
                        qd=np.array([k.state.qd for k in ticks]).reshape(-1, 7),
                        command=np.array([np.full(7, np.nan) if k.command is None else k.command
                                          for k in ticks]).reshape(-1, 7),
-                       plan=np.cumsum([k.new for k in ticks], dtype=int) - 1,
+                       plan=np.array([-1 if k.plan is None else plan_rows[id(k.plan)] for k in ticks], dtype=int),
                        update=np.where(updates, np.cumsum(updates) - 1, -1))
         return columns
 
     @cached_property
     def plans(self) -> dict[str, np.ndarray]:
         t0 = self._ticks[0].state.t if self._ticks else 0.
-        plan_ticks = [k for k in self._ticks if k.new and k.plan is not None]
-        plan_ticks += [k for k in self._ticks if k.faulted is not None]  # on the last tick
-        plans = [k.plan for k in plan_ticks if k.new and k.plan is not None]
-        plans += [k.faulted for k in plan_ticks if k.faulted is not None]
-        if any(k.plan_request_t is None for k in plan_ticks):
-            raise ValueError("A recorded new or faulted plan needs its request time")
+        plans = [plan for _, plan in self._plans]
         columns = dict(t0=np.array([p.t0 - t0 for p in plans]),
                        measured_t=np.array([p.measured_t - t0 for p in plans]),
-                       update_t=np.array([k.plan_request_t for k in plan_ticks], dtype=float) - t0,
+                       update_t=np.array([request_time for request_time, _ in self._plans], dtype=float) - t0,
                        states=np.array([p.states for p in plans]), torques=np.array([p.torques for p in plans]))
         for key in (plans[0].stats if plans else ()):
             values = [p.stats[key] for p in plans]
@@ -273,7 +300,7 @@ class RunRecord:
                 if len(value) != len(table[rows]):
                     raise ValueError(f"{name}[{key!r}] has {len(value)} rows, not {len(table[rows])}")
             np.savez_compressed(self.out / f"{name}.npz", **table)
-        events = [dataclasses.asdict(event) for event in self.events]
+        events = [dataclasses.asdict(diagnostic) for diagnostic in self.diagnostics]
         (self.out / "events.json").write_text(json.dumps(events, indent=1, default=_json) + "\n")
         self._write_summary()
 
@@ -297,7 +324,7 @@ def load_run(path: str | Path, classes: Iterable[type] = ()) -> RunRecord:
     record.config = from_dict(summary["config"], classes)
     with np.load(out / "ticks.npz") as ticks, np.load(out / "plans.npz") as plans:
         record.ticks, record.plans = dict(ticks), dict(plans)
-    record.events = [Event(**event) for event in json.loads((out / "events.json").read_text())]
+    record._diagnostics = [Diagnostic(**event) for event in json.loads((out / "events.json").read_text())]
     record._ticks = []
     return record
 

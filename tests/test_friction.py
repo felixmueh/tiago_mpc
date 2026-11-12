@@ -93,7 +93,7 @@ def test_breakaway_and_stopping_without_numerical_reversal():
 
 def test_armature_enters_mass_bias_and_coupled_friction_once():
     values = np.array([.746, .882, .211, .648, .326, .343, .27])
-    bare = SimConfig().build()
+    bare = SimConfig(armature=(0.,) * 7).build()
     plant = SimConfig(armature=tuple(values)).build()
     q, v = Q_START + np.linspace(-.05, .05, 7), np.linspace(-.1, .1, 7)
     mass = pin.crba(bare.model, bare.data, q).copy()

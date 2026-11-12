@@ -18,7 +18,7 @@ import numpy as np
 
 from experiments import figure8, reach
 from experiments.common import handle_stop_signals, run_experiment
-from experiments.latency_compensation import Compensated, first_tick_of_each_plan, requested_states
+from experiments.latency_compensation import Compensated, first_tick_of_each_plan, requested_states, run_compensated
 import tiago_mpc as tm
 
 COMMAND_PERIOD = tm.hz_to_s(500)  # the experiments' default; the control-update period is the knot interval
@@ -34,7 +34,8 @@ TASKS = {  # name: (the experiment's evaluate, task, params, plant)
             tm.SimConfig(substep=.003)),
     "reach-friction": (reach.evaluate, reach.Reach(), tm.TIAGO,
                        tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")),
-    "figure8": (figure8.evaluate, figure8.Figure8(), figure8.FIGURE8,
+    "figure8": (figure8.evaluate, figure8.Figure8(),  # FIGURE8 as of the study, with predictor friction
+                replace(figure8.FIGURE8, friction=tm.urdf_friction(), friction_law=tm.Tanh(.1)),
                 tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")),
 }
 CASES = {"stock": (False, tm.SampleKnot()), "compensated": (True, tm.SampleKnot()),  # name: (compensate, law)
@@ -55,11 +56,12 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
                 compensate, law = CASES[case]
                 timing = (Compensated(solve_latency_s=ms / 1e3, command_period=COMMAND_PERIOD,
                                       prediction_substep_s=prediction_substep_s, predictor=predictor) if compensate
-                          else tm.VirtualTime.constant_latency(ms / 1e3, command_period=COMMAND_PERIOD))
+                          else tm.VirtualTimeSettings.constant_latency(ms / 1e3, command_period=COMMAND_PERIOD))
                 case_out = out / name / f"{name}_{case}_{ms:g}ms"
                 mpc = tm.Mpc(params, binary)
                 try:
-                    evaluate(run_experiment(plant, mpc, task, law, timing, out=case_out))
+                    evaluate(run_experiment(plant, mpc, task, law, timing, compensation=None,  # the study's own
+                                            loop=run_compensated if compensate else tm.run_virtual_time, out=case_out))
                 except Exception as exc:  # an error is a result: run_experiment saved it as "error"
                     print(f"{case_out.name}: {type(exc).__name__}: {exc}", flush=True)
                 finally:
@@ -74,7 +76,7 @@ def study(out, tasks, latencies_ms, cases, prediction_substep_s=None, predictor=
 def row(out, task, case, ms, compensate):
     """One run's outcome. The takeover error is the plant's state at the tick each plan took
     effect minus the state it was requested from: the prediction error when compensated
-    (the experiment's requested-state events, or its older saved plan column), otherwise
+    (the experiment's requested-state diagnostics), otherwise
     how far the arm moved during the latency. Not
     the plan's knot 0: GATO returns it only as close to the requested state as the solve
     converged. fault: the fault's or interruption's reason, else an error's last line."""

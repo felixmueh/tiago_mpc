@@ -1,6 +1,6 @@
 """The data that crosses the pieces' interfaces (the plant's state, the MPC's plan, the
-loop's tick and its events) and the interfaces themselves: the protocols a plant, an MPC,
-a task and a timing satisfy (structurally, checked by mypy, never at run time) and the
+loop's tick and its notifications) and the interfaces themselves: the protocols a plant, an MPC,
+a task and an execution safety policy satisfy (structurally, checked by mypy, never at run time) and the
 types of a control law and a tick callback.
 
 A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
@@ -8,11 +8,11 @@ A plan holds GATO's knot states x_0..x_{N-1} and knot torques u_0..u_{N-2}
 its initial condition, predicted when compensation is enabled. measured_t retains
 the original observation time. Knot k covers t0 + k dt <= t < t0 + (k + 1) dt,
 a zero-order hold as GATO's transcription assumes; past the last knot there is
-no torque, and a plan's lease ends before it (loops.lease_fault).
+no torque, and a plan's lease ends before it (laws.decide_command).
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import math
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
@@ -22,7 +22,6 @@ import numpy as np
 from tiago_mpc.clock import VirtualClock, WallClock
 
 if TYPE_CHECKING:
-    from tiago_mpc.loops import Outcome
     from tiago_mpc.mpc import MpcParams
 
 # Knot boundaries computed as k * dt must select knot k despite rounding
@@ -87,14 +86,33 @@ class Plan:
         object.__setattr__(self, "torques", torques)
 
     def index(self, offset_s: float) -> int:
-        """Zero-order-hold knot of a time offset from t0; may exceed the plan."""
-        if not offset_s >= 0 or math.isinf(offset_s):
+        """Zero-order-hold knot of a time offset from t0; may exceed the plan. An offset a rounding
+        error below 0 is knot 0: summed command ticks reach a predicted t0 up to that early."""
+        if not offset_s >= -_KNOT_TOLERANCE * self.dt or math.isinf(offset_s):
             raise ValueError("time precedes the plan's state or is not finite")
-        return math.floor(offset_s / self.dt + _KNOT_TOLERANCE)
+        return max(0, math.floor(offset_s / self.dt + _KNOT_TOLERANCE))
 
 
 @dataclass(frozen=True)
-class Event:
+class Command:
+    """A torque command with its requested and applied values."""
+    requested: np.ndarray
+    applied: np.ndarray
+
+    @property
+    def clipped(self) -> bool:
+        return bool(np.any(self.applied != self.requested))
+
+
+@dataclass(frozen=True)
+class Fault:
+    """A refused execution command and its reason."""
+    reason: str
+    requested: np.ndarray | None = None  # Unavailable when refusal precedes torque evaluation.
+
+
+@dataclass(frozen=True)
+class Diagnostic:
     """Something the loop or a plant detected, at its own time t on the loop's clock: its
     kind, the message the console prints and small JSON data (record.py stores them)."""
     t: float
@@ -105,39 +123,48 @@ class Event:
 
 @dataclass(frozen=True)
 class Tick:
-    """What tick callbacks see once per command tick: its time t and the latest
-    state (state.t may be older and repeat); command is None before the first plan,
-    on the last tick and on a fault; new marks the tick at which the plan took effect,
-    update the tick at which a control update started (its request); events: what the
-    loop and the plant detected since the previous tick (usually none); faulted: the
-    plan that arrived at this tick and faulted (loops.plan_fault), which never takes
-    effect, else None. plan_request_t associates a new/faulted plan with its request
-    tick, independently of solver statistics; None when no plan is introduced."""
+    """A command tick's measured state, applied command and control-update status.
+
+    The measured state may be older than the tick and repeat.
+    """
     t: float
     state: State
-    command: np.ndarray | None
+    command: np.ndarray | None  # None before the first plan, on the last tick and on a fault.
     plan: Plan | None
-    new: bool
-    update: bool
-    events: tuple[Event, ...]
-    faulted: Plan | None
-    plan_request_t: float | None = None  # update tick that requested the new/faulted plan
+    plan_activated: bool  # The plan took effect at this tick.
+    update: bool  # A control-update request started at this tick.
+    requested_command: np.ndarray | None = None  # before the loop's effort handling
+    clipped: bool = False
+
+
+@dataclass(frozen=True)
+class SolveCompleted:
+    """One returned solve, independently of whether its plan ever becomes active.
+
+    Request inputs are detached at every submission.
+    Native solve latency remains in plan.stats['wall_s'].
+    """
+    request_time_s: float
+    initial: State | Prediction
+    reference: np.ndarray
+    updates: dict[str, Any] | None
+    plan: Plan
 
 
 class PlantInterface(Protocol):
     """SimPlant (sim.py) and RosPlant (robot.py), built from their configs. A loop starts
     it on the loop's time (start(clock): VirtualClock or WallClock, which RosPlant needs),
     then per command tick reads its state, applies a command, which it holds, takes its
-    events (take_events: those emitted since the last call, on the loop's clock) and
+    diagnostics (take_diagnostics: those emitted since the last call, on the loop's clock) and
     advances to the next tick (the plant integrates to it, the clock reaches it); stop
-    comes first on exit (zero torque, handback), and its events are taken after the loop.
+    comes first on exit (zero torque, handback), and its diagnostics are taken after the loop.
     run_state: the plant's final values, which the record saves ({} for SimPlant)."""
     run_state: dict[str, Any]
 
     def start(self, clock: VirtualClock | WallClock) -> None: ...
     def state(self) -> State: ...
     def apply(self, command: np.ndarray) -> None: ...
-    def take_events(self) -> list[Event]: ...
+    def take_diagnostics(self) -> list[Diagnostic]: ...
     def advance(self, t: float) -> None: ...
     def stop(self) -> None: ...
     def close(self) -> None: ...
@@ -146,19 +173,24 @@ class PlantInterface(Protocol):
 class MpcInterface(Protocol):
     """Mpc and MpcProcess (mpc.py): plans of N knots dt apart. warmup prepares the
     solver from a state before the first request and returns when done (nothing when
-    params.warmup is off); request raises while the previous plan is unread; result
-    returns a plan once, None while it is pending, and raises if the solve failed.
+    params.warmup is off); request raises while the previous plan is unread. result
+    returns a checked plan once, None while it is pending, and raises if the solve
+    failed. With block=True it waits for an outstanding solve. A returned plan must
+    match the request and MPC dimensions, with finite native trajectories and a
+    finite nonnegative native solve duration in stats['wall_s']; custom MPCs must
+    provide the same checked result contract.
     A request takes the measured State or a Prediction of the future initial condition;
-    either preserves the measurement time that bounds the resulting plan's lease."""
+    either preserves the measurement time that bounds the resulting plan's lease.
+    A reference replaces the menu's grasp-frame targets; None keeps its native targets."""
     params: MpcParams
     N: int
     dt: float
 
-    def warmup(self, state: State, reference: np.ndarray) -> None: ...
+    def warmup(self, state: State, reference: np.ndarray | None = None) -> None: ...
     def request(
         self,
         state: State | Prediction,
-        reference: np.ndarray,
+        reference: np.ndarray | None = None,
         updates: dict[str, Any] | None = None,
     ) -> None: ...
     def result(self, block: bool = False) -> Plan | None: ...
@@ -167,7 +199,9 @@ class MpcInterface(Protocol):
 
 class TaskInterface(Protocol):
     """A frozen dataclass; t counts from the run's first state. at: the (n, 6)
-    end-effector reference at the n knots dt apart from t and the named solver updates
+    end-effector reference at the n knots dt apart from t (per knot the grasp frame's position,
+    then its orientation as a rotation vector, both in ROOT_FRAME; NaN orientation: none at
+    that knot, which only the menu's orientation term reads) and the named solver updates
     (mpc.UPDATES) for the request at t, None when it changes nothing; done: whether
     it is met; duration_s: the task's own duration in seconds, the run's unless the
     caller caps it (experiments.common.run_experiment). The loops never read it: they
@@ -180,22 +214,14 @@ class TaskInterface(Protocol):
     def duration_s(self) -> float: ...
 
 
-ControlLaw = Callable[[Plan, float, State], np.ndarray]  # law(plan, t, state) -> command (laws.py)
-Callback = Callable[[Tick], None]  # sees every command tick, e.g. a RunRecord
+ControlLaw = Callable[[Plan, float, State], Command | Fault]
+EffortHandling = Callable[[Command], Command | Fault]
+TickCallback = Callable[[Tick], None]
+SolveCompletedCallback = Callable[[SolveCompleted], None]
+DiagnosticCallback = Callable[[Diagnostic], None]
 
 
-class Timing(Protocol):
-    """VirtualTime and RealTime (loops.py), or an experiment's own: a frozen dataclass of
-    a loop's settings whose run calls that loop with them and returns its Outcome."""
-    __dataclass_fields__: ClassVar[dict[str, Any]]  # a dataclass: recorded, and replaced by the mains' setup
+class SafetyInterface(Protocol):
+    """A pure execution check, shared by command decisions and hypothetical forecasts."""
 
-    def run(
-        self,
-        plant: PlantInterface,
-        mpc: MpcInterface,
-        task: TaskInterface,
-        law: ControlLaw,
-        tick_callbacks: Sequence[Callback],
-        *,
-        duration: float,
-    ) -> Outcome: ...
+    def validate(self, plan: Plan, t: float, state: State) -> Fault | None: ...

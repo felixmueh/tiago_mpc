@@ -15,6 +15,7 @@ import tempfile
 
 import numpy as np
 
+from tiago_mpc.collision import arm_cover, body_cover, body_posture
 from tiago_mpc.record import to_dict
 from tiago_mpc.tiago import FLANGE_FRAME, FULL_URDF, GRASP_FRAME, RIGHT_ARM_JOINTS, ROOT_FRAME
 
@@ -25,27 +26,44 @@ VERSION = 1
 def export_replay(record):
     """Write <record.out>/replay.npz on the run's time from the record's read interface (a
     RunRecord, or load_run's with the task's class): the state and command at each tick,
-    the task's reference, every plan and the MpcParams (provenance.params); nothing for
-    fewer than two ticks. The time basis follows the timing's type: RealTime is wall time,
-    every other timing virtual time ("simulation")."""
+    the task's reference (with its orientation when the task has one at some tick), every
+    plan and the MpcParams (provenance.params); nothing for fewer than two ticks. The time
+    basis follows the settings' type: RealTimeSettings is wall time, every other settings type virtual time
+    ("simulation"). A run with collision rows records their body posture as the replay's
+    fixed joints, its obstacles (spheres, and any capsules, boxes and planes), the spheres
+    the rows see (the environment's: the body cover's, then the sphere obstacles; and the
+    arm's cover, arm_cover) and the body cover's capsules and boxes (body_cover)."""
     ticks, plans, params, task = record.ticks, record.plans, record.config["params"], record.config["task"]
     time_s, command = ticks["t"], ticks["command"]
     if len(time_s) < 2:
         return None
+    collision = getattr(params, "collision", None)
+    body = body_cover(collision.body) if collision is not None and collision.body is not None else {}
     sent = np.isfinite(command).all(axis=1)
     dt, n = params.dt_s, params.N
     predictions = [dict(origin_time_s=float(t0), time_s=np.arange(n) * dt, q=states[:, :7],
                         qd_rad_s=states[:, 7:], torque_nm=torques, torque_time_s=np.arange(n - 1) * dt)
                    for t0, states, torques in zip(plans["t0"], plans["states"], plans["torques"])]
-    timing = record.config["timing"]
-    wall = (timing["type"] if isinstance(timing, dict) else type(timing).__name__) == "RealTime"
+    settings = record.config["settings"]
+    wall = (settings["type"] if isinstance(settings, dict) else type(settings).__name__) == "RealTimeSettings"
+    reference = np.array([task.at(t, 2, dt)[0][0] for t in time_s], dtype=float)
+    rotation = reference[:, 3:] if np.isfinite(reference[:, 3:]).any() else None  # NaN rows: none
     return save_replay(record.out / "replay.npz", time_s=time_s, q=ticks["q"], qd_rad_s=ticks["qd"],
                        joint_names=RIGHT_ARM_JOINTS, time_basis="wall" if wall else "simulation",
                        torque_nm=command[sent] if sent.any() else None,
                        torque_time_s=time_s[sent] if sent.any() else None,
-                       reference_xyz_m=np.array([task.at(t, 2, dt)[0][0, :3] for t in time_s]),
+                       reference_xyz_m=reference[:, :3], reference_rotvec_rad=rotation,
                        reference_time_s=time_s, reference_frame=ROOT_FRAME, plans=predictions,
                        end_effector_frame=GRASP_FRAME, label=record.out.name,
+                       fixed_joints=None if collision is None else body_posture(collision.body),
+                       obstacles=None if collision is None else collision.obstacles,
+                       obstacle_capsules=collision.capsules if collision is not None and collision.capsules else None,
+                       obstacle_boxes=collision.boxes if collision is not None and collision.boxes else None,
+                       obstacle_planes=collision.planes if collision is not None and collision.planes else None,
+                       collision_spheres=None if collision is None else dict(
+                           environment=collision.environment()["spheres"],
+                           arm=arm_cover(collision.arm)),
+                       body_capsules=body.get("capsules") or None, body_boxes=body.get("boxes") or None,
                        provenance=dict(params=to_dict(params)))
 
 
@@ -70,11 +88,17 @@ def _series(time_s, q, name):
         raise ValueError(f"{name} q must be a finite real (T, 7) native-coordinate array")
 
 
-def _reference(xyz, times, frame):
+def _reference(xyz, times, frame, rotvec=None):
     if xyz is None:
-        if times is not None:
-            raise ValueError("Reference times require reference positions")
+        if times is not None or rotvec is not None:
+            raise ValueError("Reference times and orientations require reference positions")
         return
+    if rotvec is not None:
+        rotation = np.asarray(rotvec)
+        if (rotation.dtype.kind not in "fiu" or rotation.shape != np.shape(xyz) or
+                not (np.isfinite(rotation).all(axis=-1) | np.isnan(rotation).all(axis=-1)).all()):
+            raise ValueError("Reference orientations must match the positions' shape, each three finite "
+                             "values or three NaN (no orientation target)")
     if frame not in ("base_footprint", ROOT_FRAME):
         raise ValueError(f"Reference positions require reference_frame='base_footprint' or '{ROOT_FRAME}'")
     points = np.asarray(xyz)
@@ -127,6 +151,23 @@ def _joint_limits(limits):
         raise ValueError("joint_limits.source must be a nonempty string")
 
 
+def _spheres(spheres, name):
+    values = np.asarray(spheres, dtype=float)
+    if len(values) and (values.ndim != 2 or values.shape[1] != 4 or not np.isfinite(values).all() or
+                        (values[:, 3] <= 0).any()):
+        raise ValueError(f"{name} must be spheres [x, y, z, radius] with finite values and positive radii")
+    return values.tolist()
+
+
+def _primitives(values, width, positive, name):
+    """Rows of width finite values whose columns positive are > 0 (Collision's layouts)."""
+    values = np.asarray(values, dtype=float)
+    if len(values) and (values.ndim != 2 or values.shape[1] != width or not np.isfinite(values).all() or
+                        (values[:, positive] <= 0).any()):
+        raise ValueError(f"{name} must be rows of {width} finite values with positive sizes")
+    return values.tolist()
+
+
 def save_replay(
     path,
     *,
@@ -140,13 +181,21 @@ def save_replay(
     reference_xyz_m=None,
     reference_time_s=None,
     reference_frame=None,
+    reference_rotvec_rad=None,
     plans=None,
     provenance=None,
     qd_rad_s=None,
     torque_nm=None,
     torque_time_s=None,
     joint_limits=None,
-    end_effector_frame=FLANGE_FRAME,
+    end_effector_frame,
+    obstacles=None,
+    obstacle_capsules=None,
+    obstacle_boxes=None,
+    obstacle_planes=None,
+    collision_spheres=None,
+    body_capsules=None,
+    body_boxes=None,
 ):
     """Export one compressed v1 file using a temporary file and atomic rename.
 
@@ -161,9 +210,20 @@ def save_replay(
     For interval controls pass torque_time_s=time_s[:-1]; at the final state the
     viewer shows the last applied interval. Plans use predicted torque and omit
     the terminal control. Optional joint_limits use the same joint_names order.
-    end_effector_frame identifies the point tracked by the reference. The legacy
-    flange default preserves old exports; new grasp-center runs must pass their
-    recorded frame explicitly (e.g. summary['end_effector_frame']).
+    reference_rotvec_rad (optional, the shape of reference_xyz_m) is the end effector's
+    target orientation at each reference sample, a rotation vector (axis times angle) in
+    reference_frame; a NaN row means no orientation target there.
+    end_effector_frame identifies the point tracked by the reference (FLANGE_FRAME or
+    GRASP_FRAME), e.g. summary['end_effector_frame'].
+    Optional obstacles are spheres [x, y, z, radius] in metres in ROOT_FRAME
+    (torso_lift_link, placed by the fixed joints); optional obstacle_capsules
+    [ax, ay, az, bx, by, bz, radius], obstacle_boxes [cx, cy, cz, qx, qy, qz, qw, hx, hy,
+    hz] (quaternion xyzw, half-extents along the box's axes) and obstacle_planes [nx, ny,
+    nz, d] (unit normal, free side n.p >= d) are further obstacles in the same frame
+    (tiago_mpc.collision.Collision); optional collision_spheres are those
+    of an MPC's collision rows: {"environment": spheres in ROOT_FRAME, "arm": {link:
+    spheres in the link's frame}}; optional body_capsules and body_boxes are the capsules
+    and boxes of its body cover, in ROOT_FRAME and the obstacles' layouts.
     """
     if (not isinstance(time_basis, str) or time_basis not in ("simulation", "wall")):
         raise ValueError("time_basis must be simulation or wall")
@@ -172,7 +232,7 @@ def save_replay(
             len(set(names)) != 7 or set(names) != set(RIGHT_ARM_JOINTS)):
         raise ValueError("joint_names must contain each of the seven native right-arm joints once")
     _series(time_s, q, "Recorded")
-    _reference(reference_xyz_m, reference_time_s, reference_frame)
+    _reference(reference_xyz_m, reference_time_s, reference_frame, reference_rotvec_rad)
     _telemetry(time_s, qd_rad_s, torque_nm, torque_time_s, "Recorded")
     _joint_limits(joint_limits)
     if end_effector_frame not in (FLANGE_FRAME, GRASP_FRAME):
@@ -199,12 +259,28 @@ def save_replay(
         metadata["label"] = label
     if fixed_joints is not None:
         metadata["fixed_joints"] = fixed_joints
+    if obstacles is not None:
+        metadata["obstacles"] = _spheres(obstacles, "obstacles")
+    for key, value, width, positive in (("obstacle_capsules", obstacle_capsules, 7, [6]),
+                                        ("obstacle_boxes", obstacle_boxes, 10, [7, 8, 9]),
+                                        ("obstacle_planes", obstacle_planes, 4, []),
+                                        ("body_capsules", body_capsules, 7, [6]),
+                                        ("body_boxes", body_boxes, 10, [7, 8, 9])):
+        if value is not None:
+            metadata[key] = _primitives(value, width, positive, key)
+    if collision_spheres is not None:
+        metadata["collision_spheres"] = dict(
+            environment=_spheres(collision_spheres["environment"], "collision_spheres environment"),
+            arm={link: _spheres(group, f"collision_spheres arm {link}")
+                 for link, group in collision_spheres["arm"].items()})
     if reference_frame is not None:
         metadata["reference_frame"] = reference_frame
     if reference_xyz_m is not None:
         arrays["reference_xyz_m"] = np.asarray(reference_xyz_m)
     if reference_time_s is not None:
         arrays["reference_time_s"] = np.asarray(reference_time_s)
+    if reference_rotvec_rad is not None:
+        arrays["reference_rotvec_rad"] = np.asarray(reference_rotvec_rad)
     if plans is not None:
         metadata["predictions"] = []
         for index, plan in enumerate(plans):

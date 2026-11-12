@@ -7,6 +7,152 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-11-12: PCG/BDSV presentation experiment** (Felix). Compare only
+  `admm_linsys="pcg"` and `"bdsv_factor"` on a six-second figure-eight and a
+  medium reach with identical simulator settings and zero declared solve latency,
+  sweeping N16/32/64/128/256/512. Rerun the thesis timing matrix through N512
+  with B1/2/4/8/16 as well. **Both studies use one SQP iteration and save only
+  statistics, not trajectories.** Keep per-update solve-time distributions and
+  variance as the primary histogram output. Prepare the studies for Felix to run
+  on Jetson; no further GTX 1070 runs are needed. The earlier N32/SQP5 local
+  pilot stays separately labelled. Automatic switching and other presentation
+  experiment proposals are outside these studies.
+  Delivery is a temporary `gato_tiago` branch with an executable script at the
+  repository root; Felix pulls the branch and runs that script on Jetson. This
+  explicitly authorizes publishing this temporary branch. Remove it after use,
+  keeping the recorded statistics and reports.
+
+- **2026-11-12: defaults live in the types and loops** (Felix; supersedes the timing and
+  law of the 2026-10-30 entry below).
+  - **Principle.** Parameters passed to GATO follow GATO's default (None) unless TIAGo
+    needs another value, which `MpcParams` sets with a comment and
+    `tests/test_gato_defaults.py` lists. Parameters only we use get their sensible
+    default in our own types. Only experiments that differ set their own values.
+  - **Timing.** `run_virtual_time` defaults to `VirtualTimeSettings.constant_rate()`:
+    each solve declared to take one update period, the worst case, deterministic
+    (measured latency makes simulated runs depend on GPU load). `VirtualTimeSettings`
+    itself has no field defaults; its presets stay, including `constant_latency` for
+    studies of latency at a fixed rate. `RealTimeSettings()` updates at 100 Hz, as the
+    simulation (500 Hz commands in both).
+  - **Compensation** defaults to `default_compensation(settings)` in both loops and
+    in `run_experiment`; `None` turns it off.
+  - **Law.** Both loops and `run_experiment` default to `FrictionFeedforward()`, the
+    robot mains included: the URDF's fitted friction (`urdf_friction()`, refit B of
+    2026-10-30), `PlanFeedback()`'s stored gains and a 0.01 rad/s tanh width.
+  - **Predictor friction** is off by default: `FIGURE8` no longer predicts it, like
+    `TIAGO` and `MpcParams`.
+  - **Friction values.** The package and URDF hold only the refit B values; the
+    16 October constants stay in the friction experiment, which pins its historical
+    laws (`SampleKnot()` base, `Tanh(.03)`) explicitly. The latency study, the
+    friction studies and `plan_feedback.py` pass `compensation=None` and the latency
+    study its historical figure-eight predictor friction explicitly.
+  - Random100 and obstacles follow the new defaults; their earlier runs were removed
+    (Felix keeps backups) and are regenerated when needed.
+
+- **2026-11-07: the package keeps only what the MPC needs; the body cover for the safety
+  monitor is parked** (Felix, refactor of the entry below).
+  - **`collision.py`** keeps `Collision` and the cover loading (`arm_cover`, `body_cover`,
+    `body_posture`, `cover_hashes`, `cover_file`) with `cuboid`. `ExactCheck`, the reduced robot
+    and the mesh helpers leave the package: the mesh helpers move to `tiago_scripts/validate.py`,
+    the evaluation to `experiments/clearance.py`, which `obstacles.py` uses.
+  - **Posture:** `BodyPosture` and `Collision.posture` are removed. The posture is the chosen
+    body cover's (named joint positions); `body=None` uses the default cover's, because it is
+    the same robot. The measured values are `tiago_scripts/body_cover.POSTURE`, the generator's
+    input; a test compares each stored cover's posture with it.
+  - **One robot model:** generation and evaluation use safety's `build_tiago_collision_model`
+    with the full URDF's original meshes, every joint but the right arm's locked.
+  - **No body cover for the safety monitor for now:** a cover of safety's alpha-wrap body grown
+    by the monitor's 4 cm is parked on `experiment/body-cover-safety` (its NOTES.md: the fit
+    exceeds the container's memory at 5 mm, and the default start pose has only 0.6 cm of
+    monitor slack, so such a cover puts it inside; `todo.org`).
+  - **Arm:** stays `arm/exact`. The monitor checks the arm's alpha-wrap meshes, about 1 cm outside
+    the original ones, which the spheres do not certainly contain, so it may trip up to about
+    1 cm early on the robot; noted at `collision.arm_cover` and in `todo.org`.
+  - **Evaluation:** `experiments/clearance.py` measures the original meshes, as the removed
+    `ExactCheck` did. `record.FORMAT` stays 4.
+
+- **2026-11-07: stored collision covers, generated offline by `tiago_scripts`** (Felix).
+  Nothing is fitted at run time any more; `Cover` and `fit_spheres` are gone.
+  - **Scripts:** the package `tiago_scripts/`, run as `python -m tiago_scripts.<name>`
+    (README there): `arm_cover` (the greedy's candidates, selected by an exact HiGHS MILP;
+    a time limit or a non-optimal status fails, with no greedy fallback and no tie-break;
+    it records the SciPy and HiGHS versions), `body_cover` (the weighted greedy plus
+    redundant-shape removal, `--choice balanced|tighter`, one pass for both) and
+    `validate` (the validation both use). The covers' viewer, the GPU distance bench and
+    `tune_costs.py` were dropped. mypy does not check `tiago_scripts/`.
+  - **Data:** one JSON per cover in `tiago_mpc/data/collision/`: `arm/exact.json` (28
+    spheres per link; the default) and `body/balanced.json` (83 primitives; the default)
+    and `body/tighter.json` (155, from the one-pass generator; the 2026-11-04 tighter had
+    156 from a two-step run). Each holds the primitives by shape in the collision layouts,
+    the frame, the posture (body), the inputs (URDF and per-part geometry sha256), the
+    settings, a validation summary and the library versions; no absolute paths, no
+    intermediates.
+  - **Runtime:** `Collision.arm = "exact"` and `Collision.body = "balanced"` (or None) name
+    the stored covers, which load when the MPC and the environment are built.
+    `environment()` merges the body's spheres, capsules and cuboids with the obstacles'.
+    No checks at load: `tests/test_collision.py` compares the stored inputs and posture with
+    the current model. Records store the names and, in their provenance, an 8-digit content
+    hash of each cover file; `record.FORMAT` became 4. Replays carry the body cover's
+    capsules and boxes (`body_capsules`, `body_boxes`).
+
+- **2026-11-04, revised 2026-11-07: body cover decimation is postponed** (Felix).
+  On 2026-11-04 Felix decided to keep four static body covers, balanced and tighter, each
+  original and decimated. On 2026-11-07 decimation was postponed: the decimated
+  `tighter` leaves the torso base's mesh up to 1.2 mm outside its primitives (certified
+  unreachable only for the current arm cover). Only complete covers land. The decimation,
+  the four 2026-11-04 covers with their decimation records and their re-decimation
+  against the exact arm cover are kept on branch `experiment/body-cover-decimation`; the
+  follow-up (one enclosing box for the unreachable back) is in `todo.org`.
+
+- **2026-11-03: retain local GATO armature and collision-cache work until upstream** (Felix).
+  The shared-loop integration selects `../GATO/.worktrees/tiago-combined`
+  and `../GRiD-tiago-armature-060` through `pyproject.toml` and `uv.lock`.
+  Keep the fixed-arm armature support, native ADMM-budget accessor and per-SQP
+  collision-row caching when merging; use these local sources until upstream
+  supplies the required changes. Source identity remains part of the compiled
+  module cache key and each run's provenance.
+
+- **2026-11-03: use GATO cost menus for every MPC objective** (Felix).
+  `MpcParams.cost` is always a native `gato.cost_menu.CostMenu`. `default_cost(n, ...)`
+  constructs the default position, terminal position, joint-velocity, torque and optional
+  orientation terms. It returns an ordinary menu, with no persistent builder object.
+  `with_reference(menu, reference)` explicitly updates frame-position and orientation
+  targets. Passing a reference to MPC warmup/request performs that update; passing None
+  retains the menu's targets. Separate
+  orientation fields on `MpcParams` and legacy tracking-weight updates are removed.
+  `SolverSettings` wraps GATO's numerical settings and limit-barrier weights, excluding
+  the four tracking weights. A parity test checks every remaining native field and
+  default; its purpose is explained in a source comment. Settings and native menus
+  use the existing dataclass serializer. Local construction skips inactive terms,
+  shares constant rotation targets, and reuses unchanged menus/reference windows while
+  checking for changes to native menu fields. GATO is unchanged.
+
+- **2026-11-03: control readiness precedes lossless capture readiness** (Felix).
+  Keep the numerical plan handoff independent of capture serialization. The
+  visualizer reserves bounded recording storage and lets its independent
+  consumer wait for publication; the solver retains diagnostic ownership until
+  publication. Pause uses the next ordinary command-boundary checkpoint and
+  retains outstanding solver replies until normal collection after resume.
+
+- **2026-11-03: overlap virtual-time physics with asynchronous MPC** (Felix).
+  Keep solver and plant in separate processes, submitting before the independent
+  integration interval and collecting at a possible activation boundary. Retain
+  declared/measured latency, request/origin timestamps, command laws and the
+  existing virtual clock. The before-tick callback may park without collecting a
+  pending reply. Cancellation ends the invocation at a command boundary, and
+  caller teardown finishes outstanding solver work. Control and lossless recording use separate buffers in
+  the visualizer. Forecast optimization remains deferred.
+
+- **2026-11-03: one virtual-time engine for experiments and the visualizer** (Felix).
+  Reuse `run_virtual_time` with small typed messages and a blocking callback at
+  command boundaries. `SolveCompleted` records completed results independently
+  of activation; existing `Tick` callbacks retain command decisions. Observer
+  callbacks queue detached numerical data; formatting, geometry and delivery run
+  independently. A run-owned cancellation flag is checked at the ordinary command
+  boundary. Cancellation wakes a
+  paused callback and ends that run; reset/reconfiguration reconstructs it. No
+  optimizer checkpoint/restore or general event framework is added.
+
 - **2026-10-27: compare sticking/smoothness and remove plant friction** (Felix).
   Extend the controller-tuning experiment with sustained low-speed episodes
   conditioned on motion requested by the active plan, duration distributions,
@@ -41,23 +187,23 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     prints the metadata and the run directory (two lines, no `report` helper). Python
     callers (random100, the studies, the tests) pass every piece explicitly.
     `plan_feedback` and `latency_compensation` keep separate mains with their own setup.
-  - **`run_experiment(plant, mpc, task, law, timing, *, duration=None, out=None,
+  - **`run_experiment(plant, mpc, task, law, settings, *, loop=run_virtual_time, duration=None, out=None,
     **pieces)`:** `mpc` is `MpcParams` or a built MPC. Given parameters, it compiles
     (minutes unless cached; its docstring says so) after creating the record and before
-    building the plant, `MpcProcess` on `RealTime`, else the in-process `Mpc`, and
+    building the plant, `MpcProcess` on `RealTimeSettings`, else the in-process `Mpc`, and
     closes it in `finally`, also after a failed compile (a saved error). A built MPC
     (a fake, random100's `MpcProcess` per case) is the caller's, which closes it; its
     `params` are recorded. `duration=None` is the task's own, a number caps it; the
     record holds the resolved duration. This loosens the 2026-10-22 decision that a call
     site that may compile says so (above), and the 2026-10-24 one that the caller
     builds and closes the MPC (`launch`, Records and history).
-  - **The robot gate is inside `setup(args, plant, timing) -> (plant, timing) | int`.**
+  - **The robot gate is inside `setup(args, plant, settings) -> (plant, settings, loop) | int`.**
     `sim`: the main's timing with the given `--command-period`, `--update-period` and
     `--solve-latency` replaced (any timing dataclass with those fields, `Compensated`
-    too; the `Timing` protocol declares a dataclass); `rehearsal`: `RealTime` with the
+    too; the loop is passed separately); `rehearsal`: `RealTimeSettings` with the
     given periods; `robot`: without `--execute` the check-only startup checks and exit
     status 0, with it the typed `EXECUTE` (2 when cancelled), and only then
-    `RobotConfig(execute=True)` and `RealTime`. No ROS client and no compile before the
+    `RobotConfig(execute=True)` and `RealTimeSettings`. No ROS client and no compile before the
     confirmation. `arguments(description, argv, plants)` lets argparse reject a plant
     the experiment does not support (`plan_feedback` and `latency_compensation`:
     `sim` only). `run_compensated` refuses a `solve_latency_s` other than declared
@@ -67,21 +213,22 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     per task and passes its own `Mpc` per case.
   - **The budget rule, inverted:** when `run_experiment` builds the MPC, the wall-time
     budget (`max_sqp_time_s`) stays only where the solve's wall time is the latency
-    (`RealTime`, `VirtualTime` with `"measured"`); every other timing, `Compensated`
+    (`RealTimeSettings`, `VirtualTimeSettings` with `"measured"`); every other timing, `Compensated`
     among them, gets None. It replaces the 2026-10-24 rule (Execution) that named the
     declared latency.
-  - **`solve_latency_s`:** the unit stays in the name (Felix). `VirtualTime.solve_latency`
+  - **`solve_latency_s`:** the unit stays in the name (Felix). `VirtualTimeSettings.solve_latency`
     and `Compensated.latency_s` became `solve_latency_s`, and so did the loops' keyword
     (`run_virtual_time`, `run_compensated`), `constant_latency`'s parameter, the
-    record's `config.timing` key and the `overrun` event's data key; the option stays
+    record's settings and the `overrun` event's data key; the option stays
     `--solve-latency`. `record.FORMAT` became 2: `load_run` refuses a run saved before
     (format 1, the old keys) and names the code that wrote it (22 October: old
     recordings stay readable only by their own code).
-  - **`tick_callbacks`:** the loops', `run_compensated`'s and the timings' `callbacks`
-    became `tick_callbacks`, the callbacks that see every `Tick` (the `Callback` alias
-    stays). No plan callbacks (Felix).
+  - **Callbacks:** `tick_callbacks`, `solve_completed_callbacks` and
+    `diagnostic_callbacks` receive `Tick`, `SolveCompleted` and `Diagnostic`
+    respectively. Their aliases are `TickCallback`, `SolveCompletedCallback` and
+    `DiagnosticCallback`.
   - **`tiago_mpc/interfaces.py`**, renamed from `plan.py` (Felix's option a): one module
-    for the data that crosses the interfaces (`State`, `Plan`, `Event`, `Tick`) and the
+    for the data that crosses the interfaces (`State`, `Plan`, `Diagnostic`, `Tick`) and the
     protocols, the leaf of the import graph. `Law` became `ControlLaw` (`tm.ControlLaw`).
   - **`hz_to_s(hz)`** (`util.py`, `tm.hz_to_s`) writes a period as a rate:
     `hz_to_s(500)` and `hz_to_s(100)` are the timings' default command and
@@ -113,8 +260,9 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (two loops, `VirtualClock` and `WallClock`).
 - **2026-10-23: the effort check belongs to the execution side.** `Mpc` and
   `MpcProcess` return what they planned (`result()` checks only that the plan is
-  well formed and finite); `run` checks every knot of a plan when it arrives and
-  each command before it is sent. Reason: a simulator such as the visualizer must
+  well formed and finite); execution validates each command before it is sent.
+  Virtual time delegates effort handling to the selected command policy.
+  Reason: a simulator such as the visualizer must
   be able to execute, clip or inspect an over-limit plan. Clipping stays a
   simulation setting: the robot path never clips a torque.
 - **2026-10-24: the root re-exports with plain imports.** Felix chose proposal A: ordinary
@@ -159,9 +307,21 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   `d86e041`). `/workspace/GATO/TiagoProURDF/tiago_pro.urdf` is outdated. The
   reduced right arm's fixed torso root and gripper inertia summed at zero
   posture are intentional.
+- **2026-10-30: fitted right-arm coefficients, retuned PD gains, predictor width
+  0.1** (Felix). The right arm's Coulomb, viscous and armature values are refit
+  from realtoisaacsim's real single-joint chirps (`models/tiago_pro/README.md`;
+  `research/realtoisaacsim-friction-identification.md` in the thesis workspace)
+  and replace the supplied ones, which are almost certainly Isaac Sim matching
+  values. The left arm keeps the supplied values. `PD_KP` and `PD_KD` are
+  recomputed with the 2026-10-28 recipe for the fitted armature. The predictor's
+  tanh width becomes 0.1 rad/s: with the fitted values its explicit step is
+  stable only up to 5.8 ms at 0.03 and 17 ms at 0.1. Its low-speed accuracy
+  matters little: by default the predictor is loss-free, and feedforward and PD
+  handle friction.
 - **2026-10-21: supplied joint parameters** for both arms (Coulomb, viscous,
   effort, armature) replace earlier midpoints and guesses
-  (`models/tiago_pro/README.md`). The armature is not in the URDF (no loader
+  (`models/tiago_pro/README.md`); the right arm's friction, damping and armature
+  were replaced by fitted values on 2026-10-30. The armature is not in the URDF (no loader
   reads it) and never folded into link inertia. kp/kd are not stored: they
   belong to a different controller.
 - **2026-10-23: the derived URDFs' meshes are cached copies named by their
@@ -189,11 +349,14 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   (losses or armature in the plant only), as on the real robot. Enable it
   explicitly and record both models. This replaced the rule against armature in
   only one model.
-- **2026-10-21: the joint-6 conversion stays.** The pinned GATO fixed-arm adapter
-  needs joint 6's axis and limits normalized in a generated GPU URDF and the
-  q, qd, u signs mapped at the GPU boundary; everything else is native. The
-  upstream native-axes PR was not in the pin. 2026-10-24: GATO 0.1.5 contains
-  it (PR #21); the conversion stays until its removal is evaluated separately.
+- **2026-10-30: the GPU model keeps joint 6's native axis** (Felix). GATO's
+  fixed-base adapter supports axes other than +z since 0.1.4 (PR #21), so
+  `runtime_urdf` no longer flips joint 6 and the solver works in native
+  coordinates; the joint-6 sign map is gone. Flipped and native modules gave
+  bitwise identical float32 results after the sign map (device step, KKT
+  linearization, reach and figure-eight plans, runs at joint 6's limits) with
+  GATO `72c9d14` and GRiD `417a30d` at N = 32
+  (`research/joint6-sign-conversion-removal.md` in the thesis workspace).
 - **2026-10-21: grasp-center frame.** Tasks track `arm_right_grasp_joint`, a
   massless frame 0.139 m along the flange's +z: the nominal midpoint of the
   finger pads at zero gripper posture, not a calibrated TCP. Summaries and
@@ -213,13 +376,63 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Friction and GATO
 
+- **2026-11-02: GATO 0.1.7, and the solver settings follow GATO's defaults** (Felix).
+  - **GATO 0.1.7 and grid-rbd 0.6.0**, with the armature commits rebased onto them
+    (`experiment/tiago-armature-017`, `experiment/tiago-armature-060`). On `pcg`, every
+    run of the default reach, ten random100 pairs and the figure eight is bitwise equal
+    to 0.1.5 (GTX 1070); 0.1.7 fixes `bdsv_factor`, which on 0.1.5 reached no target.
+  - **Every setting with a GATO default follows it** unless a preset sets a value: the
+    `SolverSettings` fields, and `None` in `AdmmLimits` and the controller settings
+    `warm_start`, `reset_rho_each_step`, `admm_linsys` (GATO's choice by horizon: `pcg`
+    at N32, not `auto`), `admm_threshold`, `linsys`, `bdsv_threshold` (both unused under
+    ADMM) and `reseed_threshold`. Only set values reach GATO. Reason: during
+    development, take GATO's improvements. The wrapper's parity test requires reviewing
+    additions or changed defaults when GATO is updated.
+  - **Records hold what GATO resolved and ran, not our inputs** (Felix, 2026-11-03):
+    the MPC's `params` are read back from GATO once the controller is built
+    (`MpcParams.resolved`: the exposed fields of the solver's `SolverParams`, the controller's attributes, and
+    the ADMM settings the solver runs: its `admm_*` properties and the limit rows'
+    penalties; `BSQP.admm_iters` is our GATO commit for an upstream PR), so a
+    recorded run re-runs the same after a GATO update. GATO's shared ADMM `rho`, which
+    every box overrides, is not recorded. Study files keep the study's definition, the
+    inputs; the records hold what ran. `tests/test_record.py`
+    checks that every field of every recorded configuration class (the package's and the
+    experiments') survives the record.
+  - **Build first, record once** (Felix, 2026-11-03): `run_experiment` builds the MPC
+    before it creates the record, which takes the MPC's resolved params; nothing is
+    overwritten later. A failed compile or model check is a setup error that leaves no run
+    directory, which reverses the saved compile error of the `run_experiment` entry
+    below; a failed plant build is still a saved error.
+  - **Nothing changes silently:** `tests/gato_defaults.json` holds GATO's defaults and
+    `tests/test_gato_defaults.py` fails when they change, naming each changed setting
+    as followed or overridden; `python tests/test_gato_defaults.py` rewrites it. The
+    same test lists the deviations of `TIAGO` and `FIGURE8` (the set values) and fails
+    on an unlisted one.
+  - **Pending:** validate the deviations (SQP iterations, PCG budget, cost weights,
+    `rho_u`, the figure eight's `mu`) against all of GATO's defaults.
+  - `admm_linsys="auto"` was compared on 0.1.7 (GTX 1070, 1 November): the same
+    arrivals as `pcg`, a figure-eight RMSE 0.1 mm higher, and a longer solve-time
+    tail (p99 10.1 against 8.2 ms with the 10 ms budget).
+
+- **2026-10-30: the armature is on by default** (Felix). `ARMATURE_KG_M2` is
+  the default of the predictor (`MpcParams.armature`), the simulated plant
+  (`SimConfig.armature`) and the latency compensation's propagation model
+  (`LatencyCompensation.armature`); `(0.,) * 7` turns it off. This supersedes keeping
+  armature disabled and explicit (2026-10-23, below; the README since 2026-10-28). The
+  values were supplied then and are fitted since the same day (above). Reason: the stored PD gains
+  (`PlanFeedback()`, now the default law) are tuned with it; on the zero-armature models
+  kd·T/I at 2 ms command ticks was 2 on joints 5 and 6 and 39 on joint 7, so the
+  sampled PD and the compensation's forecast diverged at the wrist, and every default
+  reach faulted. Results with armature come from another model than earlier
+  armature-free runs; compare them only with that said.
+
 - **2026-10-28: model-side armature and PD values; gain calculation is a utility**
   (Felix; implemented in the friction worktree after WIP `f66172f`). The literal
   `ARMATURE_KG_M2`, `PD_KP` and `PD_KD` tuples are manually editable in `tiago.py`.
   `util.inertia_gains` returns plain float tuples that can be printed as matching
   assignments; it never rewrites files or recalculates defaults at import.
   `PlanFeedback()` uses the tuned simulation gains (20 rad/s, damping ratio 1.4,
-  including supplied armature). This changes the former 30 rad/s link-only
+  including the armature; recomputed for the fitted armature on 2026-10-30). This changes the former 30 rad/s link-only
   default; named `old_pd`/`old_both` tuning candidates explicitly retain their
   previous gains. This is a default selection, not hardware qualification.
 - **2026-10-28: separate friction coefficients from their numerical law**
@@ -257,8 +470,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     installed editable into each; this supersedes "never installed" (2026-10-23)
     and the worktree `PYTHONPATH` rule. `experiments` stays an undeclared
     package and runs as `python -m experiments.<name>`.
-  - **Costs:** GATO's existing tracking objective stays for this migration.
-    A complete move to GATO's cost menu follows later, as a separate step.
+  - **Costs:** all MPC objectives use GATO's cost menu (2026-11-03, Purpose and shape).
   - **Predictor friction:** upstream's `register_robot(..., joint_dynamics=True,
     friction_width=w)`: GRiD generates the GPU URDF's damping and tanh Coulomb
     friction into the dynamics and derivatives, the width compiled in. `BSQP`
@@ -293,7 +505,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   semi-implicit Euler with implicit damping and a default 1 ms maximum step;
   Coulomb is either sign(v_old), or a coupled constraint solve allowing sticking
   at zero (the proposed default). No MPC tuning or predictor changes. Reaching
-  stays loss-free by default; armature stays disabled.
+  stays loss-free by default; armature stays disabled (on by default since 2026-10-30).
 - **2026-10-23: the plant's Coulomb law and integrator are choices** (Felix):
   `coulomb_law` is `"tanh"` (with the `Friction`'s width, explicit in the old
   velocity), `"sign"` or `"constraint"` (default); `integrator` is `"rk4"`
@@ -340,12 +552,246 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   grasp point slower than 2 cm/s, replacing the joint-speed L1 norm of 1 rad/s,
   which let the hand move at up to about 0.4 m/s. Runs before this change used
   the old criterion, and the grasp-frame random100 protocol has no baseline yet.
-- **Orientation is unconstrained** in both tasks.
+- **Orientation is unconstrained** in both tasks by default. An optional orientation
+  cost is available through `default_cost` or a native menu. Task references use rotation
+  vectors in `ROOT_FRAME`, with NaN for no orientation target (README, "Costs").
+  Weight tuning and arrival criteria remain open below.
 - **Limits through ADMM are approximate:** returned plans can exceed the
-  planning bounds, so the planning margins and the independent raw-limit checks
-  on knots and commands stay. An ADMM return is no feasibility certificate.
+  planning bounds, so the planning margins and independent command-policy
+  checks stay. An ADMM return is no feasibility certificate.
 
 ## Execution
+
+- **2026-11-07: name loop state by its role** (Felix).
+  Use `active_plan` for the plan supplying commands and `pending_plan` for a
+  completed plan waiting for its activation time. These can coexist. Remove
+  the extra `new` plan reference; a per-tick `plan_activated` boolean records
+  activation and supplies `Tick.plan_activated`. Name request decisions, unread
+  solves, collection times and counters explicitly. Keep short `s` and `t` for
+  measured state and command time. Naming changes do not alter saved columns or
+  introduce additional execution state. Add short comments where timing semantics
+  or estimator policy need context; do not repeat self-explanatory variable names.
+
+- **2026-11-07: handle a whole command tick in one pass** (Felix).
+  Each iteration handles a complete command tick, then advances the plant to the
+  next command time. A command tick reads state, delivers
+  diagnostics and runs the pause/cancellation checkpoint, receives and activates
+  eligible earlier work, optionally submits one request, receives its result if
+  immediately eligible, then decides and publishes its command. Use a small
+  shared function for receiving, checking and reporting a result. Keep plan
+  selection and timing updates explicit; do not re-enter a partially completed
+  tick or track preparation/publication phases. The immediate path checks result
+  eligibility, including a future predicted origin and the next-tick lower bound
+  for measured latency. Preserve independent physics/solver overlap.
+  Normal terminal drainage remains outside the loop. Cancellation
+  returns from the command-boundary checkpoint without draining the reply.
+
+- **2026-11-07: leave physics substeps to the plant** (Felix).
+  The loop calls `plant.advance()` once per command interval. `SimPlant` already
+  integrates with `SimConfig.substep`, shortening the last step at the command
+  boundary and emitting substep observations through `step_callback`. Remove the
+  separate loop physics schedule and period argument. Command period, MPC update
+  period and integration step remain independently configurable. Optional wall
+  pacing runs once per command interval; asynchronous solving can overlap the
+  plant's integration.
+
+- **2026-11-07: share periodic advancement and command alignment** (Felix).
+  Use the same small `Schedule` class for commands and MPC updates.
+  `next_at` exposes the nominal slot; `advance` consumes or skips slots without
+  moving the periodic phase. Keep command-grid rounding in its pure `align`
+  method, anchored to an actual eligible boundary so floating-point drift does
+  not introduce actions between command ticks. Result and activation times stay
+  plain deadlines checked inside the command tick. The update cursor controls
+  request cadence there. Zero update period requests whenever the solver is free
+  and no returned plan is waiting to activate, at most once per command tick.
+  The command cursor advances after publication.
+
+- **2026-11-06: record plans only through completed-solve callbacks** (Felix).
+  `RunRecord.solve_completed` records every returned plan and its request time,
+  including unused, expired and terminally drained results. Ticks record the
+  active plan, mapped by identity to its saved row. Remove `Tick.faulted` and
+  `Tick.plan_request_t` and the corresponding loop bookkeeping. A normal fault
+  still ends execution before applying a refused command. `run_experiment`
+  registers the recorder with all three notification groups. The saved columns
+  and format stay the same; plan rows now cover every completed solve.
+
+- **2026-11-06: remove foreground timing from the numerical loops** (Felix).
+  Drop `controller_wall_s`, its `perf_counter` accumulation and the separate
+  `SolveCompleted.wall_s` field. Completed solves retain their request snapshot
+  and native plan, whose `stats['wall_s']` supplies the solver duration. Keep the
+  observed real request-to-result delay used for compensation and virtual-time
+  availability unchanged. Detailed foreground costs belong to optional profiling;
+  the visualizer already measures its solver child's controller duration.
+
+- **2026-11-06: use a sequence of before-tick callbacks** (Felix).
+  `run_virtual_time` accepts `before_tick_callbacks=()`, matching the other
+  callback groups. Each receives the boundary `State` in registration order,
+  once per command boundary. Callbacks may block to pause the retained loop.
+  Cancellation is checked after the group, before result collection and command
+  evaluation. Keep this ordinary sequence without a callback dispatcher.
+
+- **2026-11-06: make prediction one calculation before each MPC request** (Felix).
+  Use a frozen callable predictor with a prepared physical model and explicit
+  inputs. Remove its publication history, `sent` and `arrived` methods and hidden
+  delay estimator. The loop owns the fixed or previous observed delay and chooses
+  the prediction target. Propagate the latest measurement under the held command,
+  then evaluate the active plan's command law and effort policy on predicted
+  feedback at future command ticks. A virtual measurement is already at the
+  command boundary. For older measurements, accept the approximation that the
+  currently held command covered the interval since observation; do not add
+  machinery to reconstruct earlier publications or plan changes. The physical
+  workspace is reused, but predictions do not depend on previous calls.
+
+- **2026-11-06: keep the university experiment framework straightforward** (Felix).
+  Fix correctness issues when the solution is simple. Accept minor edge cases
+  rather than complicating the numerical loop. Ordinary `try/finally` cleanup is
+  sufficient; do not add special machinery to choose between competing observer
+  and execution exceptions.
+
+- **2026-11-06: separate typed notifications and keep every request snapshot** (Felix).
+  The loops expose independent tick, solve-completed and diagnostic callbacks.
+  `Diagnostic` replaces the generic `Event` payload; `Tick` contains no diagnostic
+  bundle. Each notification has one delivery path, with no dispatcher or generic
+  message callback. The plant supplies diagnostics through `take_diagnostics`.
+  Keep an owned `last_mpc_request_snapshot` for every request, even without
+  observers, and use it for the solve-completed notification. The clear name
+  needs no explanatory comment. Snapshotting detaches mutable producer arrays
+  once; it does not depend on which observers are registered.
+  Real-time notifications run after command publication, preserving the execution
+  order. Virtual-time plant diagnostics are delivered before the pause checkpoint.
+  `RunRecord` receives ticks, completed solves and diagnostics separately. It
+  normalizes diagnostic timestamps relative to the first recorded state, including diagnostics received
+  before that tick. Console is a diagnostic callback. The saved `events.json`
+  payload and replay schema stay unchanged.
+
+- **2026-11-06: receive plans directly and emit notifications afterwards** (Felix).
+  MPC owns request/result transport and result validation. The loop owns virtual
+  availability, plan activation and the forecast's delay estimate. Keep those
+  assignments visible in the loop instead of state-mutating nested functions.
+  Notification helpers only report completed numerical work to observers; events
+  do not supply plans or drive internal scheduling. A small amount of repeated
+  result-handling code is preferable to hidden changes through `nonlocal`.
+
+- **2026-11-06: leave effort and lease validation to execution policies** (Felix).
+  Remove whole-plan effort rejection and `validate_plan` from the loops and
+  public API. Unapplied excessive knot torques do not reject a plan. The command
+  law and effort policy decide the command; real-time execution still checks
+  requested and applied torque against the raw limits. Solver results remain
+  structurally checked and finite. Remove the separate forecast-age preflight
+  from the real-time loop; a requested plan may later be refused by the ordinary
+  lease policy. Forecast commands use the same execution policies.
+
+- **2026-11-06: keep finite durations and the runtime guard in native loops** (Felix).
+  Both loops require finite, nonnegative seconds and retain the ten-minute
+  `MAX_RUNTIME_MIN` guard. None does not select a streaming mode. Virtual runs
+  disable cyclic GC for the invocation and restore the caller's policy on exit.
+  There is no unsafe-disable flag in the native API. A long-running override and
+  any pause-time GC handling belong to the visualizer's dedicated simulation
+  process; its migration remains deferred until the native layout is final.
+
+- **2026-11-06: pause the retained simulation loop at one ordinary checkpoint** (Felix).
+  Before-tick callbacks run once per command boundary before result collection or
+  command evaluation. They may block while an outstanding solve finishes in the
+  worker. The ordinary result path consumes that reply after resume. Remove the separate
+  quiescence flag, repeated boundary callback and deferred completion events.
+  Pause retains the plant, solver, clock, schedule and forecast delay estimate. The
+  cancellation flag is checked only after these callbacks at each boundary. Once
+  admitted, a tick completes its command decision and physics interval before
+  cancellation or pause is acknowledged; waiting for a solve is acceptable.
+  Detected breaches may request a pause at an ordinary command boundary.
+  Reset uses cancellation and constructs a fresh run. Tick-observer pause requests
+  are acknowledged at the next boundary. With identical solver results and
+  latencies, pausing preserves the numerical state and command sequence.
+
+- **2026-11-06: collect virtual-time results only when they may be needed** (Felix).
+  Keep one virtual-time implementation for synchronous and asynchronous MPCs.
+  Submit before the independent integration interval and collect once at the
+  first possible activation boundary. Declared zero latency collects immediately;
+  measured latency collects no earlier than the next command tick, even for a
+  reported zero duration. A result still waits for its measured availability and
+  predicted origin. Update the loop's previous delay once per result.
+  Activate an eligible plan before preparing the next request and reuse the
+  current command decision for forecasting and application. An immediate ideal
+  result invalidates that decision. Retain terminal drainage for controller reuse.
+
+- **2026-11-06: derive compensation defaults from the configured timing** (Felix).
+  Real-time compensation uses the previous observed request-to-result delay;
+  its initial estimate is the update period, or the command period for back-to-back
+  updates. `default_compensation(settings)` selects the same fixed delay for
+  declared virtual latency and previous-delay mode for measured latency. Explicit
+  compensation objects and None retain their chosen behavior. The standard
+  experiments call this constructor after resolving their CLI timing settings.
+  `RealTimeSafety` exposes only `validate`, matching `SafetyInterface`;
+  `RealTimeEffort` supplies the separate callable effort boundary. Waiting plans
+  use ordinary `ExecutionSafety.validate` without calling user safety early.
+
+- **2026-11-06: consolidate execution checks outside the loops** (Felix).
+  `RealTimeSafety` binds the mandatory lease and `RealTimeEffort` binds the raw
+  effort checks around the selected user policies. Execution and forecasting
+  share these policies. The
+  string-returning plan, lease and command fault helpers are removed from the
+  loops and public API. Waiting plans keep their mandatory expiry check before
+  activation, without evaluating their law or user safety early.
+
+- **2026-11-06: keep timing data separate from execution components** (Felix).
+  `VirtualTimeSettings` holds only command period, update period and solve latency;
+  `RealTimeSettings` holds the two periods. Neither has a `.run()` helper, and
+  there is no `Timing` protocol. The runner receives the loop function and
+  settings explicitly. Compensation, safety and effort handling are independent
+  run arguments and are recorded independently. `ExecutionSafety` holds the
+  maximum plan age and implements `SafetyInterface.validate(plan, t, state)`;
+  users can supply their own pure check. Finite plan horizons remain mandatory.
+  Control laws and effort handling return `Command | Fault`; safety returns
+  `Fault | None`. `decide_command` validates before the law and applies effort
+  handling to its accepted result. Custom laws retain default safety and effort
+  handling. Real-time mandatory robot limits remain enforced. No generic
+  validation framework is introduced.
+
+- **2026-11-06: one execution decision for both loops and forecasting** (Felix).
+  A plain `decide_command` function checks the active plan's age/horizon lease,
+  evaluates its control law, then applies the effort policy. Its result is
+  `Command(requested, applied)` or `Fault(reason, requested=None)`. The optional
+  requested torque retains refused commands for observers. Forecast refusals
+  make the prediction unavailable without an execution event. Waiting-plan expiry
+  before activation remains separate. Real-time commands retain the strict 100 ms lease and raw effort
+  rejection. No plan-modifier chain or general result framework is introduced.
+  `RealTimeSettings` replaces the `RealTime` name; `run_real_time` requires
+  `settings=`; the settings object is plain data.
+
+- **2026-11-06: require one virtual-time settings object** (Felix).
+  `VirtualTimeSettings` replaces the `VirtualTime` name and retains its preset
+  constructors. `run_virtual_time` requires `settings=`; numerical configuration
+  is held only in that object. Duration, compensation, safety, effort handling,
+  callbacks, cancellation and initial conditions stay on the invocation.
+  Configurations record the settings dataclass directly.
+
+- **2026-11-04: simplify the shared loop and separate effort handling** (Felix).
+  Virtual time has a separate
+  `effort_handling=EffortClip()` parameter, also when a caller supplies its own law;
+  `RejectOnEffort()` refuses excessive commands and `None` explicitly disables
+  effort handling. The policies accept per-joint limits and act after feedback
+  and feedforward. Invalid commands are refused before clipping. Forecasting uses
+  the same law and effort policy; both must be pure and are not copied. A future
+  refusal makes the forecast unavailable without an actuator event. Unapplied
+  over-limit plan knots are not rejected. Real-time checks remain strict and never
+  clip. Normal finite completion consumes outstanding solves so caller-owned
+  controllers can be reused; cancellation keeps the simple early exit.
+
+- **2026-11-03: configurable age expiry** (Felix).
+  `ExecutionSafety.max_plan_age_s` is positive seconds or None; None disables the
+  100 ms observation-age limit, including in forecasting. The finite horizon
+  still bounds the plan; no implicit last-command extension is introduced.
+  Propagation retains its own explicit model, independent of plant and optimizer.
+  Recording capacity remains the caller's responsibility. Special pause-time
+  memory management is deferred.
+
+- **2026-10-30: warn about PD feedback without latency compensation** (Felix).
+  The loops' setup check, renamed from `_check_compensation` to `_check_setup`,
+  also warns (`RuntimeWarning`, no rejection) when `PlanFeedback`, alone or under
+  `FrictionFeedforward`, runs without `LatencyCompensation`. Reason: simulated far
+  reaches exceeded the raw effort limit at the first plan's takeover from the held
+  arm, the D term reacting to the plan's velocity after the first solve's latency
+  ([latency compensation](latency-compensation.md)).
 
 - **2026-10-28: simplify prediction inputs and keep execution data off plans**
   (Felix). `request` and `_solve` take one `State | Prediction`; a prediction
@@ -354,7 +800,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   inputs. No consumer fallback or separate optional prediction argument.
   Remove `_arrived`/`_activated` and lifecycle timing data from `Plan.stats`;
   it contains solver statistics. Keep only the recorder's request association
-  on `Tick.plan_request_t`, so superseded results retain the correct request.
+  on `SolveCompleted.request_time_s`, so superseded results retain the correct request.
 
 - **2026-10-28: integrate optional latency prediction on main**
   (Felix; implementation delegated, KISS). Keep the two loops and their independent
@@ -362,12 +808,29 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   for MPC; measured `State` stays unchanged for feedback and checks. Fixed forecast
   delay or previous completed request's delay with an initial estimate; no access
   to the current solve's future duration. CPU propagation reuses the simulator's
-  Euler step with explicit independent friction/law/armature and actual sent-command
-  history for old measurements. Early replies wait; late replies retain their
+  Euler step with explicit independent friction/law/armature and a held-command
+  approximation for old measurements. Early replies wait; late replies retain their
   predicted origin. `Plan.measured_t` preserves the measurement-age lease while
-  `Plan.t0` defines trajectory time. Compensation defaults off; no solver,
+  `Plan.t0` defines trajectory time. Compensation defaults off (on since
+  2026-10-30, the next entry); no solver,
   saturation-policy or visualizer change in this pass. See
   [latency compensation](latency-compensation.md).
+
+- **2026-10-30: new defaults for the real MPC, which the simulation takes from it**
+  (Felix; timing and law superseded on 2026-11-12, above). The real MPC's timing, `RealTimeSettings()`: 500 Hz commands, control updates at
+  50 Hz (20 ms) and latency compensation on. The current real-time forecast uses
+  previous observed latency, initialized from the update period. The simulation's timing is
+  `VirtualTimeSettings.like(RealTimeSettings())`: the same periods, each solve
+  declared, not measured, to last one control period; compensation is passed
+  separately. `MpcParams`: 30 ms knots
+  (`dt_s`, N stays 32: a 0.93 s horizon) and planning speeds at 60 % of the raw limits
+  (`velocity_fraction`). The mains (reach, figure8, random100) use `PlanFeedback()`,
+  the planned torque as feedforward plus PD about the plan, with its stored gains, which
+  need the supplied armature, now on by default (Friction and GATO). Unchanged: the cost weights
+  4/8, `FIGURE8`'s explicit 10 ms knots, the presets `ideal`, `constant_latency`,
+  `constant_rate` and `as_fast_as_possible`, and the bare loops' parameter defaults
+  (`law=SampleKnot()`, `compensation=None`). random100 runs from this date are a new
+  protocol ([its README](../experiments/random100/README.md)).
 
 - **2026-10-22: plans are sampled by knot.** The execution controller commands
   the torque of knot k = floor((t − t₀)/dt) from the time t₀ of the state the
@@ -405,7 +868,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   went. Budget rule: `max_sqp_time_s=None` for a declared latency, the TIAGO
   budget for `"measured"`, the rehearsal and the robot (this replaces "simulations
   set None" below; inverted on 2026-10-26, Purpose and shape: the budget only on
-  `RealTime` and `"measured"`; `solve_latency` became `solve_latency_s` the same
+  `RealTimeSettings` and `"measured"`; `solve_latency` became `solve_latency_s` the same
   day). Simulation (`--plant sim`) uses the in-process `Mpc`; the
   robot and the rehearsal keep `MpcProcess`, random100 its `MpcProcess` per case
   (Felix, same day). Warnings and counts: a late tick on wall time (once per run,
@@ -433,7 +896,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   GATO's ADMM defaults except `rho_u` 5e-4 for reaching (ratio 5 to its control
   cost; GATO's 1e-5 made 46 of random100's first plans exceed the raw effort
   limit), the figure eight keeps 1e-5; default command period 2 ms, control
-  updates at dt. `max_sqp_time_s` 0.01 s caps a solve on the wall clock;
+  updates at dt (at 50 Hz since 2026-10-30). `max_sqp_time_s` 0.01 s caps a solve on the wall clock;
   simulations set None (a wall-time budget is wrong on a simulated clock).
   `run` warns once when a plan is first commanded from its second knot; the
   remedies, feedback around the plan or latency compensation, are named there.
@@ -504,22 +967,21 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     `ROS_DISTRO`; `gato_source` became its internal `_gato_source`), `Console`,
     `RunRecord(out, **pieces)` (renamed from `Record`) and `load_run(path,
     classes)`, which share one read interface (`config`, `ticks`, `plans`,
-    `events`, `metadata`), and `FORMAT = 1` (2 since 2026-10-26). `Event` lives in `plan.py`, beside
+    `diagnostics`, `metadata`), and `FORMAT = 1` (2 since 2026-10-26). `Diagnostic` lives in `interfaces.py`, beside
     `Tick`, so that inside the package only the root imports `record.py`, and no
     import is lazy (Felix, same day).
   - **A run directory:** `summary.json` (`format`, `provenance`, `config`, the
     pieces written at the start, and `metadata`: `status`, `reason`, `end_t`, one
     flat `results`, `error`, `plant`), `ticks.npz` (with `plan` and `update`
     indices), `plans.npz` (with `update_t`), `events.json`, and `replay.npz`, the
-    visualizer's contract, exported from the record. A plan that faulted
-    (`plan_fault`) is saved as the last row of `plans.npz`; it never takes effect,
-    so no tick's `plan` index points at it, and the faulting tick carries it as
-    `Tick.faulted` (Felix, same day). Old recordings stay readable only by their own
+    visualizer's contract, exported from the record. Every returned plan is saved
+    from `SolveCompleted`, including plans that never activate; no tick's `plan`
+    index points at an unused plan. Old recordings stay readable only by their own
     code (22 October).
-  - **Events, not warnings:** the loops and plants emit `late_tick`, `overrun`,
+  - **Diagnostics, not warnings:** the loops and plants emit `late_tick`, `overrun`,
     `late_plan`, `pacing_behind`, `activated` and `handback`; every occurrence is
     recorded, the console prints the first of each kind. Plants hand theirs to the
-    loop with `take_events()`, once per tick and once after the loop (`stop()`'s).
+    loop with `take_diagnostics()`, once per tick and once after the loop (`stop()`'s).
     The late tick after the robot's activation is not emitted; its delay is the
     `activated` event's `switch_s`. `PlantInterface.settings` became `run_state`,
     the plant's final values.
@@ -527,8 +989,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     recorded as given, without a wrapper or `Options`: the task, `MpcParams`,
     `SimConfig`/`RobotConfig` with `build()`, the laws `SampleKnot()` and
     `HoldFirst()` (replacing `sample_knot`, `hold_first`), the timings
-    `VirtualTime` (presets `ideal`, `constant_latency`, `as_fast_as_possible`,
-    `constant_rate`) and `RealTime` in `loops.py`, each running its loop.
+    `VirtualTimeSettings` (presets `ideal`, `constant_latency`, `as_fast_as_possible`,
+    `constant_rate`) and `RealTimeSettings` in `loops.py`, passed to the chosen loop.
     `SimConfig.integrator` is explicit, with no `None`: a plant with friction
     names its integrator. Fields that would not round-trip convert in
     `__post_init__` (`SimConfig.q`/`qd` to tuples, `CollisionSafetySettings`'s
@@ -536,8 +998,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     `dynamics.LAWS` went.
   - **Ending without exceptions:** a loop returns `Outcome(status, reason, t)`:
     `done`, `timeout`, `fault` (`effort_limit`, `lease_expired`,
-    `invalid_command`, from `plan_fault`, `lease_fault`, `command_fault`, which
-    gate `plant.apply`) or `interrupted` (`stop_requested`, the module-level
+    `invalid_command`, from execution-safety checks that gate `plant.apply`) or
+    `interrupted` (`stop_requested`, the module-level
     `STOP` flag checked every tick). `handle_stop_signals()` clears and sets the
     flag on the first SIGINT/SIGTERM; a second restores the defaults and raises
     `KeyboardInterrupt`. Every main that runs the simulation or the arm calls it
@@ -553,7 +1015,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     and saves again. There is no `done_status`: the reach sets `"arrived"`
     itself, the figure eight ends as `done`. `RunRecord` also works on its own,
     with the same duties written out. `launch(args, experiment, plant, params,
-    timing)` takes the main's `VirtualTime` explicitly (Felix, same day). Superseded
+    timing)` takes the main's `VirtualTimeSettings` explicitly (Felix, same day). Superseded
     on 2026-10-26 (Purpose and shape): `launch` went, each experiment's `evaluate`
     adds its results and saves, and `run_experiment` builds the MPC from parameters.
   - **Many runs:** no study class in the library; an experiment defines its own
@@ -561,7 +1023,8 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
     `study.json` once before the first run, one `RunRecord` per case, stop on
     `interrupted`, `load(path)`).
   - **Runs are limited to `MAX_RUNTIME_MIN` = 10 minutes** (`loops.py`): both
-    loops raise before the plant starts for a longer duration. Long runs are not
+    loops require a finite duration and raise before the plant starts for a
+    longer run. Long buffered runs are not
     validated: the record keeps every tick in memory (about 2 KB per tick in
     simulation) and the loops pause garbage collection for the whole run, which
     stays (a check of 24 October found no cyclic garbage per tick on the CPU
@@ -585,10 +1048,13 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 - The Gazebo check (the ROS container exists, 2026-10-28).
 - Migrating the visualizer off `tiago_mpc_vis_baseline`.
 - Publishing/pinning the armature extensions for main and upstream.
-- Moving the costs completely to GATO's cost menu (2026-10-24: a separate step
-  after the GATO 0.1.5 migration).
 
 ## Open with Felix
+
+- Orientation tracking: the weights (running/terminal, untuned; 0.2/4 and 1/8 were tried once);
+  whether arrival should include an orientation tolerance; the defaults for reach and
+  figure8. All objectives now use a cost menu; orientation weights belong to the
+  native menu, configured directly or through `default_cost`.
 
 - How garbage collection runs between ticks or runs.
 - Per-iteration trajectory capture on GATO 0.1.5 (under discussion, 2026-10-24):

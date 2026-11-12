@@ -1,16 +1,18 @@
 """RosPlant and the robot mains on a fake ROS client, safety worker and clock (CPU only)."""
 from dataclasses import replace
+import json
 from types import SimpleNamespace as NS
 
 import numpy as np
 import pytest
 
 from experiments import common, figure8 as f8, reach as rc
+from test_experiments import Mpc as HoldingMpc
 from test_loops import Mpc, Task
 import tiago_mpc as tm
 from tiago_mpc import clock as clock_module, robot
 from tiago_mpc.clock import VirtualClock, WallClock
-from tiago_mpc.loops import RealTime, run_real_time, run_virtual_time
+from tiago_mpc.loops import RealTimeSettings, VirtualTimeSettings, run_real_time, run_virtual_time
 from tiago_mpc.record import load_run
 from tiago_mpc.ros2 import ArmState
 from tiago_mpc.safety import CollisionSafetySettings
@@ -144,10 +146,10 @@ def test_the_first_apply_activates_and_stop_hands_back(rig):
     assert rig.arm.calls[-1] == "handback" and rig.arm.owner == "arm_right_controller"
     assert all(not u.any() for u in rig.arm.published[-5:])
     assert plant.run_state == dict(activated=True, restored=True, cleanup_errors=[])
-    activated, handback = plant.take_events()
+    activated, handback = plant.take_diagnostics()
     assert activated.kind == "activated" and activated.data["switch_s"] == pytest.approx(.015, abs=1e-3)
     assert handback.kind == "handback" and handback.data == dict(restored=True, errors=[])
-    assert plant.take_events() == []
+    assert plant.take_diagnostics() == []
 
 
 def test_stop_before_activation_publishes_nothing_and_keeps_the_controller(rig):
@@ -230,7 +232,7 @@ def test_a_failed_activation_hands_back_but_never_claims_restoration(rig, fault,
         plant.stop()
     assert rig.arm.calls[-1] == "handback" and plant.run_state["restored"] is False
     assert not rig.arm.published[-1].any()
-    handback, = plant.take_events()  # the switch failed: no activated event
+    handback, = plant.take_diagnostics()  # the switch failed: no activated event
     assert handback.kind == "handback" and not handback.data["restored"] and "uncertain" in handback.data["errors"][-1]
 
 
@@ -261,25 +263,26 @@ def test_the_robot_refuses_virtual_time_before_any_ros_call(rig):
     with pytest.raises(ValueError, match="wall time only"):
         plant.start(VirtualClock())
     with pytest.raises(ValueError, match="wall time only"):
-        run_virtual_time(plant, Mpc(), Task(), command_period=.01, update_period=.01, duration=.1, solve_latency_s=0.)
+        run_virtual_time(plant, Mpc(), Task(), settings=VirtualTimeSettings(.01, .01, 0.), duration=.1, law=tm.SampleKnot(), compensation=None)
     assert not rig.arm.calls and plant.monitor is None and not rig.arm.published
 
 
 def test_run_real_time_activates_once_and_hands_back(rig):
-    plant, ticks = robot.RosPlant(robot.RobotConfig(execute=True)), []
-    outcome = run_real_time(plant, Mpc(N=32), Task(), tick_callbacks=[ticks.append], command_period=.01,
-                            update_period=.01, duration=.1)
+    plant, ticks, diagnostics = robot.RosPlant(robot.RobotConfig(execute=True)), [], []
+    outcome = run_real_time(plant, Mpc(N=32), Task(), tick_callbacks=[ticks.append],
+                            diagnostic_callbacks=[diagnostics.append],
+                            settings=RealTimeSettings(.01, .01), compensation=None, duration=.1, law=tm.SampleKnot())
     assert outcome.status == "timeout"
-    assert [e.kind for k in ticks for e in k.events if e.kind != "late_plan"] == ["activated"]  # behind, not late
+    assert [d.kind for d in diagnostics if d.kind != "late_plan"] == ["activated"]  # behind, not late
     assert rig.arm.calls.count("switch") == 1 and rig.arm.calls[-1] == "handback"
     assert plant.run_state["restored"] is True and not rig.arm.published[-1].any()
     assert sum(u.any() for u in rig.arm.published) >= 10
-    assert [e.kind for e in plant.take_events()] == ["handback"]  # after the loop
+    assert [e.kind for e in plant.take_diagnostics()] == ["handback"]  # after the loop
 
 
 def test_run_real_time_never_activates_for_a_goal_already_met(rig):
     plant = robot.RosPlant(robot.RobotConfig(execute=True))
-    outcome = run_real_time(plant, Mpc(), Task(done_at=0.), command_period=.01, update_period=.01, duration=1.)
+    outcome = run_real_time(plant, Mpc(), Task(done_at=0.), settings=RealTimeSettings(.01, .01), compensation=None, duration=1., law=tm.SampleKnot())
     assert outcome.status == "done"
     assert "switch" not in rig.arm.calls and not rig.arm.published
 
@@ -291,8 +294,8 @@ def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
         mpc.dead = tick.command is not None
 
     with pytest.raises(RuntimeError, match="exited"):
-        run_real_time(plant, mpc, Task(), tick_callbacks=[die], command_period=.01, update_period=.01,
-                      duration=1.)
+        run_real_time(plant, mpc, Task(), tick_callbacks=[die], settings=RealTimeSettings(.01, .01),
+                      duration=1., law=tm.SampleKnot())
     assert rig.arm.calls[-1] == "handback" and not rig.arm.published[-1].any()
 
 
@@ -329,7 +332,7 @@ def test_confirmed_execution_runs_on_the_robot_and_records_the_handback(rig, mon
     closed = []
 
     def compile(params):
-        mpc = Mpc(N=32)  # the fake's 10 ms knots, as TIAGO's and FIGURE8's
+        mpc = HoldingMpc(params)  # gravity-holding plans: the mains' PlanFeedback and its forecast stay at rest
         mpc.params, mpc.close = params, lambda: closed.append("mpc")
         return mpc
 
@@ -339,12 +342,14 @@ def test_confirmed_execution_runs_on_the_robot_and_records_the_handback(rig, mon
     assert module.main(["--plant", "robot", "--execute", "--target", ".5", ".1", ".2", "--duration", ".05",
                         "--output", str(tmp_path / "r")]) == (1 if module is rc else 0)  # the capped reach times out
     run = load_run(tmp_path / "r", classes=[rc.Reach if module is rc else f8.Figure8])
-    assert run.config["plant"] == robot.RobotConfig(execute=True) and run.config["timing"] == RealTime()
+    assert run.config["plant"] == robot.RobotConfig(execute=True) and run.config["settings"] == RealTimeSettings()
     assert run.config["params"] is not None and run.config["params"] == (rc.tm.TIAGO if module is rc else f8.FIGURE8)
     task = run.config["task"]
     assert (task.target_m if module is rc else task.start_m) == (.5, .1, .2)
     assert run.metadata["status"] == "timeout" and run.metadata["plant"] == dict(activated=True, restored=True,
                                                                                  cleanup_errors=[])
-    assert [e.kind for e in run.events if e.kind != "late_plan"] == ["activated", "handback"]
+    assert [e.kind for e in run.diagnostics if e.kind != "late_plan"] == ["activated", "handback"]
     assert run.provenance["ros_distro"] is None
+    with np.load(tmp_path / "r" / "replay.npz") as replay:
+        assert json.loads(str(replay["metadata_json"]))["time_basis"] == "wall"
     assert closed == ["mpc"] and rig.arm.closed and rig.arm.calls[-1] == "handback"

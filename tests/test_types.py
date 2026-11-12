@@ -1,5 +1,5 @@
 """mypy over tiago_mpc/ and this file (pyproject.toml): the core's annotations agree, and
-the plants, MPCs, tasks, laws and timings below, the test fakes among them, satisfy the
+the plants, MPCs, tasks, laws and safety policies below, the test fakes among them, satisfy the
 protocols in tiago_mpc/interfaces.py."""
 from __future__ import annotations
 
@@ -14,15 +14,14 @@ from tiago_mpc.tiago import ROOT
 
 if TYPE_CHECKING:  # read by mypy only
     from experiments.figure8 import Figure8
-    from experiments.latency_compensation import Compensated
     from experiments.reach import Reach
     import test_experiments
     import test_loops
-    from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
+    from tiago_mpc.laws import (EffortClip, ExecutionSafety, FrictionFeedforward, HoldFirst, PlanFeedback,
+                                RealTimeEffort, RealTimeSafety, RejectOnEffort, SampleKnot)
     from tiago_mpc.dynamics import Friction, Tanh
-    from tiago_mpc.loops import RealTime, VirtualTime
     from tiago_mpc.mpc import Mpc, MpcProcess
-    from tiago_mpc.interfaces import ControlLaw, MpcInterface, PlantInterface, TaskInterface, Timing
+    from tiago_mpc.interfaces import ControlLaw, EffortHandling, MpcInterface, PlantInterface, SafetyInterface, TaskInterface
     from tiago_mpc.robot import RosPlant
     from tiago_mpc.sim import SimPlant
 
@@ -31,7 +30,8 @@ if TYPE_CHECKING:  # read by mypy only
     tasks: list[type[TaskInterface]] = [Reach, Figure8, test_loops.Task]
     laws: list[ControlLaw] = [SampleKnot(), HoldFirst(), PlanFeedback(),
                               FrictionFeedforward(Friction((1.,)*7, (0.,)*7), PlanFeedback(), Tanh(.03))]
-    timings: list[Timing] = [VirtualTime.ideal(), RealTime(), Compensated()]
+    effort_handling: list[EffortHandling] = [EffortClip(), RejectOnEffort(), RealTimeEffort()]
+    safety: list[SafetyInterface] = [ExecutionSafety(), RealTimeSafety()]
 
 
 def test_mypy():

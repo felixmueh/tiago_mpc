@@ -1,0 +1,330 @@
+diff --git a/grid_codegen/GRiDCodeGenerator.py b/grid_codegen/GRiDCodeGenerator.py
+index 6ff3ce85087ab68c49e27af93183da9a10dd1592..381a415c52e079694e766635e4437a585fd753aa 100644
+--- a/grid_codegen/GRiDCodeGenerator.py
++++ b/grid_codegen/GRiDCodeGenerator.py
+@@ -1,5 +1,6 @@
+ import os
+ import warnings
++import math
+ 
+ # Codegen-time frame-selection predicate shared with the idsva_so dispatcher /
+ # device wrapper. The emission gate (enable_idsva_so_world_frame) MUST agree with
+@@ -208,8 +209,13 @@ class GRiDCodeGenerator:
+         self._code_parts.append(text)
+         self._code_cache = None
+ 
+-    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03):
++    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03, JOINT_ARMATURE = None):
+         self.robot = robotObj
++        # Reflected rotor inertia: M_eff = M + diag(a). Baked constants enter
++        # ABA/Minv's articulated joint inertia, CRBA's diagonal and RNEA's
++        # a*qdd term. Constant a has no q/qd derivative; FD derivatives inherit
++        # the corrected Minv. None/zeros leave emitted CUDA unchanged.
++        self.joint_armature = self._validate_joint_armature(JOINT_ARMATURE)
+         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads
+         # the per-DOF damping/friction coefficients from a mutable device table
+         # (set_joint_dynamics_params) instead of baking them as literals, so they
+@@ -355,6 +361,48 @@ class GRiDCodeGenerator:
+             and getattr(self, "FRICTION_MODEL", "sign") == "tanh" \
+             and bool(self.robot.robot_has_joint_friction())
+ 
++    def _validate_joint_armature(self, armature):
++        """One finite nonnegative reflected inertia per supported scalar joint."""
++        if armature is None:
++            return None
++        robot = self.robot
++        n = robot.get_num_joints()
++        try:
++            values = [float(value) for value in armature]
++        except (TypeError, ValueError) as exc:
++            raise ValueError("JOINT_ARMATURE must be a sequence of per-joint floats") from exc
++        if len(values) != n:
++            raise ValueError(f"JOINT_ARMATURE has {len(values)} entries but the robot has {n} joints")
++        if any(not math.isfinite(value) or value < 0.0 for value in values):
++            raise ValueError("JOINT_ARMATURE entries must be finite and >= 0")
++        unsupported = []
++        if robot.floating_base:
++            unsupported.append("floating base")
++        if self.robot_has_mimic_joints():
++            unsupported.append("mimic joints")
++        if robot.robot_has_spherical():
++            unsupported.append("spherical joints")
++        if robot.robot_has_skew_axis():
++            unsupported.append("skew joint axes")
++        bad_types = sorted({kind for kind in robot.get_joint_types_by_id().values()
++                            if kind not in ("revolute", "continuous")})
++        if bad_types:
++            unsupported.append(f"joint types {bad_types}")
++        if robot.get_num_vel() != n:
++            unsupported.append(f"nv={robot.get_num_vel()} != n_joints={n}")
++        if unsupported:
++            raise NotImplementedError("JOINT_ARMATURE supports only fixed-base scalar revolute/continuous "
++                                      "cardinal-axis non-mimic robots; unsupported: " + "; ".join(unsupported))
++        return values if any(value != 0.0 for value in values) else None
++
++    def robot_has_armature(self):
++        return self.joint_armature is not None
++
++    def gen_bake_armature_array(self, name="s_armature"):
++        """Per-joint constants (joint id equals velocity slot on this topology)."""
++        self.gen_add_code_line("// JOINT_ARMATURE: M_eff = M + diag(reflected inertia)")
++        self.gen_bake_const_array(name, self.joint_armature, "T")
++
+     def _normalize_codegen_algorithms(self, codegen_profile = "all", algorithm_list = None):
+         from ._algo_profiles import normalize_codegen_algorithms
+         return normalize_codegen_algorithms(self, codegen_profile, algorithm_list)
+diff --git a/grid_codegen/README.md b/grid_codegen/README.md
+index 9f3860df75e4ac2aad631e3f8b43e518c7828d41..45ba93ae6945629fac0069ec9c2c280b09ddb6d0 100644
+--- a/grid_codegen/README.md
++++ b/grid_codegen/README.md
+@@ -11,6 +11,16 @@ codegen = GRiDCodeGenerator(robot, DEBUG_MODE=False)
+ codegen.gen_all_code(output_path="grid.cuh")
+ ```
+ 
++For a fixed-base robot with scalar revolute/continuous cardinal-axis joints and
++no mimics, `JOINT_ARMATURE=[...]` on `GRiDCodeGenerator` bakes one nonnegative
++reflected inertia per joint (kg m²): the joint-space inertia becomes
++`M(q) + diag(armature)`. It composes with `USE_JOINT_DYNAMICS=True`,
++`FRICTION_MODEL="tanh"` and `FRICTION_WIDTH`. `None` and an all-zero vector
++preserve the existing generated code. This is a code-generator option, not a
++`load_robot` or RBDReference runtime parameter. Consumers must include the
++armature vector in their model/cache identity; changing it requires generation
++and compilation. Other joint topologies are rejected when armature is supplied.
++
+ For command-line generation, use `grid-generate robot.urdf`. Subset builds
+ (`--algorithm-list`) and `--no-mujoco-kernels` reduce compilation cost.
+ 
+diff --git a/grid_codegen/algorithms/_aba.py b/grid_codegen/algorithms/_aba.py
+index ac421cfa2061b9335a60125a418a2da86871894c..b3e85323ea2ee9086749f3f42b5387b3d410be14 100644
+--- a/grid_codegen/algorithms/_aba.py
++++ b/grid_codegen/algorithms/_aba.py
+@@ -551,6 +551,8 @@ def gen_aba_inner(self):
+     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
+     self.gen_add_code_line("T *s_cold = s_temp;")
+     self.gen_add_code_line("if constexpr (TEMP_IN_SMEM && !COLD_IN_SMEM) { s_cold = d_workspace - " + str(98 * n) + "; }")
++    if self.robot_has_armature():
++        self.gen_bake_armature_array()
+ 
+     if self.robot_has_mimic_joints():
+         # Mimic ABA via algebraic decomposition (mirrors RBDReference.aba mimic
+@@ -984,7 +986,8 @@ def gen_aba_inner(self):
+                 jid = str(inds[0])
+                 self.gen_add_code_line("int jid = " + jid + ";")
+             self.gen_add_code_line("int jid6 = 6 * " + jid + ";")
+-            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "];")
++            armature = " + s_armature[jid]" if self.robot_has_armature() else ""
++            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "]" + armature + ";")
+ 
+             self.gen_add_code_line("T tempval = (" + S_sign_cpp + ") * s_temp[78 * " + str(n) + " + jid6 + " + S_ind_cpp +"];")
+             self.gen_add_code_line("s_temp[97 * " + str(n) + " + jid] = s_tau[jid] - tempval;")
+diff --git a/grid_codegen/algorithms/_crba.py b/grid_codegen/algorithms/_crba.py
+index f1a3c239f7e88f671b43eae79cf68aaeb35f974a..953d963a0c9f17876e477b39e95d9b79c1875717 100644
+--- a/grid_codegen/algorithms/_crba.py
++++ b/grid_codegen/algorithms/_crba.py
+@@ -398,13 +398,16 @@ def gen_crba_inner(self):
+     self.gen_add_code_line("//")
+     self.gen_add_code_line("// Calculation of M[ind, ind] ")
+     self.gen_add_code_line("//")
++    if self.robot_has_armature():
++        self.gen_bake_armature_array()
+     _, S_ind_cpp = self.gen_topology_helpers_pointers_for_cpp(NO_GRAD_FLAG = True)
+     S_sign_cpp = self.gen_topology_S_sign_for_cpp()
+     
+     self.gen_add_parallel_loop("jid",str(n))
+ 
+     ImatOffset = 36*n   # Offset in XImats to Imats
+-    self.gen_add_code_line(f"s_M[jid+jid*{n}] = s_XImats[{ImatOffset} + 36*jid + 6*{S_ind_cpp} + {S_ind_cpp}];") # take the S_ind row and S_ind column of appropriate Imat
++    armature = " + s_armature[jid]" if self.robot_has_armature() else ""
++    self.gen_add_code_line(f"s_M[jid+jid*{n}] = s_XImats[{ImatOffset} + 36*jid + 6*{S_ind_cpp} + {S_ind_cpp}]{armature};") # project link inertia and add reflected inertia
+     self.gen_add_end_control_flow()
+     # NO sync (barrier audit 2026-10-03): the s_fh fill below reads only s_XImats; the
+     # diagonal writes ride the s_fh barrier (the chain walk after it never touches M[ii]).
+diff --git a/grid_codegen/algorithms/_inverse_dynamics.py b/grid_codegen/algorithms/_inverse_dynamics.py
+index 01f2eb14c7ff5bc611ef36a4fe2e158532d8be05..c1f89e116b8796842f6297a126c2bfd160fe36b4 100644
+--- a/grid_codegen/algorithms/_inverse_dynamics.py
++++ b/grid_codegen/algorithms/_inverse_dynamics.py
+@@ -809,6 +809,12 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
+         self.gen_add_end_control_flow()
+         self.gen_add_sync()
+         self.gen_inverse_dynamics_joint_dynamics_bias()
++        if use_qdd_input and self.robot_has_armature():
++            self.gen_bake_armature_array()
++            self.gen_add_parallel_loop("dof_id", str(self.robot.get_num_vel()))
++            self.gen_add_code_line("s_c[dof_id] += s_armature[dof_id] * s_qdd[dof_id];")
++            self.gen_add_end_control_flow()
++            self.gen_add_sync()
+     self.gen_add_end_function()
+ 
+ 
+diff --git a/grid_codegen/algorithms/_minv.py b/grid_codegen/algorithms/_minv.py
+index b77e946c14d5c841d3ee05555e7942d75122e9b7..de326b413a5e2a8bcf3d9160e17d9b79dc552338 100644
+--- a/grid_codegen/algorithms/_minv.py
++++ b/grid_codegen/algorithms/_minv.py
+@@ -142,6 +142,9 @@ def gen_minv_inner(self):
+     # body indexes into s_temp (IA/U/Dinv/Ia/IaTemp). The F-region is sliced
+     # separately below.
+ 
++    if self.robot_has_armature():
++        self.gen_bake_armature_array()
++
+     # Inner-controlled F placement: F lives at the tail of s_temp (after the
+     # no_F region) when F_IN_SMEM, else in d_workspace. Keeping no_F at offset 0
+     # leaves every s_temp[...] body reference below unchanged.
+@@ -274,7 +277,8 @@ def gen_minv_inner(self):
+                 self.gen_add_parallel_loop("row",str(6))
+             self.gen_add_code_line("s_temp[" + str(UOffset) + " + " + jid6 + " + row] = (" + S_sign_cpp + ") * s_temp[" + str(IAOffset) + " + 6*" + jid6 + " + 6*" + S_ind_cpp + " + row];")
+             self.gen_add_code_line("if(row == " + S_ind_cpp + "){", True)
+-            self.gen_add_code_line("s_temp[" + str(DinvOffset) + " + " + jid + "] = static_cast<T>(1)/((" + S_sign_cpp + ") * s_temp[" + str(UOffset) + " + " + jid6 + " + " + S_ind_cpp + "]);")
++            armature = " + s_armature[" + jid + "]" if self.robot_has_armature() else ""
++            self.gen_add_code_line("s_temp[" + str(DinvOffset) + " + " + jid + "] = static_cast<T>(1)/((" + S_sign_cpp + ") * s_temp[" + str(UOffset) + " + " + jid6 + " + " + S_ind_cpp + "]" + armature + ");")
+             # need offset due to floating base matrix in upper left
+             if self.robot.floating_base: self.gen_add_code_line(f's_Minv[{str(n + 1)} * ({jid} + 5)]' + " = s_temp[" + str(DinvOffset) + " + " + jid + "];")
+             else: self.gen_add_code_line("s_Minv[" + str(n + 1) + " * " + jid + "] = s_temp[" + str(DinvOffset) + " + " + jid + "];")
+diff --git a/test/test_armature_codegen.py b/test/test_armature_codegen.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..2e42c5458e31a8fe3cf141d08e4cff9102c245e9
+--- /dev/null
++++ b/test/test_armature_codegen.py
+@@ -0,0 +1,142 @@
++"""CPU contract checks for fixed-base armature code generation.
++
++The numerical check defines the intended mass-equation/derivative oracle; it
++does not execute the generated CUDA. GPU equivalence is a separate check.
++"""
++from __future__ import annotations
++
++import contextlib
++import io
++
++import numpy as np
++import pinocchio as pin
++import pytest
++
++from URDFParser import URDFParser
++from RBDReference import RBDReference
++from grid_codegen import GRiDCodeGenerator
++
++
++ARMATURE = np.array([0.4, 0.2])
++ALGORITHMS = ["inverse_dynamics", "inverse_dynamics_gradient", "minv", "crba",
++              "aba", "forward_dynamics", "forward_dynamics_gradient"]
++
++
++def robot_xml(axis="0 0 -1", kind="revolute", mimic=False):
++    return f"""<robot name="armature_contract">
++      <link name="base"/>
++      <link name="one"><inertial><origin xyz="0.2 0.03 0"/>
++        <mass value="1.3"/><inertia ixx="0.06" iyy="0.08" izz="0.1" ixy="0" ixz="0" iyz="0"/>
++      </inertial></link>
++      <link name="two"><inertial><origin xyz="0.15 0.02 0.04"/>
++        <mass value="0.7"/><inertia ixx="0.025" iyy="0.03" izz="0.04" ixy="0" ixz="0" iyz="0"/>
++      </inertial></link>
++      <joint name="first" type="revolute"><parent link="base"/><child link="one"/>
++        <origin xyz="0 0 0.1"/><axis xyz="0 1 0"/>
++        <limit lower="-2" upper="2" velocity="3" effort="20"/>
++        <dynamics damping="0.2" friction="0.7"/></joint>
++      <joint name="second" type="{kind}"><parent link="one"/><child link="two"/>
++        <origin xyz="0.4 0 0.1"/><axis xyz="{axis}"/>
++        <limit lower="-2" upper="2" velocity="3" effort="20"/>
++        <dynamics damping="0.3" friction="0.4"/>
++        {'<mimic joint="first" multiplier="1" offset="0"/>' if mimic else ''}
++      </joint></robot>"""
++
++
++def parse_robot(path, **kwargs):
++    with contextlib.redirect_stdout(io.StringIO()):
++        return URDFParser().parse(str(path), **kwargs)
++
++
++@pytest.fixture
++def model_path(tmp_path):
++    path = tmp_path / "two.urdf"
++    path.write_text(robot_xml())
++    return path
++
++
++def emit(robot, path, **kwargs):
++    generator = GRiDCodeGenerator(robot, **kwargs)
++    with contextlib.redirect_stdout(io.StringIO()):
++        generator.gen_all_code(output_path=str(path), algorithm_list=ALGORITHMS,
++                               enable_mujoco_kernels=False)
++    return path.read_text()
++
++
++@pytest.mark.parametrize("bad", [[1.0], [-1.0, 0.0], [float("nan"), 0.0],
++                                  [float("inf"), 0.0], [float("-inf"), 0.0]])
++def test_armature_rejects_invalid_vector(model_path, bad):
++    with pytest.raises(ValueError, match="JOINT_ARMATURE"):
++        GRiDCodeGenerator(parse_robot(model_path), JOINT_ARMATURE=bad)
++
++
++@pytest.mark.parametrize("options", [{"floating_base": True},
++                                     {"axis": "0.6 0.8 0"},
++                                     {"kind": "prismatic"}, {"mimic": True}])
++def test_armature_rejects_unsupported_topology(tmp_path, options):
++    options = dict(options)
++    floating = options.pop("floating_base", False)
++    path = tmp_path / "unsupported.urdf"
++    path.write_text(robot_xml(**options))
++    robot = parse_robot(path, floating_base=floating)
++    with pytest.raises(NotImplementedError, match="JOINT_ARMATURE"):
++        GRiDCodeGenerator(robot, JOINT_ARMATURE=[0.1] * robot.get_num_joints())
++
++
++def test_none_and_zero_are_byte_neutral_with_tanh(model_path, tmp_path):
++    robot = parse_robot(model_path)
++    kwargs = dict(USE_JOINT_DYNAMICS=True, FRICTION_MODEL="tanh", FRICTION_WIDTH=0.2)
++    omitted = emit(robot, tmp_path / "omitted.cuh", **kwargs)
++    none = emit(robot, tmp_path / "none.cuh", JOINT_ARMATURE=None, **kwargs)
++    zero = emit(robot, tmp_path / "zero.cuh", JOINT_ARMATURE=[0.0, 0.0], **kwargs)
++    assert omitted == none == zero
++    assert "s_armature" not in zero
++
++
++def test_nonzero_emission_preserves_smooth_friction(model_path, tmp_path):
++    source = emit(parse_robot(model_path), tmp_path / "armature.cuh",
++                  JOINT_ARMATURE=ARMATURE, USE_JOINT_DYNAMICS=True,
++                  FRICTION_MODEL="tanh", FRICTION_WIDTH=[0.2, 0.25])
++    assert "s_c[dof_id] += s_armature[dof_id] * s_qdd[dof_id];" in source
++    assert "s_M[jid+jid*2]" in source
++    assert source.count(" + s_armature[") >= 3  # ABA, Minv, CRBA
++    assert "tanh(" in source
++    assert "sech" in source  # Existing analytical smooth-friction derivative
++    assert "s_linalg_smem" not in source  # Removed in the 0.5.5 ABI
++
++
++def test_mass_equation_and_first_derivatives_with_tanh(model_path):
++    """Cross-check the intended coupled model using independent Pinocchio ABA.
++
++    RBDReference stays unchanged and supplies only the link-body quantities.
++    The armature is added explicitly in this oracle, never hidden in the peer.
++    """
++    robot = parse_robot(model_path)
++    ref = RBDReference(robot, use_joint_dynamics=True, friction_model="tanh", friction_width=0.2)
++    model = pin.buildModelFromUrdf(str(model_path))
++    model.armature = ARMATURE.copy()
++    coulomb, damping = np.array([0.7, 0.4]), np.array([0.2, 0.3])
++    rng = np.random.default_rng(20261026)
++    velocities = [np.zeros(2), np.array([0.01, -0.02]), *rng.uniform(-2, 2, (8, 2))]
++    for velocity in velocities:
++        q, torque = rng.uniform(-1, 1, 2), rng.uniform(-3, 3, 2)
++        mass = np.asarray(ref.crba(q)) + np.diag(ARMATURE)
++        bias = np.asarray(ref.inverse_dynamics(q, velocity)[0])
++        acceleration = np.linalg.solve(mass, torque - bias)
++        passive = damping * velocity + coulomb * np.tanh(velocity / 0.2)
++        data = model.createData()
++        expected = pin.aba(model, data, q, velocity, torque - passive).copy()
++        np.testing.assert_allclose(acceleration, expected, rtol=2e-6, atol=2e-6)
++        id_gradient = ref.inverse_dynamics_gradient(q, velocity, acceleration)
++        dq, dv = np.hsplit(-np.linalg.solve(mass, id_gradient), 2)
++        pin.computeABADerivatives(model, data, q, velocity, torque - passive)
++        slope = damping + (coulomb / 0.2) * (1 - np.tanh(velocity / 0.2)**2)
++        np.testing.assert_allclose(dq, data.ddq_dq, rtol=4e-6, atol=4e-6)
++        np.testing.assert_allclose(dv, data.ddq_dv - np.linalg.solve(mass, np.diag(slope)),
++                                   rtol=4e-6, atol=4e-6)
++        for axis in range(2):
++            step = np.eye(2)[axis] * 1e-6
++            def value(v):
++                return np.linalg.solve(mass, torque - np.asarray(ref.inverse_dynamics(q, v)[0]))
++            finite_difference = (value(velocity + step) - value(velocity - step)) / 2e-6
++            np.testing.assert_allclose(dv[:, axis], finite_difference, rtol=1e-5, atol=1e-6)

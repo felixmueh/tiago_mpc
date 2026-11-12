@@ -1,0 +1,64 @@
+{
+  "admm": {
+    "eps_rel": 0.01,
+    "iters": 10,
+    "rho": 0.01,
+    "rho_q": 0.1,
+    "rho_qd": 0.03,
+    "rho_u": 1e-05
+  },
+  "admm_enable": {
+    "check_every": 1,
+    "eps_abs": null,
+    "eps_rel": null,
+    "iters": 10,
+    "rho": 0.01,
+    "rho_q": null,
+    "rho_qd": null,
+    "rho_u": null
+  },
+  "admm_linsys_by_N": {
+    "32": [
+      "pcg",
+      null
+    ]
+  },
+  "controller": {
+    "admm_linsys": null,
+    "admm_threshold": null,
+    "bdsv_threshold": null,
+    "hypotheses": null,
+    "limits": null,
+    "limits_kw": null,
+    "linsys": null,
+    "reseed_threshold": null,
+    "reset_rho_each_step": true,
+    "task_tag": null,
+    "warm_start": "shift"
+  },
+  "fixed_base_linsys": [
+    "auto",
+    0.1
+  ],
+  "solver": {
+    "N_cost": 50.0,
+    "adapt_rho": true,
+    "cost_curvature": false,
+    "ctrl_lim_cost": 0.0,
+    "defect_exit": 0.0,
+    "defect_telemetry": false,
+    "exact_hessian": false,
+    "linsys": null,
+    "max_pcg_iters": 200,
+    "max_sqp_iters": 1,
+    "mu": 10.0,
+    "pcg_tol": 0.0001,
+    "q_cost": 2.0,
+    "q_lim_cost": 0.01,
+    "qd_cost": 0.01,
+    "rho": 0.01,
+    "solve_ratio": 1.0,
+    "u_cost": 2e-06,
+    "vel_lim_cost": 0.0
+  }
+}

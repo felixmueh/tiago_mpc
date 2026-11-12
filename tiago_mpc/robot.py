@@ -18,8 +18,8 @@ from typing import Any
 import numpy as np
 
 from tiago_mpc.clock import VirtualClock, WallClock
-from tiago_mpc.loops import LEASE_S
-from tiago_mpc.interfaces import Event, State
+from tiago_mpc.laws import LEASE_S
+from tiago_mpc.interfaces import Diagnostic, State
 from tiago_mpc.ros2 import ArmState, TiagoRightArmClient
 from tiago_mpc.safety import AsyncSafetyMonitor, CollisionSafetySettings, SafetyCheckState
 from tiago_mpc.tiago import Q_START, RIGHT_ARM_JOINTS, limits
@@ -72,7 +72,7 @@ class RosPlant:
     """The plant interface on ROS 2; client is the ros2.TiagoRightArmClient.
 
     run_state holds the run's final values: whether effort control was activated, after
-    stop() whether the arm was handed back (restored) and the cleanup errors. Events:
+    stop() whether the arm was handed back (restored) and the cleanup errors. Diagnostics:
     activated at the first command (switch_s: how long the switch took), handback in
     stop() (restored, errors).
     """
@@ -91,7 +91,7 @@ class RosPlant:
         self._last: ArmState | None = None
         self._seq, self._stamp = -1, None
         self._activated = self._uncertain = False
-        self._events: list[Event] = []
+        self._diagnostics: list[Diagnostic] = []
         self.client = TiagoRightArmClient(sea_absolute=config.sea_absolute)
 
     def start(self, clock: VirtualClock | WallClock) -> None:
@@ -125,10 +125,10 @@ class RosPlant:
         else:
             self._activate(command)
 
-    def take_events(self) -> list[Event]:
-        """The events since the last call (activated, handback), forgotten here."""
-        events, self._events = self._events, []
-        return events
+    def take_diagnostics(self) -> list[Diagnostic]:
+        """The diagnostics since the last call (activated, handback), forgotten here."""
+        diagnostics, self._diagnostics = self._diagnostics, []
+        return diagnostics
 
     def advance(self, t: float) -> None:
         """Wait until the clock reaches t; late: return at once."""
@@ -138,7 +138,7 @@ class RosPlant:
         """Zero torque and handback to PAL's position controller; nothing before activation.
 
         Raises if a step failed or the handback is uncertain (run_state: cleanup_errors),
-        after the handback event."""
+        after the handback diagnostic."""
         if not self._activated:
             return
         self._activated, errors = False, self.run_state["cleanup_errors"]
@@ -160,7 +160,7 @@ class RosPlant:
             self.run_state["restored"] = False
             errors.append(f"controller handback: {exc}")
         restored = self.run_state["restored"]
-        self._events.append(Event(self.clock.now(), "handback",
+        self._diagnostics.append(Diagnostic(self.clock.now(), "handback",
                                   "zero torque, arm handed back to PAL's position controller" if restored and not errors
                                   else f"handback: restored={restored}; {'; '.join(errors)}",
                                   dict(restored=restored, errors=list(errors))))
@@ -232,7 +232,7 @@ class RosPlant:
 
         Each republication first reads and checks a fresh state; the command is held at
         most LEASE_S after the state it was computed from, or the activation faults. Done,
-        it emits the activated event with the switch's duration."""
+        it emits the activated diagnostic with the switch's duration."""
         if not self.config.execute:
             raise RuntimeError("check-only: effort control needs execute=True")
         began = self.clock.now()
@@ -260,5 +260,5 @@ class RosPlant:
             self.client.service_progress = None
         progress()
         switch = self.clock.now() - began
-        self._events.append(Event(began, "activated", f"effort control active after a {1e3 * switch:.1f} ms switch",
+        self._diagnostics.append(Diagnostic(began, "activated", f"effort control active after a {1e3 * switch:.1f} ms switch",
                                   dict(switch_s=switch)))

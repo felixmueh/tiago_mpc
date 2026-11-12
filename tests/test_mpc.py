@@ -1,6 +1,6 @@
 """MpcParams, plant names, loading GATO's module, the settings GATO receives, and both Mpc
 twins on fakes (CPU only)."""
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, replace
 import json
 from pathlib import Path
 import pickle
@@ -11,21 +11,41 @@ from types import SimpleNamespace as NS
 from unittest.mock import Mock
 
 import gato
-from gato import _cache
+from gato import MPCController, _cache
+from gato.cost_menu import CostMenu, LinearTerm, Term
 import numpy as np
 import pinocchio as pin
 import pytest
 
 from tiago_mpc import mpc
 from experiments.figure8 import FIGURE8
+from tiago_mpc.costs import default_cost
 from tiago_mpc.dynamics import Friction, Sign, StickSlip, Tanh
-from tiago_mpc.mpc import TIAGO, Mpc, MpcParams, MpcProcess, compile_binary, find_binary
+from tiago_mpc.mpc import (CONTROLLER_SETTINGS, TIAGO, AdmmLimits, Mpc, MpcParams, MpcProcess, SolverSettings,
+                           compile_binary, find_binary)
 from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, to_dict
-from tiago_mpc.tiago import GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
+from tiago_mpc.tiago import ARMATURE_KG_M2, GRASP_FRAME, Q_START, arm_urdf, fk, limits, urdf_friction
 
 URDF_FRICTION = urdf_friction()  # the coefficients come from the URDF only
 LOSSES = Friction([1.] * 7, [.5] * 7)
+
+
+def test_close_releases_controller_while_the_mpc_object_is_still_retained():
+    import weakref
+
+    class Controller:
+        pass
+
+    controller = Controller()
+    retained = weakref.ref(controller)
+    instance = Mpc.__new__(Mpc)
+    instance.controller, instance.step, instance._plan = controller, object(), None
+    del controller
+    assert retained() is not None
+    instance.close()
+    assert retained() is None and instance.step is None
+    instance.close()
 
 
 @pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(TIAGO, N=8, admm=replace(TIAGO.admm, iters=5))])
@@ -33,12 +53,6 @@ def test_to_dict_round_trips_also_through_json_and_pickle(params):
     assert from_dict(to_dict(params)) == params
     assert from_dict(json.loads(json.dumps(to_dict(params)))) == params
     assert pickle.loads(pickle.dumps(params)) == params
-
-
-def test_the_admm_limits_are_gatos_defaults_except_rho_u():
-    ours, gatos = asdict(TIAGO.admm), gato.MPCController.LIMIT_DEFAULTS["admm"]
-    assert {k: v for k, v in ours.items() if k != "rho_u"} == {k: v for k, v in gatos.items() if k != "rho_u"}
-    assert ours["rho_u"] == 5e-4
 
 
 @pytest.fixture
@@ -54,12 +68,13 @@ def no_compile(monkeypatch, tmp_path):
 
 def fake_binary(directory, params, plant=None):
     """An importable Python file named as GATO's module for params."""
-    path = Path(directory) / f"bsqpN{params.N}_{plant or mpc._plant(params)[3]}.py"
+    path = Path(directory) / f"bsqpN{params.N}_{plant or mpc._plant(params)[2]}.py"
     path.write_text("")
     return path
 
 
-@pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(FIGURE8, friction_law=Tanh(.05))])
+@pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(FIGURE8, friction=URDF_FRICTION),
+                                    replace(FIGURE8, friction=URDF_FRICTION, friction_law=Tanh(.05))])
 def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkeypatch, no_compile, tmp_path, params):
     seen = {}
     binary = fake_binary(tmp_path, params)
@@ -72,22 +87,112 @@ def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkey
         def set_row_group_bounds(self, group, lo, hi):
             seen.setdefault("bounds", []).append(group)
 
+    def controller(solver, **kwargs):
+        seen.update(controller=kwargs)
+        return NS(limits=seen.get("installs", "admm"))  # the mechanism GATO reports in force
+
     monkeypatch.setattr(gato, "register_robot", lambda name, path, **kwargs: seen.update(register=kwargs))
     monkeypatch.setattr(gato, "BSQP", Solver)
-    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: seen.update(controller=kwargs),
-                        raising=False)
+    monkeypatch.setattr(gato, "MPCController", controller, raising=False)
     monkeypatch.setattr(mpc, "check_model", lambda *args: None)
     try:
         mpc.load_controller(params, binary)
+        seen["installs"] = "barrier"
+        with pytest.raises(RuntimeError, match="barrier"):
+            mpc.load_controller(params, binary)
     finally:
         sys.modules.pop(name, None)
-    assert (seen["N"], seen["dt"], seen["solver"]) == (params.N, params.dt_s, params.solver.asdict())
-    assert seen["controller"]["limits_kw"] == asdict(params.admm) and seen["bounds"] == [0, 1, 2]
+    assert (seen["N"], seen["dt"], seen["solver"]) == (params.N, params.dt_s, params.solver.native().asdict())
+    # only the values the params set reach GATO; None follows GATO's default
+    given = {name: getattr(params, name) for name in CONTROLLER_SETTINGS if getattr(params, name) is not None}
+    limits_kw = {key: value for key, value in asdict(params.admm).items() if value is not None}
+    assert seen["controller"] == dict(limits="admm", limits_kw=limits_kw, **given) and seen["bounds"] == [0, 1, 2]
     assert seen["module"] == str(binary)
-    # Smooth predictor friction is registered, with its width, only when the params have one.
+    # Smooth predictor friction is registered, with its width, only when the params have one; the
+    # fitted armature is the default.
     friction = {} if params.friction is None else dict(joint_dynamics=True,
                                                          friction_width=params.friction_law.width_rad_s)
-    assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, **friction)
+    assert seen["register"] == dict(N=[params.N], ee_frame=GRASP_FRAME, joint_armature=ARMATURE_KG_M2, **friction)
+
+
+class AdmmSolver:
+    """A fake of GATO's BSQP that keeps the ADMM limit rows' state as BSQP does.
+
+    The penalties are stored in float32, and enable_limit_admm resolves the residual exit as
+    BSQP's does, so the state read back differs from the requested values."""
+    nx, nu, n_actuated, n_fc, nq, nv, row_mech = 14, 7, 7, 0, 7, 7, None
+    admm_iters, admm_eps_abs, admm_eps_rel, admm_check_every = 10, 0., 0., 1
+
+    def __init__(self, urdf=None, *, batch_size=1, N=32, dt=.03, plant_type=None, params=TIAGO.solver.native()):
+        self.params, self.N, self.batch_size = replace(params, linsys="pcg"), N, batch_size  # as BSQP
+        self.groups, self.enabled = [], {}
+
+    def get_row_groups(self):
+        return self.groups
+
+    def enable_limit_admm(self, rho=.01, iters=10, *, rho_q=None, rho_qd=None, rho_u=None, eps_abs=None,
+                          eps_rel=None, check_every=1):
+        self.enabled.update(rho=rho, iters=iters, rho_q=rho_q, rho_qd=rho_qd, rho_u=rho_u, eps_rel=eps_rel)
+        self.groups = [dict(kind=kind, rho=np.float32(rho if box is None else box))
+                       for kind, box in ((0, rho_q), (1, rho_qd), (2, rho_u))]
+        self.admm_iters = int(iters)
+        if eps_abs is not None or eps_rel is not None:
+            self.admm_eps_abs, self.admm_eps_rel, self.admm_check_every = eps_abs or 0., eps_rel or 0., check_every
+
+    def set_admm_linsys(self, mode):
+        self.enabled.update(admm_linsys=mode)
+
+    def set_row_group_bounds(self, group, lo, hi):
+        pass
+
+
+@pytest.mark.parametrize("N", [32, 64])
+def test_the_mpcs_params_are_the_values_gatos_controller_resolved(monkeypatch, no_compile, tmp_path, N):
+    """The resolved params are what GATO's MPCController and the solver run.
+
+    The controller is GATO's own, on a fake solver. The solver's SolverParams has the linsys
+    BSQP sets, every None is GATO's choice (the ADMM linear solver depends on N), and the ADMM
+    settings are the solver's state. Replaying the record gives the same solver state."""
+    params, solvers = replace(TIAGO, N=N), []
+    binary = fake_binary(tmp_path, params)
+    monkeypatch.setattr(gato, "register_robot", lambda name, path, **kwargs: None)
+    monkeypatch.setattr(gato, "BSQP", lambda *args, **kwargs: solvers.append(AdmmSolver(*args, **kwargs))
+                        or solvers[-1])
+    monkeypatch.setattr(mpc, "check_model", lambda *args: None)
+    try:
+        resolved = params.resolved(mpc.load_controller(params, binary))
+        replayed = resolved.resolved(mpc.load_controller(resolved, binary))
+    finally:
+        sys.modules.pop("gato." + binary.stem, None)
+
+    defaults, gatos = MPCController.__init__.__kwdefaults__, MPCController.LIMIT_DEFAULTS["admm"]
+    assert resolved == replace(params, solver=replace(params.solver, linsys="pcg"), warm_start=defaults["warm_start"],
+                               reset_rho_each_step=defaults["reset_rho_each_step"],
+                               admm_linsys="bdsv_factor" if N >= 64 else "pcg", admm_threshold=None,
+                               linsys="auto", bdsv_threshold=.1, reseed_threshold=None,
+                               admm=AdmmLimits(iters=gatos["iters"], eps_abs=0., eps_rel=gatos["eps_rel"],
+                                               check_every=1, rho_q=gatos["rho_q"], rho_qd=gatos["rho_qd"],
+                                               rho_u=params.admm.rho_u))
+    assert from_dict(json.loads(json.dumps(to_dict(resolved)))) == resolved
+    # the record replays the same solver state
+    assert replayed == resolved
+    assert [g["rho"] for g in solvers[1].groups] == [g["rho"] for g in solvers[0].groups]
+
+
+def test_the_resolved_admm_limits_read_every_field_and_need_the_joint_limit_rows():
+    """A field added to AdmmLimits without its read-back stays None and fails here."""
+    solver = AdmmSolver()
+    with pytest.raises(RuntimeError, match="limit rows"):
+        AdmmLimits.resolved(solver)
+    solver.enable_limit_admm(rho_q=.1, rho_qd=.03, rho_u=1e-5)
+    assert None not in asdict(AdmmLimits.resolved(solver)).values()
+
+
+def test_every_controller_setting_of_mpcparams_is_read_back():
+    """The MpcParams fields that are MPCController arguments are exactly CONTROLLER_SETTINGS,
+    so a new controller setting cannot miss its read-back."""
+    controller_arguments = set(MPCController.__init__.__kwdefaults__)
+    assert {field.name for field in fields(MpcParams)} & controller_arguments == set(CONTROLLER_SETTINGS)
 
 
 def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no_compile, tmp_path):
@@ -108,7 +213,7 @@ def test_load_controller_registers_only_a_plant_new_to_the_cache(monkeypatch, no
 
     monkeypatch.setattr(gato, "register_robot", register)
     monkeypatch.setattr(gato, "BSQP", lambda *args, **kwargs: NS(set_row_group_bounds=lambda *a: None))
-    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: None, raising=False)
+    monkeypatch.setattr(gato, "MPCController", lambda solver, **kwargs: NS(limits="admm"), raising=False)
     monkeypatch.setattr(mpc, "check_model", lambda *args: None)
     try:
         mpc.load_controller(params, binary)  # missing entry: registers
@@ -167,7 +272,7 @@ def test_compile_binary_registers_and_rebuilds_without_overwriting(monkeypatch, 
 def test_same_plant_inputs_same_name(tmp_path):
     (tmp_path / "arm.urdf").write_text("<robot/>")
     a = mpc.plant_name(tmp_path / "arm.urdf", LOSSES)
-    assert a == mpc.plant_name(tmp_path / "arm.urdf", Friction([1.] * 7, [.5] * 7), friction_law=Tanh(.03))
+    assert a == mpc.plant_name(tmp_path / "arm.urdf", Friction([1.] * 7, [.5] * 7), friction_law=Tanh(.1))
     assert len(a) == len("tiago_right_") + 8 and a.startswith("tiago_right_")
 
 
@@ -215,11 +320,10 @@ def test_smooth_model_check_uses_the_grasp_frame():
     # Stop after FK: this regression tests the frame, not CUDA dynamics.
     reached_dynamics = RuntimeError("FK check passed")
     solver = Mock()
-    solver.ee_pos.side_effect = lambda q: fk(q, GRASP_FRAME)  # signs are ones
+    solver.ee_pos.side_effect = lambda q: fk(q, GRASP_FRAME)
     solver.sim_forward.side_effect = reached_dynamics
     with pytest.raises(RuntimeError, match="FK check passed"):
-        mpc.check_model(solver, model, model.createData(), np.ones(7),
-                        Friction([1.] * 7, [1.] * 7), Tanh(.03))
+        mpc.check_model(solver, model, model.createData(), Friction([1.] * 7, [1.] * 7), Tanh(.03))
     solver.sim_forward.assert_called_once()
 
 
@@ -228,9 +332,9 @@ def test_selected_current_bounds_map_native_joint_box_and_limit_fractions():
     solver = NS(set_row_group_bounds=lambda group, lo, hi: rows.update({group: (lo, hi)}))
     model = NS(lowerPositionLimit=np.full(7, -2.), upperPositionLimit=np.full(7, 3.),
                velocityLimit=np.arange(7) + 1., effortLimit=np.arange(7) + 10.)
-    mpc.set_bounds(solver, model, SIGNS, replace(TIAGO, joint_margin_rad=.1, velocity_fraction=.8, effort_fraction=.85))
-    assert rows[0][0][5] == -2.9 and rows[0][1][5] == 1.9
-    assert rows[0][0][0] == -1.9 and rows[0][1][0] == 2.9
+    mpc.set_bounds(solver, model, replace(TIAGO, joint_margin_rad=.1, velocity_fraction=.8, effort_fraction=.85))
+    np.testing.assert_array_equal(rows[0][0], np.full(7, -1.9))
+    np.testing.assert_array_equal(rows[0][1], np.full(7, 2.9))
     np.testing.assert_allclose(rows[1][1], .8 * model.velocityLimit)
     np.testing.assert_allclose(rows[2][1], .85 * model.effortLimit)
 
@@ -242,35 +346,47 @@ def test_the_start_pose_lies_inside_the_planning_box():
 
 
 @pytest.mark.parametrize("change", [*(dict(max_sqp_time_s=b) for b in (0., -1., np.nan, np.inf)),
-                                    *(dict(solver=TIAGO.solver.replace(max_sqp_iters=n)) for n in (0, 2.5)),
+                                    *(dict(solver=replace(TIAGO.solver, max_sqp_iters=n)) for n in (0, 2.5)),
                                     *(dict(friction_law=law) for law in (Sign(), StickSlip()))])
 def test_invalid_params_are_refused(change):
     with pytest.raises(ValueError):
         replace(TIAGO, **change)
 
 
+@pytest.mark.parametrize("change", [dict(solver=gato.SolverParams()),
+                                    *(dict(cost=cost) for cost in (None, {}, Term(weight=1.)))])
+def test_native_tracking_weights_and_invalid_costs_are_refused(change):
+    with pytest.raises(TypeError):
+        replace(TIAGO, **change)
+
+
 # Both Mpc twins around a fake GATO controller: N = 3 knots, 10 ms.
-SIGNS = np.array([1., 1., 1., 1., 1., -1., 1.])
 N, DT = 3, .01
-PARAMS = replace(TIAGO, N=N, dt_s=DT, max_sqp_time_s=.004)
+PARAMS = replace(TIAGO, N=N, dt_s=DT, max_sqp_time_s=.004, cost=default_cost(N))
 BINARY = Path("bsqpN3_fake.so")  # load_controller is faked
 REFERENCE = np.tile([.3, -.2, .1, 0., 0., 0.], (N, 1)).astype(np.float32)
 
 
 class Controller:
-    """Plans x_k = (k + 1) x and u_k = torque + k, in GPU coordinates."""
+    """Plans x_k = (k + 1) x and u_k = torque + k."""
 
     def __init__(self):
         self.events, self.torque, self.gate = [], np.arange(7, dtype=float), None
-        self.solver = NS(**{name: (lambda *a, name=name, **k: self.events.append((name, a, k)))
-                            for name in ("set_cost_weights", "set_cost_weights_per_knot",
-                                         "set_q_pos_cost", "set_q_nom", "set_f_ext_B")})
+        self.wall_s = .002
+        self.solver = NS(params=PARAMS.solver.native(), admm_iters=10, admm_eps_abs=0., admm_eps_rel=.01, admm_check_every=1,
+                         get_row_groups=lambda: [dict(kind=k, rho=np.float32(r)) for k, r in enumerate((.1, .03, 5e-4))],
+                         **{name: (lambda *a, name=name, **k: self.events.append((name, a, k)))
+                            for name in ("set_f_ext_B", "set_cost_menu")})
+        # what GATO's controller resolved (MpcParams.resolved reads it)
+        self.warm_start, self.reset_rho_each_step, self.admm_linsys, self.admm_threshold = "hold", True, "auto", .2
+        self.linsys, self.bdsv_threshold, self.reseed_threshold = "auto", .1, .5
+        self.limits = "admm"
 
     def reset(self, x):
         self.events.append(("reset", x.copy()))
 
     def warmup(self, x, reference):
-        self.events.append(("warmup", x.copy()))
+        self.events.append(("warmup", x.copy(), reference))
 
     def step(self, x, reference, *, dt_elapsed, budget_s):
         self.events.append(("step", x.copy(), reference, dt_elapsed, budget_s))
@@ -281,15 +397,15 @@ class Controller:
         xu = np.concatenate([np.r_[(k + 1) * x, self.torque + k] for k in range(N - 1)] + [N * x])
         raw = NS(sqp_iters=np.array([2]), pcg_iters=np.array([[3], [0]]),
                  admm_iters=np.array([5]), admm_linsys_iters=np.array([20]))
-        return NS(xu_best=xu, solve=NS(stats=raw, solve_time_us=1234.), wall_s=.002, iterations=2,
-                  budget_hit=False, row_viol=np.array([.01, .02]), admm_linsys="pcg")
+        return NS(xu_best=xu, solve=NS(stats=raw, solve_time_us=1234.), wall_s=self.wall_s, iterations=2,
+                  budget_hit=False, row_viol=np.array([.01, .02]), admm_linsys="pcg", pred_err=.01)
 
 
 @pytest.fixture
 def controller(monkeypatch):
     """Every Mpc built in this process (also MpcProcess on threads) gets this controller."""
     controller = Controller()
-    monkeypatch.setattr(mpc, "load_controller", lambda params, binary: (controller, SIGNS))
+    monkeypatch.setattr(mpc, "load_controller", lambda params, binary: controller)
     return controller
 
 
@@ -297,7 +413,7 @@ def state(t=1., scale=1.):
     return State(t, scale * np.arange(7) * .1, scale * np.arange(7) * -.02)
 
 
-def test_native_coordinates_cross_only_the_gpu_boundary(controller):
+def test_the_solver_gets_and_returns_native_coordinates(controller):
     item = state()
     m = Mpc(PARAMS, BINARY)
     assert m.step is None
@@ -305,11 +421,10 @@ def test_native_coordinates_cross_only_the_gpu_boundary(controller):
     plan = m.result()
     assert m.step.iterations == 2  # the raw GATO step result
     x = np.r_[item.q, item.qd]
-    gpu = x * np.tile(SIGNS, 2)
-    np.testing.assert_array_equal(controller.events[-1][1], gpu)
+    np.testing.assert_array_equal(controller.events[-1][1], x)
     assert plan.t0 == item.t and plan.dt == DT
     np.testing.assert_array_equal(plan.states, [(k + 1) * x for k in range(N)])
-    np.testing.assert_array_equal(plan.torques, [(np.arange(7.) + k) * SIGNS for k in range(N - 1)])
+    np.testing.assert_array_equal(plan.torques, [np.arange(7.) + k for k in range(N - 1)])
     assert plan.stats["sqp"] == 2 and plan.stats["pcg"] == 3 and plan.stats["zero_pcg_rows"] == 1
     assert m.result() is None  # one plan per request
 
@@ -339,9 +454,9 @@ def test_after_a_warmup_requests_never_reset_and_dt_elapsed_follows_state_times(
         m.request(state(t, scale=t), REFERENCE)
         m.result()
     kinds = [event[0] for event in controller.events]
-    assert kinds == ["reset", "warmup", "step", "step", "step"]
-    for event in controller.events[:2]:
-        np.testing.assert_array_equal(event[1][:7], state(scale=2.).q * SIGNS)
+    assert kinds == ["reset", "set_cost_menu", "warmup", "step", "step", "step"]
+    for event in (event for event in controller.events if event[0] in ("reset", "warmup")):
+        np.testing.assert_array_equal(event[1][:7], state(scale=2.).q)
     steps = [event for event in controller.events if event[0] == "step"]
     assert [event[3] for event in steps] == [None, pytest.approx(.013), pytest.approx(.007)]
     assert all(event[4] == .004 for event in steps)  # max_sqp_time_s
@@ -352,21 +467,19 @@ def test_a_disabled_warmup_does_nothing_and_the_first_request_resets(controller)
     m.warmup(state(.5, scale=2.), REFERENCE)
     assert not controller.events
     m.request(state(), REFERENCE)
-    assert [event[0] for event in controller.events] == ["reset", "step"]
-    np.testing.assert_array_equal(controller.events[0][1][:7], state().q * SIGNS)
+    assert [event[0] for event in controller.events] == ["reset", "set_cost_menu", "step"]
+    np.testing.assert_array_equal(controller.events[0][1][:7], state().q)
 
 
 def test_updates_are_applied_before_the_solve_and_unknown_names_raise(controller):
     m = Mpc(PARAMS, BINARY)
-    q_nom = np.arange(7.)
-    m.request(state(), REFERENCE, {"cost_weights": dict(q_cost=2.), "posture": (.5, q_nom)})
-    names = [event[0] for event in controller.events]
-    assert names == ["set_cost_weights", "set_q_pos_cost", "set_q_nom", "reset", "step"]
-    assert controller.events[0][2] == dict(q_cost=2.)
-    np.testing.assert_array_equal(controller.events[2][1][0], q_nom * SIGNS)
+    wrench = np.arange(6.)
+    m.request(state(), REFERENCE, {"external_force": wrench})
+    assert [event[0] for event in controller.events] == ["set_f_ext_B", "reset", "set_cost_menu", "step"]
+    np.testing.assert_array_equal(controller.events[0][1][0], wrench)
     with pytest.raises(KeyError, match="posture_cost"):
         m.request(state(2.), REFERENCE, {"posture_cost": 1.})
-    assert len(controller.events) == 5
+    assert len(controller.events) == 4
 
 
 def test_a_request_raises_while_the_previous_plan_is_unread(controller):
@@ -376,7 +489,7 @@ def test_a_request_raises_while_the_previous_plan_is_unread(controller):
         m.request(state(2.), REFERENCE)
     assert m.result().t0 == 1. and m.result() is None
     m.request(state(2.), REFERENCE)
-    assert [event[0] for event in controller.events] == ["reset", "step", "step"]
+    assert [event[0] for event in controller.events] == ["reset", "set_cost_menu", "step", "step"]
 
 
 def test_a_plan_above_the_raw_effort_limit_is_returned(controller):
@@ -386,10 +499,39 @@ def test_a_plan_above_the_raw_effort_limit_is_returned(controller):
     assert np.all(np.abs(m.result().torques) > 26.)
 
 
+@pytest.mark.parametrize('worker', [False, True])
+@pytest.mark.parametrize('wall_s', [-.001, np.nan, np.inf, None], ids=['negative', 'nan', 'inf', 'missing'])
+def test_result_refuses_invalid_native_solve_duration(controller, process, monkeypatch, worker, wall_s):
+    if wall_s is None:
+        solve = Mpc._solve
+
+        def without_duration(self, *args):
+            plan = solve(self, *args)
+            del plan.stats['wall_s']
+            return plan
+
+        monkeypatch.setattr(Mpc, '_solve', without_duration)
+    else:
+        controller.wall_s = wall_s
+    m = process() if worker else Mpc(PARAMS, BINARY)
+    m.request(state(), REFERENCE)
+    with pytest.raises(KeyError if wall_s is None else ValueError, match='wall_s'):
+        m.result(block=True)
+
+
+@pytest.mark.parametrize('worker', [False, True])
+def test_result_accepts_zero_native_solve_duration(controller, process, worker):
+    controller.wall_s = 0.
+    m = process() if worker else Mpc(PARAMS, BINARY)
+    m.request(state(), REFERENCE)
+    assert m.result(block=True).stats['wall_s'] == 0.
+
+
 @pytest.mark.parametrize("bad", ["t0", "dt", "shape", "nonfinite"])
 def test_every_knot_is_checked(controller, bad):
     m = Mpc(PARAMS, BINARY)
-    fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)), measured_t=1.)
+    fields = dict(t0=1., dt=DT, states=np.zeros((N, 14)), torques=np.ones((N - 1, 7)),
+                  stats=dict(wall_s=0.), measured_t=1.)
     assert mpc._checked(m, Plan(**fields), 1., 1.)
     if bad == "shape":
         fields.update(states=np.zeros((N + 1, 14)), torques=np.ones((N, 7)))
@@ -445,6 +587,16 @@ def process(controller, monkeypatch):
         item.close()
 
 
+RESOLVED = replace(PARAMS, warm_start="hold", reset_rho_each_step=True, admm_linsys="auto", admm_threshold=.2,
+                   linsys="auto", bdsv_threshold=.1, reseed_threshold=.5,
+                   admm=AdmmLimits(iters=10, eps_abs=0., eps_rel=.01, check_every=1, rho_q=.1, rho_qd=.03, rho_u=5e-4))
+
+
+def test_both_twins_report_the_params_their_controller_resolved(process, controller):
+    assert Mpc(PARAMS, BINARY).params == RESOLVED
+    assert process().params == RESOLVED  # the worker's, from its ready reply
+
+
 def test_process_result_waits_for_its_reply(process, controller):
     p = process()
     assert (p.N, p.dt) == (N, DT)
@@ -463,15 +615,15 @@ def test_process_result_waits_for_its_reply(process, controller):
 def test_process_warmup_runs_in_the_worker_before_it_returns(process, controller):
     p = process()
     p.warmup(state(.5), REFERENCE)
-    assert [event[0] for event in controller.events] == ["reset", "warmup"]
+    assert [event[0] for event in controller.events] == ["reset", "set_cost_menu", "warmup"]
     p.request(state(), REFERENCE)
     with pytest.raises(RuntimeError, match="pending"):
         p.warmup(state(), REFERENCE)
     assert p.result(block=True).t0 == 1.
-    assert [event[0] for event in controller.events] == ["reset", "warmup", "step"]
+    assert [event[0] for event in controller.events] == ["reset", "set_cost_menu", "warmup", "step"]
     off = process(replace(PARAMS, warmup=False))
     off.warmup(state(), REFERENCE)
-    assert off._requests.empty() and len(controller.events) == 3
+    assert off._requests.empty() and len(controller.events) == 4
 
 
 def test_process_rejects_a_reply_for_another_state(process, controller):
@@ -517,13 +669,13 @@ def test_a_spawned_process_reports_a_failed_load(tmp_path):
         MpcProcess(TIAGO, tmp_path / "missing.so")
 
 
-def test_armature_has_its_own_model_identity_and_is_forwarded_without_axis_flips(monkeypatch, tmp_path):
-    values = (.746, .882, .211, .648, .326, .343, .27)
+def test_armature_has_its_own_model_identity_and_is_forwarded(monkeypatch, tmp_path):
+    values = (.43, .43, .19, .17, .21, .17, .18)
     params = replace(TIAGO, armature=values)
-    model, path, signs, name = mpc._plant(params)
+    assert params == TIAGO  # the fitted armature is the default
+    model, path, name = mpc._plant(params)
     np.testing.assert_array_equal(model.armature, values)
-    assert signs[5] == -1 and values[5] > 0
-    assert name != mpc._plant(TIAGO)[3]
+    assert name != mpc._plant(replace(TIAGO, armature=(0.,) * 7))[2]
     assert mpc.plant_name(path, None, (0.,)*7) == mpc.plant_name(path)
     seen = {}
     monkeypatch.setattr(gato, 'register_robot', lambda name, path, **kw: seen.update(kw))
@@ -538,3 +690,199 @@ def test_invalid_armature_is_rejected_before_model_generation(values):
     for cls in (MpcParams, SimConfig):
         with pytest.raises(ValueError, match='armature'):
             cls(armature=values)
+
+
+# Default and customized costs use the same native menu execution path.
+ORIENTED = replace(PARAMS, cost=default_cost(N, orientation=.5, terminal_orientation=2.))
+
+
+@pytest.mark.parametrize("worker", [False, True])
+def test_the_default_cost_menu_is_active_before_warmup_and_the_first_solve(controller, process, worker):
+    reference = REFERENCE.copy()
+    reference[:, 3:] = np.nan
+    m = process(PARAMS) if worker else Mpc(PARAMS, BINARY)
+    m.warmup(state(.5), reference)
+    m.request(state(), reference)
+    assert m.result(block=True).t0 == 1.
+    assert [event[0] for event in controller.events] == ["reset", "set_cost_menu", "warmup", "step"]
+    menu = controller.events[1][1][0]
+    assert menu.orientation is None
+    np.testing.assert_array_equal(menu.frame_pos.target, REFERENCE[:, :3])
+    np.testing.assert_array_equal(controller.events[2][2], REFERENCE)
+    np.testing.assert_array_equal(controller.events[-1][2], REFERENCE)
+    assert np.isnan(reference[:, 3:]).all()
+
+
+@pytest.mark.parametrize("worker", [False, True])
+def test_changed_references_rebuild_the_menu_and_unchanged_references_are_cached(
+    controller,
+    process,
+    worker,
+    monkeypatch,
+):
+    reference = REFERENCE.copy()
+    reference[:, 3:] = [.1, .2, .3]
+    original = reference.copy()
+    exp3 = Mock(wraps=pin.exp3)
+    monkeypatch.setattr(pin, "exp3", exp3)
+    m = process(ORIENTED) if worker else Mpc(ORIENTED, BINARY)
+    m.warmup(state(.5), reference)
+    m.request(state(), reference.copy())
+    assert m.result(block=True).t0 == 1.
+    exp3.assert_called_once()
+    # Mutating the caller's reference must not mutate an applied menu or hide a change.
+    reference[:, 2] += .1
+    reference[:, 5] += .1
+    m.request(state(2.), reference)
+    assert m.result(block=True).t0 == 2.
+    menus = [event[1][0] for event in controller.events if event[0] == "set_cost_menu"]
+    assert len(menus) == 2
+    np.testing.assert_array_equal(menus[0].frame_pos.target, original[:, :3])
+    np.testing.assert_allclose(menus[0].orientation.target, pin.exp3(original[0, 3:]))
+    np.testing.assert_array_equal(menus[1].frame_pos.target, reference[:, :3])
+    np.testing.assert_allclose(menus[1].orientation.target, pin.exp3(reference[0, 3:]))
+    np.testing.assert_array_equal(controller.events[-1][2][:, 3:], 0.)
+    assert ORIENTED.cost == default_cost(N, orientation=.5, terminal_orientation=2.)
+
+
+@pytest.mark.parametrize("worker", [False, True])
+def test_a_disabled_warmup_still_applies_the_menu_on_the_first_request(controller, process, worker):
+    params = replace(PARAMS, warmup=False)
+    m = process(params) if worker else Mpc(params, BINARY)
+    m.warmup(state(.5), REFERENCE)
+    assert not controller.events
+    m.request(state(), REFERENCE)
+    assert m.result(block=True).t0 == 1.
+    assert [event[0] for event in controller.events] == ["reset", "set_cost_menu", "step"]
+
+
+@pytest.mark.parametrize("worker", [False, True])
+def test_none_keeps_native_targets_and_mutations_refresh_the_menu(controller, process, worker):
+    menu = CostMenu(frame_pos=Term(weight=3., target=[.1, .2, .3], activation="pseudo_huber", eps=.02),
+                    linear_u=LinearTerm(weight=2., A=np.eye(7), b=np.arange(7)))
+    params = replace(PARAMS, cost=menu)
+    m = process(params) if worker else Mpc(params, BINARY)
+    m.warmup(state(.5), None)
+    m.request(state(), None)
+    assert m.result(block=True).t0 == 1.
+    menu.frame_pos.target[0] = .4
+    menu.linear_u.A[0, 0] = 2.
+    m.request(state(2.), None)
+    assert m.result(block=True).t0 == 2.
+    menus = [event[1][0] for event in controller.events if event[0] == "set_cost_menu"]
+    assert len(menus) == 2 and all(value is not menu for value in menus)
+    np.testing.assert_array_equal(menus[0].frame_pos.target, [.1, .2, .3])
+    np.testing.assert_array_equal(menus[1].frame_pos.target, [.4, .2, .3])
+    assert menus[0].linear_u.A[0, 0] == 1. and menus[1].linear_u.A[0, 0] == 2.
+    assert menus[1].frame_pos.activation == "pseudo_huber" and menus[1].frame_pos.eps == .02
+    np.testing.assert_array_equal(controller.events[-1][2], np.zeros((N, 6)))
+
+
+@pytest.mark.parametrize("worker", [False, True])
+def test_a_reference_explicitly_retargets_any_native_menu(controller, process, worker):
+    menu = CostMenu(frame_pos=Term(weight=3., target=[.1, .2, .3]),
+                    linear_u=LinearTerm(weight=2., A=np.eye(7), b=np.arange(7)))
+    before = pickle.dumps(menu)
+    m = process(replace(PARAMS, cost=menu)) if worker else Mpc(replace(PARAMS, cost=menu), BINARY)
+    m.warmup(state(.5), None)
+    m.request(state(), REFERENCE)
+    m.result(block=True)
+    m.request(state(2.), None)
+    m.result(block=True)
+    menus = [event[1][0] for event in controller.events if event[0] == "set_cost_menu"]
+    assert len(menus) == 3
+    np.testing.assert_array_equal(menus[0].frame_pos.target, [.1, .2, .3])
+    np.testing.assert_array_equal(menus[1].frame_pos.target, REFERENCE[:, :3])
+    np.testing.assert_array_equal(menus[2].frame_pos.target, [.1, .2, .3])
+    assert pickle.dumps(menu) == before
+
+
+@pytest.mark.parametrize("worker", [False, True])
+def test_template_mutations_are_seen_even_when_the_reference_is_unchanged(controller, process, worker):
+    menu = default_cost(N, orientation=.5, terminal_orientation=2.)
+    menu.orientation.weight = np.asarray(menu.orientation.weight)
+    params = replace(PARAMS, cost=menu)
+    m = process(params) if worker else Mpc(params, BINARY)
+    reference = REFERENCE.copy()
+    reference[:, 3:] = np.nan
+    m.request(state(), reference)
+    m.result(block=True)
+    menu.orientation.weight[-1] = 3.
+    menu.frame_pos.activation = "pseudo_huber"
+    menu.frame_pos.eps = .02
+    m.request(state(2.), reference)
+    m.result(block=True)
+    reference[:, 3:] = .1
+    m.request(state(3.), reference)
+    m.result(block=True)
+    menus = [event[1][0] for event in controller.events if event[0] == "set_cost_menu"]
+    assert len(menus) == 3
+    np.testing.assert_array_equal(menus[0].orientation.weight, np.zeros((N, 3)))
+    np.testing.assert_array_equal(menus[1].orientation.weight, np.zeros((N, 3)))
+    np.testing.assert_array_equal(menus[2].orientation.weight, [[.5] * 3, [.5] * 3, [3.] * 3])
+    assert menus[0].frame_pos.activation == "quadratic"
+    assert menus[1].frame_pos.activation == "pseudo_huber"
+    np.testing.assert_array_equal(menu.orientation.weight, [[.5] * 3, [.5] * 3, [3.] * 3])
+
+
+@pytest.mark.parametrize("reference", [None, REFERENCE])
+def test_failed_menu_upload_is_retried(controller, reference):
+    m = Mpc(PARAMS, BINARY)
+    upload = Mock(side_effect=[ValueError("invalid menu"), None])
+    controller.solver.set_cost_menu = upload
+    with pytest.raises(ValueError, match="invalid menu"):
+        m.request(state(), reference)
+    m.request(state(), reference)
+    assert upload.call_count == 2
+    assert m.result().t0 == 1.
+
+
+@pytest.mark.parametrize("reference", [None, REFERENCE])
+def test_restoring_a_menu_after_a_partial_upload_reapplies_it(controller, reference):
+    menu = default_cost(N)
+    m = Mpc(replace(PARAMS, cost=menu), BINARY)
+    # GATO can upload fields and disable the menu before rejecting an invalid q_ref.
+    upload = Mock(side_effect=[None, ValueError("invalid q_ref"), None])
+    controller.solver.set_cost_menu = upload
+    m.request(state(), reference)
+    assert m.result().t0 == 1.
+    menu.q_ref = (0.,)
+    with pytest.raises(ValueError, match="invalid q_ref"):
+        m.request(state(2.), reference)
+    menu.q_ref = None
+    m.request(state(3.), reference)
+    assert upload.call_count == 3
+    assert m.result().t0 == 3.
+
+
+@pytest.mark.parametrize("worker", [False, True])
+def test_resolved_solver_settings_do_not_change_the_native_menu(controller, process, worker):
+    controller.solver.params = gato.SolverParams(max_sqp_iters=2, mu=19., q_cost=123.)
+    m = process(ORIENTED) if worker else Mpc(ORIENTED, BINARY)
+    assert m.params.solver == SolverSettings(max_sqp_iters=2, mu=19.)
+    assert m.params.cost == ORIENTED.cost
+    m.request(state(), REFERENCE)
+    assert m.result(block=True).t0 == 1.
+    menu = next(event[1][0] for event in controller.events if event[0] == "set_cost_menu")
+    np.testing.assert_array_equal(menu.frame_pos.weight, [[4.] * 3, [4.] * 3, [8.] * 3])
+
+
+@pytest.mark.parametrize("update", ["cost_weights", "knot_weights", "posture"])
+@pytest.mark.parametrize("params", [PARAMS, ORIENTED, replace(PARAMS, cost=CostMenu(input=Term(weight=.1)))])
+@pytest.mark.parametrize("worker", [False, True])
+def test_tracking_objective_updates_are_not_part_of_the_menu_interface(controller, process, params, update, worker):
+    m = process(params) if worker else Mpc(params, BINARY)
+    with pytest.raises(KeyError, match=update):
+        m.request(state(), REFERENCE, {update: None})
+    assert not controller.events
+    if worker:
+        assert m._requests.empty() and m.result() is None
+    m.request(state(), REFERENCE, {"external_force": np.zeros(6)})
+    assert m.result(block=True).t0 == 1.
+    assert controller.events[0][0] == "set_f_ext_B"
+
+
+@pytest.mark.parametrize("reference", [np.zeros((2, 6)), np.full((N, 6), np.nan)])
+def test_reference_updates_check_the_mpcs_reference_shape_and_positions(controller, reference):
+    with pytest.raises(ValueError, match="reference"):
+        Mpc(PARAMS, BINARY).request(state(), reference)

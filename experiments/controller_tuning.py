@@ -34,7 +34,7 @@ class HoldPosition:
     duration_s: float = 6.
 
     def at(self, t, n, dt):
-        out = np.zeros((n, 6), dtype=np.float32)
+        out = np.full((n, 6), np.nan, dtype=np.float32)  # NaN orientation: none
         out[:, :3] = self.target_m
         return out, None
 
@@ -66,7 +66,7 @@ def estimate(scale: float = 1., source: str = 'thesis') -> tm.Friction:
 # Simulation presets, not hardware-qualified gains. External width only; the
 # 30 ms friction-in-MPC predictor keeps its separately qualified width .2.
 TUNED_PD = tm.PlanFeedback()
-TUNED_FEEDFORWARD = tm.FrictionFeedforward(estimate(), evaluation=tm.Tanh(.01))
+TUNED_FEEDFORWARD = tm.FrictionFeedforward(estimate(), tm.SampleKnot(), tm.Tanh(.01))
 TUNED_BOTH = tm.FrictionFeedforward(estimate(), TUNED_PD, evaluation=tm.Tanh(.01))
 
 
@@ -79,10 +79,10 @@ def laws() -> dict[str, tm.ControlLaw]:
     old_pd = tm.PlanFeedback(*tm.inertia_gains(30.))
     result = {'default': tm.SampleKnot(), 'mpc_friction': tm.SampleKnot(), 'mpc_friction_pd': TUNED_PD,
               'old_pd': old_pd,
-              'old_ff': tm.FrictionFeedforward(estimate(source='nominal')),
-              'old_both': tm.FrictionFeedforward(estimate(source='nominal'), old_pd)}
+              'old_ff': tm.FrictionFeedforward(estimate(source='nominal'), tm.SampleKnot(), tm.Tanh(.03)),
+              'old_both': tm.FrictionFeedforward(estimate(source='nominal'), old_pd, tm.Tanh(.03))}
     result.update(pd)
-    result.update({key: tm.FrictionFeedforward(value, evaluation=tm.Tanh(width))
+    result.update({key: tm.FrictionFeedforward(value, tm.SampleKnot(), tm.Tanh(width))
                    for key, (value, width) in ff.items()})
     result.update({p + '+' + f: tm.FrictionFeedforward(friction, law, evaluation=tm.Tanh(width))
                    for p, law in pd.items() for f, (friction, width) in ff.items()})
@@ -108,7 +108,7 @@ def evaluate(record: tm.RunRecord) -> None:
     """Measure executed truth, preserve observations, and save the task results."""
     label = record.config['case'] + ' / ' + record.config['task_name'] + ' / ' + record.config['scenario']
     ticks, plans, params, task = record.ticks, record.plans, record.config['params'], record.config['task']
-    truth = [e for e in record.events if e.kind == 'plant_state']
+    truth = [e for e in record.diagnostics if e.kind == 'plant_state']
     if not len(ticks['t']):
         record.metadata['results']['tuning'] = dict(label=label, status=record.metadata['status'],
                                                     valid=False, output=str(record.out))
@@ -123,7 +123,7 @@ def evaluate(record: tm.RunRecord) -> None:
     torque = ticks['command'][sent]
     raw = tm.limits()
     excess = limit_excess(dict(q=q, qd=qd, command=ticks['command']))
-    dt = record.config['timing'].command_period
+    dt = record.config['settings'].command_period
     late = ticks['t'] >= 1.
     tail = ticks['t'] >= max(0., ticks['t'][-1]-1.)
     quality = metrics(error)
@@ -201,7 +201,9 @@ def main() -> int:
     plant = scenario(args.scenario, args.feedback_period)
     timing = replace(TIMING, solve_latency_s=args.solve_latency)
     config = dict(provenance=tm.provenance(), params=tm.to_dict(params), plant=tm.to_dict(plant),
-                  timing=tm.to_dict(timing), laws={k: tm.to_dict(laws()[k]) for k in args.laws},
+                  settings=tm.to_dict(timing), loop="run_virtual_time", compensation=None,
+                  safety=tm.to_dict(tm.ExecutionSafety()), effort_handling=tm.to_dict(tm.EffortClip()),
+                  laws={k: tm.to_dict(laws()[k]) for k in args.laws},
                   case_params={k: tm.to_dict(case_params(k, params)) for k in args.laws},
                   tasks={k: tm.to_dict(tasks()[k]) for k in args.tasks}, duration_cap_s=args.duration,
                   urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
@@ -228,7 +230,7 @@ def main() -> int:
                 key = task_name + '/' + name
                 try:
                     record = run_experiment(plant, case_params(name, params), tasks()[task_name], laws()[name], timing,
-                                            duration=args.duration, out=out/key, case=name, task_name=task_name,
+                                            compensation=None, duration=args.duration, out=out/key, case=name, task_name=task_name,
                                             scenario=args.scenario, dependency_source=config['provenance'])
                     evaluate(record)
                     row = dict(record.metadata['results']['tuning'])

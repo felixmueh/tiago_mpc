@@ -58,14 +58,29 @@ the guide documents partial patches, version checks and completion status.
   timeout, a stop request) end a loop normally and are returned; exceptions are only for
   real errors.
 - Docs describe the current code only; git keeps the history.
+- No backward compatibility during development (Felix, 2026-10-29): when a format or
+  interface changes, change every caller and drop the old one; no portability layers, readers
+  for older saved runs or legacy defaults. The one exception: if the recording format changes,
+  port the recordings of the original real-world TIAGo tests to the new format. Remove
+  compatibility code that remains.
+- Docstrings and comments (Felix, 2026-11-03):
+  - The first line says what the object is or does, in this project's terms, in one sentence.
+  - Then only what is not obvious: rules a caller must know, and why.
+  - Field meanings go in comments next to the fields, not in a list in the docstring.
+  - A deliberate omission gets one sentence with its reason.
+  - Full sentences, at most one reference per sentence, placed at its end; no chains of
+    parentheses.
+  - A measurement or date only where it is the reason for a value, written at that value.
 
 ## Every coefficient is a parameter (Felix, 2026-10-22)
 
-The supplied friction, damping and armature values are questionable (see
+The friction, damping and armature values are questionable: the right arm's are
+fitted from one real chirp per joint, the left arm's are supplied (see
 `models/tiago_pro/README.md` and `docs/real-robot-friction-plan.md` in the thesis
 workspace). Develop with them anyway, but never bake a coefficient into an
 algorithm, and test each controller against a plant whose coefficients differ
-from the predictor's (for example the 2026-10-16 physical fits, or ±50 %). The
+from the predictor's (for example the supplied values, the 2026-10-16 physical
+fits, or ±50 %). The
 simulated plant may be more detailed than the predictor; enable such detail
 explicitly and record both models. Never apply passive losses twice.
 
@@ -89,8 +104,8 @@ interval equals the control-update or command period.
   PD gains are literal values in `tiago.py`, edited manually (Felix, 2026-10-28).
   The gain calculation is in `util.py`; it returns pasteable tuples and never
   rewrites the model. `PlanFeedback()` uses the chosen stored tuned gains.
-- Native TIAGo coordinates everywhere (ROS, plants, records). Joint 6's sign map
-  lives only at the GPU boundary; do not remove it on GRiD-only evidence.
+- Native TIAGo coordinates everywhere (ROS, plants, records, the GPU model): the GPU
+  URDF keeps joint 6's -z axis, which GATO's fixed-base adapter supports since 0.1.4.
 - Do not modify generic GRiD code or generated headers; select frames through
   GATO's `ee_frame`.
 
@@ -105,13 +120,18 @@ version compatibility; reference features do not imply support in pinned GRiD.
 ## Robot safety
 
 Keep the robot rules intact: check-only by default and typed confirmation for
-execution; startup pose and speed checks; state freshness; every knot
-validated; leases that end no later than the plan; never clip a torque or renew
-a lease; zero torque and handback first on exit; a met goal never enables
+execution; startup pose and speed checks; state freshness; finite solver results;
+command-policy effort validation before publication; leases that end no later
+than the plan; never clip a torque or renew a lease; zero torque and handback
+first on exit; a met goal never enables
 effort control; a dead MPC process noticed within one tick. Keep the safety
 model's 4 cm margin, blacklist and documented limits; never change them to make
 a fixture pass. ROS imports stay lazy: the package, simulation and tests run
 without ROS.
+
+Effort validation belongs to the command policy (Felix, 2026-11-06). Do not reject
+a returned plan because an unapplied knot exceeds the effort limits. Validate
+the requested and applied command through the execution policy instead.
 
 ## Experiment data and handoff (Felix, 2026-10-21)
 
@@ -159,6 +179,16 @@ without ROS.
   checkout (a host-created worktree inside the container), the default falls
   back to the worktree's own `.cache/gato`.
 - **GPU:** one job at a time; check `nvidia-smi` first.
+- **Memory-heavy commands: one at a time** (Felix, 2026-11-03): parallel builds
+  by several agents exhausted the 15 GiB host and froze the desktop. Run every
+  compile (GATO module/nvcc builds, cmake/make, `uv sync` or `pip install` of
+  large packages), test suite and benchmark under the shared lock, on the host
+  `flock /var/home/felix/_Uni/MasterThesis/impl/.locks/heavy.lock <command>`
+  and in the container `flock /workspace/.locks/heavy.lock <command>` (the same
+  file). `flock` waits for the holder; for long waits run the command in the
+  background. Never launch several subagents that compile at the same time.
+  The container is capped at 10 GiB; an OOM kill there means a too-large job,
+  not a bug to work around.
 - **Agents:** use them for bounded tasks; the root agent coordinates
   interpretation, shared edits and GPU use.
 - **Worktrees:** a worktree and branch that you created and used for

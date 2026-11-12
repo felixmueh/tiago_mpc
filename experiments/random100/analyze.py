@@ -85,12 +85,16 @@ def main():
         inner_modes.update(plans["admm_linsys_mode"].tolist())
     arrivals = [r for r, s in zip(records, statuses) if s == "arrived"]
     valid = [r for r in arrivals if r.metadata["results"]["limits_pass"]]
-    params, timeout_s = study.config.params, records[0].config["task"].timeout_s
-    setting_line = (f"N{params.N}, B1, {1000*params.dt_s:g} ms feedback/knots, "
+    params, timing, timeout_s = records[0].config["params"], study.config.settings, records[0].config["task"].timeout_s
+    setting_line = (f"N{params.N}, B1, {1000*params.dt_s:g} ms knots, {1000*timing.update_period:g} ms control "
+                    f"updates, {1000*timing.solve_latency_s:g} ms declared solve latency, latency compensation "
+                    f"{'on' if study.config.compensation else 'off'}, law {type(records[0].config['law']).__name__}, "
+                    f"armature {'on' if any(params.armature) else 'off'} (predictor), "
+                    f"{'on' if any(study.config.plant.armature) else 'off'} (plant), "
                     f"{1000*study.config.plant.substep:g} ms Pinocchio RK4, "
                     f"SQP{params.solver.max_sqp_iters}/PCG{params.solver.max_pcg_iters}, "
                     f"{(params.N-1)*params.dt_s:.3g} s preview, "
-                    f"terminal weight {params.solver.N_cost:g}, {timeout_s:g} simulated seconds.")
+                    f"native cost menu, {timeout_s:g} simulated seconds.")
     admm_settings = tm.to_dict(params.admm)
     bound_settings = {k: getattr(params, k) for k in ("joint_margin_rad", "velocity_fraction", "effort_fraction")}
     result = dict(counts=counts, raw_audit_cases=len(audits),
@@ -121,7 +125,7 @@ def main():
     axes[1].axhline(50, color="gray", ls="--", label="50 mm arrival threshold")
     axes[1].set(xlabel="Frozen task order", ylabel="Final position error (mm)", yscale="log")
     axes[1].legend()
-    fig.suptitle(f"Frozen random100 — ADMM, N{params.N}, SQP{params.solver.max_sqp_iters}, {1000*params.dt_s:g} ms fixed clock")
+    fig.suptitle(f"Frozen random100 — ADMM, N{params.N}, SQP{params.solver.max_sqp_iters}, {1000*params.dt_s:g} ms knots")
     fig.tight_layout(); fig.savefig(out / "overview.png", dpi=160); fig.savefig(out / "overview.pdf")
     plt.close(fig)
     (out / "REPORT.md").write_text(f"""# Frozen random100 on modern GATO / ADMM
@@ -148,8 +152,8 @@ excesses and first violations are in `analysis.json`.
 
 Settings: {setting_line}
 Position tolerance 5 cm, grasp-point speed <= 2 cm/s, zero dwell. Position-only;
-no final approach, collisions, clipping or physical hardware. Fixed simulation
-pacing leaves solve latency unpaid. ADMM uses its finite upstream budget;
+no final approach, collisions, clipping or physical hardware. The solve latency
+is declared, not measured. ADMM uses its finite upstream budget;
 actual inner modes/work are retained. GATO `{json.dumps(provenance['gato'])}`, package
 versions `{json.dumps(provenance['versions'])}` (study.json).
 

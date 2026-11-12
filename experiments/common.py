@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -16,14 +16,12 @@ import signal
 import sys
 from types import FrameType
 import traceback
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 import numpy as np
 
 from experiments.replay import export_replay
 import tiago_mpc as tm
-
-TimingT = TypeVar("TimingT", bound=tm.Timing)  # setup returns the main's own kind of timing
 
 
 def limit_excess(ticks: Mapping[str, np.ndarray]) -> dict[str, float]:
@@ -38,12 +36,12 @@ def limit_excess(ticks: Mapping[str, np.ndarray]) -> dict[str, float]:
 
 
 def common_results(record: tm.RunRecord) -> dict[str, Any]:
-    """The results every run has, from its ticks, plans and events: the raw-limit excess,
+    """The results every run has, from its ticks, plans and diagnostics: the raw-limit excess,
     the largest torque, the solves and their work (a run without solves has no median and
-    zero work), the counts of ticks and plans, and of the loops' event kinds."""
+    zero work), the counts of ticks and plans, and of the loops' diagnostic kinds."""
     ticks, plans = record.ticks, record.plans
     excess, times = limit_excess(ticks), plans.get("solve_time_us")
-    kinds = Counter(event.kind for event in record.events)
+    kinds = Counter(diagnostic.kind for diagnostic in record.diagnostics)
     return dict(limits_pass=max(excess.values()) <= 1e-5, max_limit_excess=excess,
                 max_abs_torque_nm=float(np.nanmax(np.abs(ticks["command"]), initial=0.)),
                 solve_calls=len(plans["t0"]),
@@ -57,68 +55,88 @@ def run_experiment(
     plant: tm.SimConfig | tm.RobotConfig,
     mpc: tm.MpcParams | tm.MpcInterface,
     task: tm.TaskInterface,
-    law: tm.ControlLaw,
-    timing: tm.Timing,
+    law: tm.ControlLaw | None = None,
+    settings: Any = None,
     *,
+    loop: Callable[..., tm.Outcome] = tm.run_virtual_time,
+    compensation: tm.LatencyCompensation | None | Literal["default"] = "default",
+    safety: tm.SafetyInterface = tm.ExecutionSafety(),
+    effort_handling: tm.EffortHandling | None | Literal["default"] = "default",
     duration: float | None = None,
     out: str | Path | None = None,
+    tick_callbacks: Sequence[tm.TickCallback] = (),
+    solve_completed_callbacks: Sequence[tm.SolveCompletedCallback] = (),
+    diagnostic_callbacks: Sequence[tm.DiagnosticCallback] = (),
     **pieces: Any,
 ) -> tm.RunRecord:
-    """Run task with law on the plant built from its config, on timing, for the task's own
-    duration (task.duration_s) or at most duration seconds, and return the RunRecord (in
-    out, default _expr_data/<task>/<UTC time>/).
+    """Run an experiment with explicit timing, loop and execution policies.
 
-    mpc is parameters or a built MPC. Given MpcParams, run_experiment compiles and builds
-    the MPC, which may take minutes unless GATO's module is cached (compile_binary): after
-    creating the record and before building the plant, MpcProcess on RealTime (it solves
-    concurrently, as on the robot), else the in-process Mpc; it closes it, also after an
-    error. The wall-time budget (max_sqp_time_s) stays only where the solve's wall time is
-    the latency, RealTime and VirtualTime with "measured"; every other timing gets None.
-    A built MPC (a fake, or one MpcProcess per case from one compiled binary) is the
-    caller's, which closes it.
+    A parameter-built MPC belongs to this call and is closed on exit. Real-time runs
+    build MpcProcess; virtual and custom loops build Mpc. The solve wall-time budget
+    is retained for real time and measured virtual latency. Passed MPCs remain the
+    caller's. law None is FrictionFeedforward() and settings None the loop's default
+    (VirtualTimeSettings.constant_rate() or RealTimeSettings()); a custom loop needs its
+    settings. Default policies follow the selected loop: compensation from
+    default_compensation for the package's settings (none for a custom loop's), effort
+    rejection on real time and clipping otherwise.
 
-    The record holds the pieces as the run's configuration: task, params (what the MPC
-    loaded), plant, law, timing, duration (the one the run got) and the extra keyword
-    pieces. Its status is the loop's Outcome ("done", "timeout", "fault", "interrupted")
-    with its reason and end time, and the common results; a real error is "error" with the
-    traceback (the hard abort, a second Ctrl-C, "interrupted") and is raised again after
-    saving. The plant's events after the loop (the handback) and its run_state are
-    recorded, the plant is closed, the run saved and its replay exported, also after a
-    fault or an error. The experiment's evaluate adds its results and saves again.
+    The record stores settings, loop name and resolved policies separately. Faults
+    and errors retain their records and replay; setup failures before recording
+    leave no run directory.
     """
+    law = tm.FrictionFeedforward() if law is None else law
+    if settings is None:
+        if loop not in (tm.run_virtual_time, tm.run_real_time):
+            raise ValueError("a custom loop needs explicit settings")
+        settings = tm.VirtualTimeSettings.constant_rate() if loop is tm.run_virtual_time else tm.RealTimeSettings()
+    if compensation == "default":
+        package_settings = isinstance(settings, (tm.VirtualTimeSettings, tm.RealTimeSettings))
+        compensation = tm.default_compensation(settings) if package_settings else None
+    if effort_handling == "default":
+        effort_handling = tm.RejectOnEffort() if loop is tm.run_real_time else tm.EffortClip()
+    owned: tm.Mpc | tm.MpcProcess | None = None  # built here, so closed here
     if isinstance(mpc, tm.MpcParams):
-        measured = isinstance(timing, tm.VirtualTime) and timing.solve_latency_s == "measured"
-        params = mpc if isinstance(timing, tm.RealTime) or measured else replace(mpc, max_sqp_time_s=None)
+        measured = isinstance(settings, tm.VirtualTimeSettings) and settings.solve_latency_s == "measured"
+        params = mpc if loop is tm.run_real_time or measured else replace(mpc, max_sqp_time_s=None)
+        owned = (tm.MpcProcess.compile(params) if loop is tm.run_real_time  # concurrent, as on the robot
+                 else tm.Mpc.compile(params))
+        solver: tm.MpcInterface = owned
     else:
-        params = mpc.params
+        solver = mpc
     duration = task.duration_s if duration is None else min(task.duration_s, duration)
-    record = tm.RunRecord(out, task=task, params=params, plant=plant, law=law, timing=timing,
-                          duration=duration, **pieces)
-    console, built = tm.Console(), None
-    solver = None if isinstance(mpc, tm.MpcParams) else mpc
+    console, built, record = tm.Console(), None, None
     try:
-        if solver is None:  # inside the try: a failed compile is a saved error
-            solver = (tm.MpcProcess.compile(params) if isinstance(timing, tm.RealTime)  # concurrent, as on the robot
-                      else tm.Mpc.compile(params))
+        record = tm.RunRecord(out, task=task, params=solver.params, plant=plant, law=law, settings=settings,
+                              loop=loop.__name__, compensation=compensation, safety=safety,
+                              effort_handling=effort_handling, duration=duration, **pieces)
+        diagnostics: list[tm.DiagnosticCallback] = [record.diagnostic, console, *diagnostic_callbacks]
         built = plant.build()  # inside the try: a failed build is a saved error
-        outcome = timing.run(built, solver, task, law, [record, console], duration=duration)
+        outcome = loop(built, solver, task, law, tick_callbacks=[record, *tick_callbacks], settings=settings,
+                       compensation=compensation, safety=safety, effort_handling=effort_handling, duration=duration,
+                       solve_completed_callbacks=[record.solve_completed, *solve_completed_callbacks],
+                       diagnostic_callbacks=diagnostics)
         record.metadata.update(status=outcome.status, reason=outcome.reason, end_t=outcome.t,
                                results=common_results(record))
     except BaseException as exc:  # a real error, or the hard abort
-        record.metadata.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
-                               error=traceback.format_exc())
+        if record is not None:
+            record.metadata.update(status="interrupted" if isinstance(exc, KeyboardInterrupt) else "error",
+                                   error=traceback.format_exc())
         raise
     finally:
-        if built is not None:
-            late = built.take_events()  # the handback, after the last tick
-            record.add_events(late)
-            console.add_events(late)
-            record.metadata["plant"] = built.run_state
-            built.close()
-        if isinstance(mpc, tm.MpcParams) and solver is not None:  # built here; a passed one is the caller's
-            solver.close()
-        record.save()  # a faulted or failed run is never lost
-        export_replay(record)  # so a faulted run keeps its replay
+        try:
+            if built is not None and record is not None:
+                for diagnostic in built.take_diagnostics():  # the handback, after the last tick
+                    for callback in diagnostics:
+                        callback(diagnostic)
+        finally:
+            if built is not None and record is not None:
+                record.metadata["plant"] = built.run_state
+                built.close()
+            if owned is not None:  # a passed MPC is the caller's
+                owned.close()
+            if record is not None:
+                record.save()  # a faulted or failed run is never lost
+                export_replay(record)  # so a faulted run keeps its replay
     return record
 
 
@@ -147,7 +165,7 @@ def arguments(
                         help="sim: seconds from a request to its plan, or 'measured' (default: the experiment's timing)")
     parser.add_argument("--command-period", type=float, help="seconds (default: the timing's, 0.002, 500 Hz)")
     parser.add_argument("--update-period", type=float,
-                        help="seconds between control updates (default: the timing's, 0.01; 0: back to back)")
+                        help="seconds between control updates (default: the timing's, 0.02; 0: back to back)")
     parser.add_argument("--duration", type=float, help="seconds: cap the task's own duration")
     parser.add_argument("--output", type=Path, help="fresh directory (default: under _expr_data/<task>/)")
     args = parser.parse_args(argv)
@@ -185,27 +203,27 @@ def handle_stop_signals() -> None:
 def setup(
     args: argparse.Namespace,
     plant: tm.SimConfig,
-    timing: TimingT,
-) -> tuple[tm.SimConfig | tm.RobotConfig, TimingT | tm.RealTime] | int:
-    """The plant config and timing of a main's run from args, or its exit status.
+    settings: Any = tm.VirtualTimeSettings.constant_rate(),
+    *,
+    loop: Callable[..., tm.Outcome] = tm.run_virtual_time,
+) -> tuple[tm.SimConfig | tm.RobotConfig, Any, Callable[..., tm.Outcome]] | int:
+    """Select the plant, settings and loop for the command line.
 
-    plant and timing are the main's defaults: its SimConfig and its virtual-time timing
-    (VirtualTime, or its own with command_period, update_period and solve_latency_s, as
-    Compensated). sim: that plant and that timing with the given --command-period,
-    --update-period and --solve-latency replaced. rehearsal: that plant on RealTime with
-    the given periods. robot: the robot's gate, before anything compiles. Without
-    --execute, the check-only run: RobotConfig(execute=False)'s startup checks, then exit
-    status 0. With it, the typed EXECUTE confirmation before any ROS client exists
-    (anything else: exit status 2), and only then RobotConfig(execute=True, sea_absolute)
-    on RealTime with the given periods.
+    Simulation retains the supplied loop and settings dataclass with explicit timing
+    overrides; a new update period of a constant rate (latency = update period) moves
+    its latency along. Rehearsal and robot execution select run_real_time. Robot check-only
+    and typed-confirmation gates run before any MPC compilation.
     """
     periods = {key: value for key, value in (("command_period", args.command_period),
                                               ("update_period", args.update_period)) if value is not None}
     if args.plant == "sim":
         latency = {} if args.solve_latency is None else dict(solve_latency_s=args.solve_latency)
-        return plant, replace(timing, **periods, **latency)
+        if (not latency and "update_period" in periods and isinstance(settings, tm.VirtualTimeSettings)
+                and settings.solve_latency_s == settings.update_period):
+            latency = dict(solve_latency_s=periods["update_period"])  # a constant rate stays one
+        return plant, replace(settings, **periods, **latency), loop
     if args.plant == "rehearsal":
-        return plant, replace(tm.RealTime(), **periods)  # MpcProcess, concurrent, as on the robot
+        return plant, replace(tm.RealTimeSettings(), **periods), tm.run_real_time
     if not args.execute:  # check-only: the startup checks, then exit
         robot = tm.RobotConfig(sea_absolute=args.sea_absolute).build()
         try:
@@ -220,4 +238,5 @@ def setup(
     if input("Type EXECUTE to enable supervised effort control: ").strip() != "EXECUTE":
         print("Cancelled before creating the ROS client.")
         return 2
-    return tm.RobotConfig(execute=True, sea_absolute=args.sea_absolute), replace(tm.RealTime(), **periods)
+    return (tm.RobotConfig(execute=True, sea_absolute=args.sea_absolute),
+            replace(tm.RealTimeSettings(), **periods), tm.run_real_time)

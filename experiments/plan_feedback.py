@@ -13,7 +13,7 @@ A law needs no loop of its own: it plugs into run_virtual_time, run_real_time an
 experiments (latency compensation, the other remedy, does: latency_compensation.py).
 
     record = run_experiment(tm.SimConfig(substep=.003), tm.TIAGO, Reach(), tm.PlanFeedback(),
-                            tm.VirtualTime.constant_latency(.02))
+                            tm.VirtualTimeSettings.constant_latency(.02), compensation=None)
     evaluate(record)  # reach's
 
 The main runs one reach in simulation as experiments/reach.py does, with this law.
@@ -34,9 +34,9 @@ def main(argv=None):
     handle_stop_signals()
     args = arguments(__doc__, argv, plants=("sim",))  # the law is untested on the robot
     task = Reach() if args.target is None else Reach(tuple(args.target))
-    plant, timing = setup(args, tm.SimConfig(substep=.003), tm.VirtualTime.ideal())  # sim: never a status
-    record = run_experiment(plant, tm.TIAGO, task, tm.PlanFeedback(), timing,
-                            duration=args.duration, out=args.output)
+    plant, settings, loop = setup(args, tm.SimConfig(substep=.003), tm.VirtualTimeSettings.ideal())  # sim: never a status
+    record = run_experiment(plant, tm.TIAGO, task, tm.PlanFeedback(), settings, loop=loop,
+                            compensation=None, duration=args.duration, out=args.output)
     evaluate(record)
     print(json.dumps(record.metadata, indent=2, default=str))
     print(f"Saved {record.out}")

@@ -5,6 +5,28 @@
 - Remove or reduce all the random README.md files.
 - Update main Readme.md to say: Prototype developed with agents. Final version hand reviewed / edited.
   - Rebase onto new gato version and new interface design of original TIAGo GATO implementation.
+- Experiments repeat the same pipeline pieces: unify the replay exports (friction_compensation and
+  controller_tuning write their own beside export_replay), the study manifests (controller_tuning,
+  friction_study, friction_compensation, random100) and how MPCs are built (random100's check process,
+  latency_study's own Mpc).
+
+* Experiments
+- Jetson with 60W?
+
+* Collision covers
+- Safe body-cover decimation (after the refactor): replace the primitives the arm cannot reach
+  (essentially the robot's back) by one enclosing box, so the cover stays complete; keep containment
+  removals; the box itself must stay out of reach. Prior work: branch experiment/body-cover-decimation.
+- Exact (ILP) selection for the mixed body cover: the stored coverage table has ~7k candidates × 682k
+  cells (80–90 M nonzeros); reduce duplicate and dominated cells, warm-start from the greedy result,
+  time limit + gap; compare primitive counts with balanced (83) / tighter (155).
+- An MPC body cover consistent with the safety monitor (alpha-wrap + 4 cm): parked on
+  experiment/body-cover-safety; the default start pose has only 0.6 cm of monitor slack, so a
+  guaranteeing cover puts it inside.
+- Arm cover and the safety monitor: the monitor checks the arm's alpha-wrap meshes (about 1 cm outside
+  the original ones, offset 0.01 in models/safety/collision_alpha_wrap_a3_o25_cap001/alpha_wrap_results.json),
+  which arm/exact's spheres do not certainly contain, so on the robot the monitor could trip up to about
+  1 cm early. We see what happens.
 
 * Incoming from upstream (GATO , GRiD)
 - tanh friction.
@@ -12,6 +34,10 @@
 
 * Simulation
 - Use separate break-away forces. Tune from real robot.
+** TODO Evaluate whether the latency-compensation predictor should differ from the simulator.
+Consider a simulator-backed predictor that reuses the simulation model and integration
+settings, alongside the independently configured predictor. Compare forecast accuracy,
+runtime and usefulness for model-mismatch experiments before choosing the default.
 
 * Real Robot
 ** 500Hz feed forward control.
@@ -47,6 +73,20 @@ Today run_real_time raises on a late plan lease, an invalid command or a dead MP
 - per-joint wrist weights;
 - an optional per-joint torque slew limit.
 
+* Settings
+- Turn on latency compensation by default.
+- Default TO freq 50hz. Measured solve latency off, declared latency 50 hz (or fitting time)
+- Default execution law. Feedforward + PD.
+
+* Tuning mechanism <-- Modify weights / parameters in the middle of a run.
+--> Decide on tool position cost depending on EE distance and velocity?
+(Same for orientation.)
+
+* Torque vs holding cost <- input holding torque per joint of the last pose (or the predicted pose with latency compensation).
+
+* TODO Real Robot
+** Clip efforts!
+
 * Other
 ** Consider Re-evaluating impact of warm start shifting for coarse trajectories.
 ** Do some TO warmup before starting actual MPC. (A couple of iterations).
@@ -54,4 +94,12 @@ Today run_real_time raises on a late plan lease, an invalid command or a dead MP
 --> Make it easy to add metadata to experiment exports.
 ** Give Plan class q / qd accessors?
 ** Consider changing interface between inprocess and out-of-process MPC.
+** Solver iteration plot. in settings be able to select SQP / PCG / ADMM.
+(Or even better perhaps be able to toggle what is shown by clicking on the legent entry.)
 
+* Bugs:
+Sometimes Arm is not animated when I press play.
+
+* MPC Problems / Bugs
+** When orientation tracking is not IT feasible the MPC will do wild things.
+--> Check feasibility of goal position + orientation with IK (visualizer option!).

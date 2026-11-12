@@ -1,6 +1,7 @@
 """Horizontal figure-eight tracking (robot: checks only by default).
 
-In simulation with StickSlip Coulomb friction in the plant and Tanh in the predictor.
+Simulation uses StickSlip Coulomb friction in the plant. Execution uses the defaults:
+external friction feedforward with PD, and a loss-free predictor.
 
 Run from the checkout's root: python -m experiments.figure8 [--help]."""
 from __future__ import annotations
@@ -27,6 +28,11 @@ class Figure8:
     y_amplitude_m: float = .09
     edge_clearance_m: float = .02
     period_s: float = 24.
+    orientation_rad: tuple[float, float, float] | None = None  # Grasp-frame rotation vector in ROOT_FRAME; None: free.
+
+    def __post_init__(self):
+        if self.orientation_rad is not None:
+            object.__setattr__(self, "orientation_rad", tuple(map(float, self.orientation_rad)))
 
     @property
     def duration_s(self) -> float:
@@ -41,34 +47,32 @@ class Figure8:
         return xyz
 
     def at(self, t, n, dt):
-        out = np.zeros((n, 6), dtype=np.float32)  # orientation unconstrained
+        out = np.full((n, 6), np.nan, dtype=np.float32)  # NaN orientation: none
         out[:, :3] = self.path(t + np.arange(n)*dt)
+        if self.orientation_rad is not None:
+            out[:, 3:] = self.orientation_rad
         return out, None
 
     def done(self, state, t):
         return t >= self.period_s - 1e-9  # absorbs the rounding of summed command periods
 
 
-# ======================================================================
-# TODO(cost menu): GATO 0.1.5's cost menu (gato.cost_menu) will replace these cost overrides
-# (docs/decisions.md, 2026-10-24): qd_cost and u_cost become the menu's state and input
-# weights; mu, rho_u and the predictor friction are not costs and stay.
-# ======================================================================
-FIGURE8 = replace(tm.TIAGO, dt_s=.01, solver=tm.TIAGO.solver.replace(mu=1., qd_cost=.01, u_cost=1e-6),
-                  admm=replace(tm.TIAGO.admm, rho_u=1e-5),  # GATO's value, for the control cost 1e-6
-                  friction=tm.urdf_friction(), friction_law=tm.Tanh(.03))
+FIGURE8 = replace(tm.TIAGO, dt_s=.01, solver=replace(tm.TIAGO.solver, mu=1.),
+                  cost=tm.default_cost(tm.TIAGO.N, velocity=.01, torque=1e-6),
+                  admm=replace(tm.TIAGO.admm, rho_u=None))  # GATO's, for the control cost 1e-6
 
 
-def metrics(error):
-    return dict(rmse_m=float(np.sqrt(np.mean(error**2))), median_m=float(np.median(error)),
-                p95_m=float(np.percentile(error, 95)), max_m=float(np.max(error)))
+def metrics(error, unit="m"):
+    return {f"rmse_{unit}": float(np.sqrt(np.mean(error**2))), f"median_{unit}": float(np.median(error)),
+            f"p95_{unit}": float(np.percentile(error, 95)), f"max_{unit}": float(np.max(error))}
 
 
 def evaluate(record: tm.RunRecord) -> None:
-    """The figure eight's results on a run of a Figure8, live or saved
-    (tm.load_run(path, classes=[Figure8])): the ee_xyz_m and reference_xyz_m columns and the
-    tracking error over the full cycle and after the first second, unless the run has no
-    ticks. Saves the record."""
+    """Add figure-eight tracking metrics to the record and save it.
+
+    A run with ticks records position error over the full cycle and after the first second,
+    plus angular error when the task has an orientation target.
+    """
     task, ticks, results = record.config["task"], record.ticks, record.metadata["results"]
     if len(ticks["t"]):  # none: stopped before the first tick
         t = ticks["state_t"]  # when each position was measured
@@ -77,6 +81,11 @@ def evaluate(record: tm.RunRecord) -> None:
         error = np.linalg.norm(ticks["ee_xyz_m"] - ticks["reference_xyz_m"], axis=1)
         results["metrics_full_cycle"] = metrics(error)
         results["metrics_after_initial_1s"] = metrics(error[t >= 1.]) if np.any(t >= 1.) else None
+        if task.orientation_rad is not None:
+            angle = np.array([tm.orientation_error(q, task.orientation_rad) for q in ticks["q"]])
+            ticks["orientation_error_rad"] = angle
+            results["orientation_metrics_full_cycle"] = metrics(angle, "rad")
+            results["orientation_metrics_after_initial_1s"] = metrics(angle[t >= 1.], "rad") if np.any(t >= 1.) else None
     record.save()
 
 
@@ -85,11 +94,11 @@ def main(argv=None):
     args = arguments(__doc__, argv)
     task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
     plant = tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")
-    pieces = setup(args, plant, tm.VirtualTime.ideal())
+    pieces = setup(args, plant)
     if isinstance(pieces, int):  # the robot's checks, or a cancelled execution
         return pieces
-    plant, timing = pieces
-    record = run_experiment(plant, FIGURE8, task, tm.SampleKnot(), timing,
+    plant, settings, loop = pieces
+    record = run_experiment(plant, FIGURE8, task, settings=settings, loop=loop,
                             duration=args.duration, out=args.output)
     evaluate(record)
     print(json.dumps(record.metadata, indent=2, default=str))

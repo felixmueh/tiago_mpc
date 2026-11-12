@@ -47,13 +47,13 @@ class SampledSimConfig:
 class SampledSim:
     """The existing plant with held observations and separately recorded true states.
 
-    Sensor events occur at their own times, also between command ticks. This wrapper
+    Sensor diagnostics occur at their own times, also between command ticks. This wrapper
     supports virtual time only. No observation noise or additional transport delay.
     """
     def __init__(self, config):
         self.config, self.physical = config, config.physical.build()
         self.run_state = self.physical.run_state
-        self._events = []
+        self._diagnostics = []
 
     def start(self, clock):
         if not isinstance(clock, tm.VirtualClock):
@@ -63,13 +63,13 @@ class SampledSim:
         self._start, self._sample_index = clock.now(), 1
         self._sample = self.physical.state()
         self._last_truth_t = None
-        self._events.clear()
+        self._diagnostics.clear()
 
     def state(self):
         truth = self.physical.state()
         if truth.t != self._last_truth_t:
-            self._events.append(tm.Event(truth.t, 'plant_state', 'True simulated state recorded separately',
-                                         dict(q=truth.q.tolist(), qd=truth.qd.tolist())))
+            self._diagnostics.append(tm.Diagnostic(truth.t, 'plant_state', 'True simulated state recorded separately',
+                                                 dict(q=truth.q.tolist(), qd=truth.qd.tolist())))
             self._last_truth_t = truth.t
         return tm.State(self._sample.t, self._sample.q.copy(), self._sample.qd.copy())
 
@@ -86,9 +86,9 @@ class SampledSim:
     def apply(self, command):
         self.physical.apply(command)
 
-    def take_events(self):
-        events, self._events = self._events, []
-        return events + self.physical.take_events()
+    def take_diagnostics(self):
+        diagnostics, self._diagnostics = self._diagnostics, []
+        return diagnostics + self.physical.take_diagnostics()
 
     def stop(self):
         self.physical.stop()
@@ -98,9 +98,10 @@ class SampledSim:
 
 
 PARAMS = replace(FIGURE8, dt_s=.03, friction=None, armature=ARMATURE_KG_M2,
-                 solver=FIGURE8.solver.replace(mu=1., qd_cost=.01, u_cost=1e-4, N_cost=80.),
+                 solver=replace(FIGURE8.solver, mu=1.),
+                 cost=tm.default_cost(FIGURE8.N, velocity=.01, torque=1e-4, terminal_position=80.),
                  admm=replace(FIGURE8.admm, rho_u=5e-4))
-TIMING = tm.VirtualTime(command_period=.002, update_period=.02, solve_latency_s=.0055)
+TIMING = tm.VirtualTimeSettings(command_period=.002, update_period=.02, solve_latency_s=.0055)
 PLANT_COULOMB_J1_4_NM = (2.01, 2.39, 2.03, 1.91)
 PLANT_VISCOUS_J1_4_NM_S_RAD = (4.44, 5.07, 2.87, 2.82)
 LABELS = {'default': 'MPC only', 'feedforward': 'Friction feedforward',
@@ -117,9 +118,9 @@ def plant_config(feedback_period_s=FEEDBACK_PERIOD_S):
 
 
 def cases():
-    estimate, pd = tm.urdf_friction(), tm.PlanFeedback()
-    return {'default': tm.SampleKnot(), 'feedforward': tm.FrictionFeedforward(estimate),
-            'pd': pd, 'both': tm.FrictionFeedforward(estimate, pd),
+    estimate, pd, width = tm.urdf_friction(), tm.PlanFeedback(), tm.Tanh(.03)  # the study's, not the defaults
+    return {'default': tm.SampleKnot(), 'feedforward': tm.FrictionFeedforward(estimate, tm.SampleKnot(), width),
+            'pd': pd, 'both': tm.FrictionFeedforward(estimate, pd, width),
             'mpc_friction': tm.SampleKnot(), 'mpc_friction_pd': pd}
 
 
@@ -137,7 +138,9 @@ def configuration(params=PARAMS, plant=None, timing=TIMING, width=MPC_FRICTION_W
         delay += 'Rounded from the recorded native solve mean (5.4441ms), not end-to-end latency. '
     return dict(provenance=tm.provenance(), urdf_sha256=hashlib.sha256(tm.FULL_URDF.read_bytes()).hexdigest(),
                 params=tm.to_dict(params), task=tm.to_dict(Figure8()),
-                plant=tm.to_dict(plant if plant is not None else plant_config()), timing=tm.to_dict(timing),
+                plant=tm.to_dict(plant if plant is not None else plant_config()), settings=tm.to_dict(timing),
+                loop="run_virtual_time", compensation=None, safety=tm.to_dict(tm.ExecutionSafety()),
+                effort_handling=tm.to_dict(tm.EffortClip()),
                 cases={key: tm.to_dict(law) for key, law in cases().items()},
                 case_params={key: tm.to_dict(case_params(key, params, width)) for key in cases()},
                 assumptions='Virtual time, periodic held feedback, no additional sensor/command transport delay '
@@ -151,7 +154,7 @@ def export_and_measure(record, destination, case):
     """Keep observed results, add true motion columns/results and export executed truth."""
     evaluate(record)  # measured-state metrics remain independently available
     ticks, plans = record.ticks, record.plans
-    truth = [event for event in record.events if event.kind == 'plant_state']
+    truth = [diagnostic for diagnostic in record.diagnostics if diagnostic.kind == 'plant_state']
     if len(ticks['t']) == 0:
         return dict(case=case, status=record.metadata['status'], samples=0, replay=None)
     np.testing.assert_allclose([event.t for event in truth], ticks['t'], rtol=0, atol=1e-9)
@@ -216,11 +219,11 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--duration', type=float, default=24.)
     parser.add_argument('--mu', type=float, default=PARAMS.solver.mu)
-    parser.add_argument('--qd-cost', type=float, default=PARAMS.solver.qd_cost)
-    parser.add_argument('--u-cost', type=float, default=PARAMS.solver.u_cost)
+    parser.add_argument('--qd-cost', type=float, default=float(np.asarray(PARAMS.cost.state.weight)[7]))
+    parser.add_argument('--u-cost', type=float, default=float(np.asarray(PARAMS.cost.input.weight)))
     parser.add_argument('--rho-u', type=float, default=PARAMS.admm.rho_u)
     parser.add_argument('--dt', type=float, default=PARAMS.dt_s)
-    parser.add_argument('--terminal-ee-cost', type=float, default=PARAMS.solver.N_cost)
+    parser.add_argument('--terminal-ee-cost', type=float, default=float(np.asarray(PARAMS.cost.frame_pos.weight)[-1, 0]))
     parser.add_argument('--command-period', type=float, default=TIMING.command_period)
     parser.add_argument('--update-period', type=float, default=TIMING.update_period)
     parser.add_argument('--solve-latency', type=parse_solve_latency, default=TIMING.solve_latency_s)
@@ -229,11 +232,12 @@ def main(argv=None):
     parser.add_argument('--cases', nargs='+', choices=tuple(cases()), help='run only the named cases')
     args = parser.parse_args(argv)
     params = replace(PARAMS, dt_s=args.dt,
-                     solver=PARAMS.solver.replace(mu=args.mu, qd_cost=args.qd_cost, u_cost=args.u_cost,
-                                                 N_cost=args.terminal_ee_cost),
+                     solver=replace(PARAMS.solver, mu=args.mu),
+                     cost=tm.default_cost(PARAMS.N, velocity=args.qd_cost, torque=args.u_cost,
+                                          terminal_position=args.terminal_ee_cost),
                      admm=replace(PARAMS.admm, rho_u=args.rho_u))
     plant = plant_config(args.feedback_period)
-    timing = tm.VirtualTime(args.command_period, args.update_period, args.solve_latency)
+    timing = tm.VirtualTimeSettings(args.command_period, args.update_period, args.solve_latency)
     if timing.solve_latency_s != 'measured':
         params = replace(params, max_sqp_time_s=None)  # match run_experiment's effective parameters
     config = configuration(params, plant, timing, args.mpc_friction_width)
@@ -266,7 +270,7 @@ def main(argv=None):
                 continue
             try:
                 record = run_experiment(plant, case_params(name, params, args.mpc_friction_width),
-                                        Figure8(), law, timing, duration=args.duration,
+                                        Figure8(), law, timing, compensation=None, duration=args.duration,
                                         out=out / name, case=name, dependency_source=config['provenance'])
             except Exception:
                 traceback.print_exc()

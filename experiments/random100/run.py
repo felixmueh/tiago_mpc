@@ -7,7 +7,7 @@ first run; each case's run record is runs/<name>/. load(path) reads them back.
 
 Run from the checkout's root: python -m experiments.random100.run --dry-run (parameters only),
 then without --dry-run for all 100 cases or with --pairs 8990 for a subset."""
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import argparse
 import fcntl
@@ -17,6 +17,7 @@ from pathlib import Path
 import shutil
 import sys
 import traceback
+from typing import Literal
 
 import numpy as np
 
@@ -25,7 +26,7 @@ from experiments.reach import Reach, evaluate
 import tiago_mpc as tm
 
 HERE = Path(__file__).resolve().parent
-PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # a declared latency (0): no wall-time budget
+PARAMS = replace(tm.TIAGO, max_sqp_time_s=None)  # a declared latency: no wall-time budget
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,15 @@ class Random100Config:
     inputs_sha256: str
     params: tm.MpcParams = PARAMS
     plant: tm.SimConfig = tm.SimConfig(substep=.003)
-    timing: tm.VirtualTime = tm.VirtualTime.ideal()
+    settings: tm.VirtualTimeSettings = tm.VirtualTimeSettings.constant_rate()
+    law: tm.ControlLaw = field(default_factory=tm.FrictionFeedforward)
+    compensation: tm.LatencyCompensation | None | Literal["default"] = "default"
+    safety: tm.ExecutionSafety = tm.ExecutionSafety()
+    effort_handling: tm.EffortClip = tm.EffortClip()
+
+    def __post_init__(self):
+        if self.compensation == "default":
+            object.__setattr__(self, "compensation", tm.default_compensation(self.settings))
 
 
 @dataclass(frozen=True)
@@ -128,7 +137,9 @@ def main(argv=None):
         try:
             mpc = tm.MpcProcess(config.params, binary)  # one process per case
             plant = replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:])
-            record = run_experiment(plant, mpc, Reach(case.target_m), tm.SampleKnot(), config.timing,
+            record = run_experiment(plant, mpc, Reach(case.target_m), config.law, config.settings,
+                                    compensation=config.compensation, safety=config.safety,
+                                    effort_handling=config.effort_handling,
                                     out=out / "runs" / case.name, case=case.name)
             evaluate(record)
         except Exception:  # an error is a result: run_experiment saved it; the other cases continue

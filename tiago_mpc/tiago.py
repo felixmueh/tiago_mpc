@@ -8,9 +8,8 @@ at run time and written to the cache (util.cache_root): the reduced arm (arm_urd
 GPU copy (runtime_urdf) and the safety collision model (safety.py). Nothing derived
 is committed, so nothing derived can go stale.
 
-The native
-URDFs stay in ROS coordinates. Only the GPU URDF and the solver's state/control
-boundary normalize negative joint axes.
+Every URDF, the GPU copy included, keeps the native joint axes (joint 6 turns about -z):
+the solver works in native TIAGo coordinates.
 """
 from __future__ import annotations
 
@@ -40,23 +39,25 @@ Q_START = np.array([-0.39, -1.73, -0.38, -2.33, 0.0, -1.21, 0.04])
 # A nearby posture: the default reach target's, and the model check's second pose.
 Q_REACH = Q_START + np.array([0.18, 0.12, -0.10, 0.18, 0.0, 0.0, 0.0])
 
-# Right arm, native joint order 1–7. Reflected inertia in kg m², supplied on
-# 2026-10-21, not identified. Enable it explicitly in the plant or predictor;
-# it is not part of the URDF and is never folded into link inertia.
-ARMATURE_KG_M2 = (.746, .882, .211, .648, .326, .343, .27)
+# Right arm, native joint order 1–7. Reflected inertia in kg m², fitted on 2026-10-30
+# from one real chirp per joint as total inertia minus the URDF's link inertia
+# (models/tiago_pro/README.md). It is not part of the URDF and is never folded into
+# link inertia.
+ARMATURE_KG_M2 = (.43, .43, .19, .17, .21, .17, .18)
 
 # Stored PD gains: kp in Nm/rad, kd in Nm s/rad, native joint order 1–7.
-# The 2026-10-27 simulation tune used effective inertia at Q_START with the
-# supplied armature, 20 rad/s bandwidth and damping ratio 1.4. These are not
+# Retuned on 2026-10-30 with the recipe of the 2026-10-27 simulation tune: effective
+# inertia at Q_START with ARMATURE_KG_M2 (now the fitted one), 20 rad/s bandwidth and
+# damping ratio 1.4 (util.inertia_gains(20., 1.4, armature=ARMATURE_KG_M2)). These are not
 # hardware-qualified gains. Edit these literals directly; util.inertia_gains
 # provides estimates to copy here, without recalculating defaults at import.
 PD_KP = (
-    437.77012743826697, 510.6232322004456, 140.62973559712063, 363.94911197026863,
-    138.12976415871805, 145.21463447546623, 108.3090348183072,
+    311.37012743826693, 329.82323220044566, 132.22973559712062, 172.74911197026864,
+    91.72976415871804, 76.01463447546624, 72.3090348183072,
 )
 PD_KD = (
-    61.287817841357366, 71.48725250806238, 19.688162983596886, 50.9528756758376,
-    19.338166982220525, 20.33004882656527, 15.163264874563007,
+    43.59181784135736, 46.175252508062385, 18.512162983596884, 24.18487567583761,
+    12.842166982220524, 10.642048826565272, 10.123264874563008,
 )
 
 
@@ -188,6 +189,26 @@ def ee_position(q: np.ndarray) -> np.ndarray:
     return fk(q, GRASP_FRAME)
 
 
+def ee_orientation(q: np.ndarray) -> np.ndarray:
+    """The grasp frame's orientation in ROOT_FRAME as a rotation vector in radians."""
+    return pin.log3(_ee_rotation(q))
+
+
+def orientation_error(q: np.ndarray, target: np.ndarray) -> float:
+    """The angle in radians between the grasp frame at q and the rotation-vector target.
+
+    The target is in ROOT_FRAME; the error is the norm of log(R_targetᵀ R(q)).
+    """
+    return float(np.linalg.norm(pin.log3(pin.exp3(np.asarray(target, dtype=float)).T @ _ee_rotation(q))))
+
+
+def _ee_rotation(q: np.ndarray) -> np.ndarray:
+    model, data = _arm()
+    pin.forwardKinematics(model, data, np.asarray(q, dtype=float))
+    pin.updateFramePlacements(model, data)
+    return data.oMf[model.getFrameId(GRASP_FRAME)].rotation.copy()
+
+
 def ee_velocity(q: np.ndarray, qd: np.ndarray) -> np.ndarray:
     """Linear velocity of the grasp frame in ROOT_FRAME, m/s."""
     model, data = _arm()
@@ -197,46 +218,36 @@ def ee_velocity(q: np.ndarray, qd: np.ndarray) -> np.ndarray:
     return jacobian[:3] @ np.asarray(qd, dtype=float)
 
 
-def runtime_urdf(friction=None):
-    """The GPU URDF and the GPU coordinate signs.
-
-    A copy of the reduced arm with friction's coefficients, if given, whose negative joint
-    axes are turned positive, with their limits; in the cache, by its content (cached).
-    GATO reads only its collision meshes, so the visuals are left out."""
+def runtime_urdf(friction: Friction | None = None, arm_spheres=None) -> Path:
+    """The GPU URDF: a copy of the reduced arm with friction's coefficients, if given, in the
+    cache by its content (cached). GATO reads only its collision meshes, so the visuals are
+    left out. arm_spheres (link name to spheres (x, y, z, radius) in the link's frame, a
+    stored cover: collision.arm_cover), if given, replace all collision geometry: GATO copies
+    spheres unchanged into its collision rows, so the cover is compiled into the module and
+    another cover is another module."""
     tree = ET.parse(arm_urdf())
     for link in tree.iter("link"):
         for visual in link.findall("visual"):
             link.remove(visual)
-    joints = [joint for joint in tree.iter("joint") if joint.get("type") != "fixed"]
-    if friction is not None:  # the coefficients survive the axis flips below
+        if arm_spheres is not None:
+            for collision in link.findall("collision"):
+                link.remove(collision)
+            for x, y, z, r in arm_spheres.get(link.get("name"), ()):
+                collision = ET.SubElement(link, "collision")
+                ET.SubElement(collision, "origin", xyz=f"{x!r} {y!r} {z!r}", rpy="0 0 0")
+                ET.SubElement(ET.SubElement(collision, "geometry"), "sphere", radius=repr(r))
+    if friction is not None:
+        joints = [joint for joint in tree.iter("joint") if joint.get("type") != "fixed"]
         for joint, c, b in zip(joints, friction.coulomb_nm, friction.viscous_nm_s_per_rad):
             dynamics = joint.find("dynamics")
             if dynamics is None:
                 dynamics = ET.SubElement(joint, "dynamics")
             dynamics.set("friction", repr(float(c)))
             dynamics.set("damping", repr(float(b)))
-    signs = []
-    for joint in joints:
-        axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
-        if not (np.array_equal(axis, [0, 0, 1]) or np.array_equal(axis, [0, 0, -1])):
-            raise ValueError(f"Unsupported arm axis: {axis}")
-        sign = float(axis[2])
-        signs.append(sign)
-        if sign < 0:
-            joint.find("axis").set("xyz", "0 0 1")
-            limit = joint.find("limit")
-            lo, hi = float(limit.get("lower")), float(limit.get("upper"))
-            limit.set("lower", repr(-hi))
-            limit.set("upper", repr(-lo))
-            safety = joint.find("safety_controller")
-            if safety is not None:
-                lo, hi = float(safety.get("soft_lower_limit")), float(safety.get("soft_upper_limit"))
-                safety.set("soft_lower_limit", repr(-hi))
-                safety.set("soft_upper_limit", repr(-lo))
     payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-    return cached("tiago_right_grid.urdf", payload), np.asarray(signs)
+    return cached("tiago_right_grid.urdf", payload)
 
 
 if __name__ == "__main__":  # the derived files' paths, for debugging
     print(arm_urdf())
-    print(runtime_urdf()[0])
+    print(runtime_urdf())
