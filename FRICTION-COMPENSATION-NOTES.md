@@ -9,7 +9,7 @@ remain local; no upstream publication or hardware qualification is implied.
 
 Two local dependency worktrees carry the narrow extension:
 
-- `/workspace/GRiD-tiago-armature-060`, branch `experiment/tiago-armature-060`,
+- `/workspace/GRiD`, branch `experiment/tiago-armature-060`,
   upstream v0.6.0 `712df1c`. Generated ABA/Minv/CRBA/RNEA support explicit
   `JOINT_ARMATURE`. Pinned peers stay unchanged. Only fixed-base, scalar,
   cardinal-axis revolute joints are supported; unsupported models are rejected.

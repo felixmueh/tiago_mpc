@@ -248,7 +248,7 @@ uv run python -m mypy                     # the type check alone (pyproject.toml
 - **GATO** is `gato-mpc` 0.1.7 from `../GATO/.worktrees/tiago-combined`,
   selected in `pyproject.toml` and `uv.lock`. That local source supplies fixed-arm
   armature support, the native ADMM-budget accessor and per-SQP collision-row
-  caching. It uses `grid-rbd` 0.6.0 from `../GRiD-tiago-armature-060` for armature
+  caching. It uses `grid-rbd` 0.6.0 from `../GRiD` for armature
   dynamics. Both sibling sources are required for `uv sync --frozen` with this lock.
   Their native contents identify the compiled module in the shared cache.
   Predictor friction is registered with

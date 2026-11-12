@@ -66,4 +66,4 @@ ignore_missing_imports = true
 # Local armature support and per-SQP collision-row caching; see README.md.
 [tool.uv.sources]
 gato-mpc = { path = "../GATO/.worktrees/tiago-combined", editable = true }
-grid-rbd = { path = "../GRiD-tiago-armature-060" }  # wheel build stages GRiD's validated peer/resources bundle
+grid-rbd = { path = "../GRiD" }  # wheel build stages GRiD's validated peer/resources bundle

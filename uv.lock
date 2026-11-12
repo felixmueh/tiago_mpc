@@ -383,7 +383,7 @@ provides-extras = ["examples", "dev", "docs", "test"]
 [[package]]
 name = "grid-rbd"
 version = "0.6.0"
-source = { directory = "../GRiD-tiago-armature-060" }
+source = { directory = "../GRiD" }
 dependencies = [
     { name = "beautifulsoup4", marker = "sys_platform == 'linux'" },
     { name = "lxml", marker = "sys_platform == 'linux'" },
@@ -803,7 +803,7 @@ requires-dist = [
     { name = "cmeel-tinyxml2", specifier = "==10.0.0" },
     { name = "cmeel-urdfdom", specifier = "==4.0.1" },
     { name = "gato-mpc", editable = "../GATO/.worktrees/tiago-combined" },
-    { name = "grid-rbd", directory = "../GRiD-tiago-armature-060" },
+    { name = "grid-rbd", directory = "../GRiD" },
     { name = "matplotlib", specifier = "==3.10.9" },
     { name = "pin", specifier = "==3.9.0" },
     { name = "typing-extensions", specifier = "==4.16.0" },
