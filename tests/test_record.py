@@ -46,7 +46,7 @@ def test_a_run_is_written_and_read_back(tmp_path):
                                                solve_latency_s=.01)
     outcome = run_virtual_time(plant, mpc, task, SampleKnot(), [record],
                                solve_completed_callbacks=[record.solve_completed],
-                               diagnostic_callbacks=[record.diagnostic], settings=timing, duration=.05)
+                               diagnostic_callbacks=[record.diagnostic], settings=timing, duration=.05, compensation=None)
     record.diagnostic(Diagnostic(plant.clock.now(), "handback", "handed back", dict(restored=True, errors=[])))
     record.ticks["distance_m"] = np.arange(len(record.ticks["t"])) * .1
     record.plans["label"] = np.array([f"plan {i}" for i in range(len(record.plans["t0"]))])
@@ -125,7 +125,7 @@ def test_save_refuses_a_column_of_the_wrong_length(tmp_path):
     record = RunRecord(tmp_path / "r", task=Task())
     run_virtual_time(Plant(), Mpc(), Task(), tick_callbacks=[record], diagnostic_callbacks=[record.diagnostic],
                      solve_completed_callbacks=[record.solve_completed],
-                     settings=VirtualTimeSettings(.01, .01, 0.), duration=.03)
+                     settings=VirtualTimeSettings(.01, .01, 0.), duration=.03, law=SampleKnot(), compensation=None)
     record.ticks["short"] = np.zeros(2)
     with pytest.raises(ValueError, match="rows"):
         record.save()
@@ -260,7 +260,7 @@ REACH = Reach(target_m=(.4, -.2, .9), position_tol_m=.03, speed_tol_m_s=.01, tim
               orientation_rad=(.1, .2, .3))
 CASE = Case(name="c", initial_state=(.1,) * 14, target_m=(.4, -.2, .9))
 RANDOM100 = Random100Config(ids=(1, 2), inputs_sha256="ab", params=SAMPLE["MpcParams"], plant=SAMPLE["SimConfig"],
-                            settings=SAMPLE["VirtualTimeSettings"], compensation=LATENCY,
+                            settings=SAMPLE["VirtualTimeSettings"], law=SAMPLE["PlanFeedback"], compensation=LATENCY,
                             safety=SAMPLE["ExecutionSafety"], effort_handling=SAMPLE["EffortClip"])
 EXPERIMENT_SAMPLES = [
     REACH, Figure8(start_m=(.4, -.2, .9), x_span_m=.2, y_amplitude_m=.05, edge_clearance_m=.01, period_s=12.,

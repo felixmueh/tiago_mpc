@@ -24,7 +24,7 @@ compensation = tm.LatencyCompensation(
 )
 real_settings = tm.RealTimeSettings(
     command_period=.002,       # 500 Hz torque commands, including PD/FF
-    update_period=.02,         # 50 Hz control updates; 0 requests back to back
+    update_period=.01,         # 100 Hz control updates; 0 requests back to back
 )
 
 # The same compensation on a simulation clock, charging actual solve wall time:

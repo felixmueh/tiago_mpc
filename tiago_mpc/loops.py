@@ -154,14 +154,83 @@ def _late_plan(plan: Plan, t: float, plan_index: int) -> Diagnostic:
                  dict(plan=plan_index, delay_s=t - plan.t0))
 
 
+@dataclass(frozen=True)
+class VirtualTimeSettings:
+    """Virtual command/update periods and solve latency, with common timing presets."""
+    command_period: float  # Seconds between command ticks.
+    update_period: float  # Seconds between control updates; zero requests whenever ready.
+    solve_latency_s: float | Literal["measured"]  # Declared seconds or the solve's native wall time.
+
+    def __post_init__(self) -> None:
+        if not (self.solve_latency_s == "measured" or isinstance(self.solve_latency_s, (int, float))
+                and math.isfinite(self.solve_latency_s) and self.solve_latency_s >= 0):
+            raise ValueError("solve_latency_s must be seconds (finite, >= 0) or 'measured', "
+                             f"not {self.solve_latency_s!r}")
+        if not math.isfinite(self.command_period) or self.command_period <= 0:
+            raise ValueError("command_period must be finite positive seconds")
+        if not math.isfinite(self.update_period) or self.update_period < 0:
+            raise ValueError("update_period must be finite nonnegative seconds")
+
+    @classmethod
+    def ideal(
+        cls,
+        command_period: float = hz_to_s(500),
+        update_period: float = hz_to_s(100),
+    ) -> VirtualTimeSettings:
+        """Each plan in effect at the tick of its request."""
+        return cls(command_period, update_period, 0.)
+
+    @classmethod
+    def constant_latency(
+        cls,
+        solve_latency_s: float = .05,
+        command_period: float = hz_to_s(500),
+        update_period: float = hz_to_s(100),
+    ) -> VirtualTimeSettings:
+        """Each plan available solve_latency_s seconds after its request."""
+        return cls(command_period, update_period, solve_latency_s)
+
+    @classmethod
+    def as_fast_as_possible(cls, command_period: float = hz_to_s(500)) -> VirtualTimeSettings:
+        """Each solve takes its measured time, and the next is requested when its plan takes effect."""
+        return cls(command_period, 0., "measured")
+
+    @classmethod
+    def constant_rate(
+        cls,
+        period: float = hz_to_s(100),
+        command_period: float = hz_to_s(500),
+    ) -> VirtualTimeSettings:
+        """A request every period, its plan in effect a period later."""
+        return cls(command_period, period, period)
+
+    @classmethod
+    def like(cls, real: RealTimeSettings) -> VirtualTimeSettings:
+        """Copy real's periods and declare each solve to last one control period."""
+        return cls(real.command_period, real.update_period, real.update_period)
+
+
+@dataclass(frozen=True)
+class RealTimeSettings:
+    """Wall-time command/update periods, defaulting to 500 Hz commands and 100 Hz updates."""
+    command_period: float = hz_to_s(500)  # Seconds between command ticks.
+    update_period: float = hz_to_s(100)  # Seconds between control updates; zero requests whenever ready.
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.command_period) or self.command_period <= 0:
+            raise ValueError("command_period must be finite positive seconds")
+        if not math.isfinite(self.update_period) or self.update_period < 0:
+            raise ValueError("update_period must be finite nonnegative seconds")
+
+
 def run_real_time(
     plant: PlantInterface,
     mpc: MpcInterface,
     task: TaskInterface,
-    law: ControlLaw = SampleKnot(),
+    law: ControlLaw | None = None,  # None: FrictionFeedforward(), its defaults
     tick_callbacks: Sequence[TickCallback] = (),
     *,
-    settings: RealTimeSettings,
+    settings: RealTimeSettings = RealTimeSettings(),
     duration: float,
     compensation: LatencyCompensation | None | Literal["default"] = "default",
     safety: SafetyInterface = ExecutionSafety(),
@@ -238,6 +307,7 @@ def run_real_time(
         raise ValueError("Not validated for long runs. Records stored in memory and GC disabled.")
     if compensation == "default":
         compensation = default_compensation(settings)
+    law = FrictionFeedforward() if law is None else law
     real_safety, real_effort = RealTimeSafety(safety), RealTimeEffort(effort_handling)
     _check_setup(mpc, law, compensation)
     clock, update_schedule = WallClock(), Schedule(settings.update_period)
@@ -367,12 +437,12 @@ def run_virtual_time(
     plant: PlantInterface,
     mpc: MpcInterface,
     task: TaskInterface,
-    law: ControlLaw = SampleKnot(),
+    law: ControlLaw | None = None,  # None: FrictionFeedforward(), its defaults
     tick_callbacks: Sequence[TickCallback] = (),
     *,
-    settings: VirtualTimeSettings,
+    settings: VirtualTimeSettings = VirtualTimeSettings.constant_rate(),  # the worst case: a solve takes a period
     duration: float,
-    compensation: LatencyCompensation | None = None,
+    compensation: LatencyCompensation | None | Literal["default"] = "default",
     safety: SafetyInterface = ExecutionSafety(),
     effort_handling: EffortHandling | None = EffortClip(),
     start_time_s: float = 0.,
@@ -462,7 +532,9 @@ def run_virtual_time(
       in effect       old=================P0==================P1
 
     like(RealTimeSettings()) copies the real-time periods and declares a solve
-    latency of one update period. Compensation is passed separately to this loop.
+    latency of one update period. The defaults are constant_rate(), latency
+    compensation from default_compensation(settings) (None turns it off) and
+    FrictionFeedforward() as the law.
 
     An asynchronous MPC can solve while the plant integrates the independent
     interval under the previous command. The loop waits for a result only at its
@@ -519,6 +591,9 @@ def run_virtual_time(
         initial_command = np.array(initial_command, dtype=float)
         if initial_command.shape != (7,) or not np.isfinite(initial_command).all():
             raise ValueError("initial_command requires seven finite native torques")
+    if compensation == "default":
+        compensation = default_compensation(settings)
+    law = FrictionFeedforward() if law is None else law
     _check_setup(mpc, law, compensation)
     clock = VirtualClock(start_time_s)
     command_schedule = Schedule(settings.command_period, start_at=start_time_s)
@@ -687,75 +762,6 @@ def run_virtual_time(
                 gc.enable()
             else:
                 gc.disable()
-
-
-@dataclass(frozen=True)
-class VirtualTimeSettings:
-    """Virtual command/update periods and solve latency, with common timing presets."""
-    command_period: float  # Seconds between command ticks.
-    update_period: float  # Seconds between control updates; zero requests whenever ready.
-    solve_latency_s: float | Literal["measured"]  # Declared seconds or the solve's native wall time.
-
-    def __post_init__(self) -> None:
-        if not (self.solve_latency_s == "measured" or isinstance(self.solve_latency_s, (int, float))
-                and math.isfinite(self.solve_latency_s) and self.solve_latency_s >= 0):
-            raise ValueError("solve_latency_s must be seconds (finite, >= 0) or 'measured', "
-                             f"not {self.solve_latency_s!r}")
-        if not math.isfinite(self.command_period) or self.command_period <= 0:
-            raise ValueError("command_period must be finite positive seconds")
-        if not math.isfinite(self.update_period) or self.update_period < 0:
-            raise ValueError("update_period must be finite nonnegative seconds")
-
-    @classmethod
-    def ideal(
-        cls,
-        command_period: float = hz_to_s(500),
-        update_period: float = hz_to_s(100),
-    ) -> VirtualTimeSettings:
-        """Each plan in effect at the tick of its request."""
-        return cls(command_period, update_period, 0.)
-
-    @classmethod
-    def constant_latency(
-        cls,
-        solve_latency_s: float = .05,
-        command_period: float = hz_to_s(500),
-        update_period: float = hz_to_s(100),
-    ) -> VirtualTimeSettings:
-        """Each plan available solve_latency_s seconds after its request."""
-        return cls(command_period, update_period, solve_latency_s)
-
-    @classmethod
-    def as_fast_as_possible(cls, command_period: float = hz_to_s(500)) -> VirtualTimeSettings:
-        """Each solve takes its measured time, and the next is requested when its plan takes effect."""
-        return cls(command_period, 0., "measured")
-
-    @classmethod
-    def constant_rate(
-        cls,
-        period: float = hz_to_s(100),
-        command_period: float = hz_to_s(500),
-    ) -> VirtualTimeSettings:
-        """A request every period, its plan in effect a period later."""
-        return cls(command_period, period, period)
-
-    @classmethod
-    def like(cls, real: RealTimeSettings) -> VirtualTimeSettings:
-        """Copy real's periods and declare each solve to last one control period."""
-        return cls(real.command_period, real.update_period, real.update_period)
-
-
-@dataclass(frozen=True)
-class RealTimeSettings:
-    """Wall-time command/update periods, defaulting to 500 Hz commands and 50 Hz updates."""
-    command_period: float = hz_to_s(500)  # Seconds between command ticks.
-    update_period: float = hz_to_s(50)  # Seconds between control updates; zero requests whenever ready.
-
-    def __post_init__(self) -> None:
-        if not math.isfinite(self.command_period) or self.command_period <= 0:
-            raise ValueError("command_period must be finite positive seconds")
-        if not math.isfinite(self.update_period) or self.update_period < 0:
-            raise ValueError("update_period must be finite nonnegative seconds")
 
 
 def default_compensation(settings: RealTimeSettings | VirtualTimeSettings) -> LatencyCompensation:

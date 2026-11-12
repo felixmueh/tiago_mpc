@@ -5,9 +5,8 @@ collision rows enforced ("on", ADMM) and only reported ("off", telemetry).
 Both modes compile the same module and upload the same environment (the body's stored
 cover and the scene's obstacles, tiago_mpc/collision.py); only the rows' mechanism differs.
 evaluate measures the executed motion against the collision meshes (experiments/clearance.py).
-The runs take the real MPC's timing (VirtualTimeSettings.like(RealTimeSettings()): 50 Hz
-updates, each solve one control period) with the default latency compensation and
-PlanFeedback, as the reach.
+The runs take the defaults, as the reach: VirtualTimeSettings.constant_rate() (100 Hz
+updates, each solve one control period), latency compensation and FrictionFeedforward().
 
 Run from the checkout's root: python -m experiments.obstacles [--help]"""
 from __future__ import annotations
@@ -121,14 +120,13 @@ def main(argv=None):
     params = replace(tm.TIAGO, collision=collision)
     if args.sqp_iters is not None:
         params = replace(params, solver=replace(params.solver, max_sqp_iters=args.sqp_iters))
-    settings = tm.VirtualTimeSettings.like(tm.RealTimeSettings())
+    settings = tm.VirtualTimeSettings.constant_rate()
     if args.solve_latency is not None:
         latency = args.solve_latency
         settings = replace(settings, solve_latency_s=latency if latency == "measured" else float(latency))
     task = Reach(scene.target_m, timeout_s=scene.timeout_s)
-    record = run_experiment(tm.SimConfig(substep=.003), params, task, tm.PlanFeedback(), settings,
-                            compensation=tm.default_compensation(settings), out=args.output, scene=args.scene,
-                            mode=args.mode)
+    record = run_experiment(tm.SimConfig(substep=.003), params, task, settings=settings, out=args.output,
+                            scene=args.scene, mode=args.mode)
     evaluate(record)
     print(json.dumps(record.metadata["results"], indent=2, default=str))
     print(f"Saved {record.out}")

@@ -7,7 +7,7 @@ first run; each case's run record is runs/<name>/. load(path) reads them back.
 
 Run from the checkout's root: python -m experiments.random100.run --dry-run (parameters only),
 then without --dry-run for all 100 cases or with --pairs 8990 for a subset."""
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import argparse
 import fcntl
@@ -37,7 +37,8 @@ class Random100Config:
     inputs_sha256: str
     params: tm.MpcParams = PARAMS
     plant: tm.SimConfig = tm.SimConfig(substep=.003)
-    settings: tm.VirtualTimeSettings = tm.VirtualTimeSettings.like(tm.RealTimeSettings())
+    settings: tm.VirtualTimeSettings = tm.VirtualTimeSettings.constant_rate()
+    law: tm.ControlLaw = field(default_factory=tm.FrictionFeedforward)
     compensation: tm.LatencyCompensation | None | Literal["default"] = "default"
     safety: tm.ExecutionSafety = tm.ExecutionSafety()
     effort_handling: tm.EffortClip = tm.EffortClip()
@@ -136,7 +137,7 @@ def main(argv=None):
         try:
             mpc = tm.MpcProcess(config.params, binary)  # one process per case
             plant = replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:])
-            record = run_experiment(plant, mpc, Reach(case.target_m), tm.PlanFeedback(), config.settings,
+            record = run_experiment(plant, mpc, Reach(case.target_m), config.law, config.settings,
                                     compensation=config.compensation, safety=config.safety,
                                     effort_handling=config.effort_handling,
                                     out=out / "runs" / case.name, case=case.name)

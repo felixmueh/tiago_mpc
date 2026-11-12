@@ -7,6 +7,33 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-11-12: defaults live in the types and loops** (Felix; supersedes the timing and
+  law of the 2026-10-30 entry below).
+  - **Principle.** Parameters passed to GATO follow GATO's default (None) unless TIAGo
+    needs another value, which `MpcParams` sets with a comment and
+    `tests/test_gato_defaults.py` lists. Parameters only we use get their sensible
+    default in our own types. Only experiments that differ set their own values.
+  - **Timing.** `run_virtual_time` defaults to `VirtualTimeSettings.constant_rate()`:
+    each solve declared to take one update period, the worst case, deterministic
+    (measured latency makes simulated runs depend on GPU load). `VirtualTimeSettings`
+    itself has no field defaults; its presets stay, including `constant_latency` for
+    studies of latency at a fixed rate. `RealTimeSettings()` updates at 100 Hz, as the
+    simulation (500 Hz commands in both).
+  - **Compensation** defaults to `default_compensation(settings)` in both loops and
+    in `run_experiment`; `None` turns it off.
+  - **Law.** Both loops and `run_experiment` default to `FrictionFeedforward()`, the
+    robot mains included: the URDF's fitted friction (`urdf_friction()`, refit B of
+    2026-10-30), `PlanFeedback()`'s stored gains and a 0.01 rad/s tanh width.
+  - **Predictor friction** is off by default: `FIGURE8` no longer predicts it, like
+    `TIAGO` and `MpcParams`.
+  - **Friction values.** The package and URDF hold only the refit B values; the
+    16 October constants stay in the friction experiment, which pins its historical
+    laws (`SampleKnot()` base, `Tanh(.03)`) explicitly. The latency study, the
+    friction studies and `plan_feedback.py` pass `compensation=None` and the latency
+    study its historical figure-eight predictor friction explicitly.
+  - Random100 and obstacles follow the new defaults; their earlier runs were removed
+    (Felix keeps backups) and are regenerated when needed.
+
 - **2026-11-07: the package keeps only what the MPC needs; the body cover for the safety
   monitor is parked** (Felix, refactor of the entry below).
   - **`collision.py`** keeps `Collision` and the cover loading (`arm_cover`, `body_cover`,
@@ -775,7 +802,7 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
   [latency compensation](latency-compensation.md).
 
 - **2026-10-30: new defaults for the real MPC, which the simulation takes from it**
-  (Felix). The real MPC's timing, `RealTimeSettings()`: 500 Hz commands, control updates at
+  (Felix; timing and law superseded on 2026-11-12, above). The real MPC's timing, `RealTimeSettings()`: 500 Hz commands, control updates at
   50 Hz (20 ms) and latency compensation on. The current real-time forecast uses
   previous observed latency, initialized from the update period. The simulation's timing is
   `VirtualTimeSettings.like(RealTimeSettings())`: the same periods, each solve

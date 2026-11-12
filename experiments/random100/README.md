@@ -18,6 +18,12 @@ predictor, the plant and the compensation); earlier runs used 10 ms knots, 80 %,
 `VirtualTimeSettings.ideal()`, `SampleKnot` and no armature, another model. They keep
 their labels.
 
+**New protocol (2026-11-12):** runs from this date use the new defaults: 100 Hz
+control updates with a declared solve latency of one update period
+(`VirtualTimeSettings.constant_rate()`), latency compensation and
+`FrictionFeedforward()` (the URDF's fitted friction with PD). The runs of the earlier
+protocols were removed (Felix keeps backups); regenerate the study with this one.
+
 The virtual-time effort policy defaults to clipping the complete command at the
 raw torque limits, including feedback (2026-11-04). The policy is recorded in
 the separate execution configuration. Earlier results retain their original effort policy
@@ -32,12 +38,13 @@ and labels.
 
 - **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`, grasp
   frame) with no solve-time limit (`PARAMS` in `run.py`), 3 ms RK4 substeps and
-  the simulation of the real MPC's timing, `VirtualTimeSettings.like(RealTimeSettings())`. The
+  `VirtualTimeSettings.constant_rate()` with latency compensation. The
   study is two frozen dataclasses: `Random100Config` (the ids, the sha256 of
   `manifest.json`, which pins the inputs, and those pieces) and one `Case` per input
   pair (its name, start state and grasp-frame target),
   written with the provenance to `study.json` once, before the first run.
-  Each case runs once, in order: `run_experiment` with `Reach` and `PlanFeedback()`, then
+  Each case runs once, in order: `run_experiment` with `Reach` and the study's law
+  (`FrictionFeedforward()`), then
   `evaluate` from `experiments/reach.py`, with its own
   `MpcProcess` on the GATO module compiled once at the start (`compile_binary`);
   its run record is `runs/<name>/` (`case` in its config) in a fresh directory

@@ -263,7 +263,7 @@ def test_the_robot_refuses_virtual_time_before_any_ros_call(rig):
     with pytest.raises(ValueError, match="wall time only"):
         plant.start(VirtualClock())
     with pytest.raises(ValueError, match="wall time only"):
-        run_virtual_time(plant, Mpc(), Task(), settings=VirtualTimeSettings(.01, .01, 0.), duration=.1)
+        run_virtual_time(plant, Mpc(), Task(), settings=VirtualTimeSettings(.01, .01, 0.), duration=.1, law=tm.SampleKnot(), compensation=None)
     assert not rig.arm.calls and plant.monitor is None and not rig.arm.published
 
 
@@ -271,7 +271,7 @@ def test_run_real_time_activates_once_and_hands_back(rig):
     plant, ticks, diagnostics = robot.RosPlant(robot.RobotConfig(execute=True)), [], []
     outcome = run_real_time(plant, Mpc(N=32), Task(), tick_callbacks=[ticks.append],
                             diagnostic_callbacks=[diagnostics.append],
-                            settings=RealTimeSettings(.01, .01), compensation=None, duration=.1)
+                            settings=RealTimeSettings(.01, .01), compensation=None, duration=.1, law=tm.SampleKnot())
     assert outcome.status == "timeout"
     assert [d.kind for d in diagnostics if d.kind != "late_plan"] == ["activated"]  # behind, not late
     assert rig.arm.calls.count("switch") == 1 and rig.arm.calls[-1] == "handback"
@@ -282,7 +282,7 @@ def test_run_real_time_activates_once_and_hands_back(rig):
 
 def test_run_real_time_never_activates_for_a_goal_already_met(rig):
     plant = robot.RosPlant(robot.RobotConfig(execute=True))
-    outcome = run_real_time(plant, Mpc(), Task(done_at=0.), settings=RealTimeSettings(.01, .01), compensation=None, duration=1.)
+    outcome = run_real_time(plant, Mpc(), Task(done_at=0.), settings=RealTimeSettings(.01, .01), compensation=None, duration=1., law=tm.SampleKnot())
     assert outcome.status == "done"
     assert "switch" not in rig.arm.calls and not rig.arm.published
 
@@ -295,7 +295,7 @@ def test_a_dead_mpc_process_on_the_robot_stops_and_hands_back(rig):
 
     with pytest.raises(RuntimeError, match="exited"):
         run_real_time(plant, mpc, Task(), tick_callbacks=[die], settings=RealTimeSettings(.01, .01),
-                      duration=1.)
+                      duration=1., law=tm.SampleKnot())
     assert rig.arm.calls[-1] == "handback" and not rig.arm.published[-1].any()
 
 

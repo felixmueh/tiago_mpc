@@ -6,14 +6,14 @@ FrictionFeedforward adds explicit joint losses at its planned velocity. All use 
 joint coordinates and can be composed independently of the experiment or plant."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 import numpy as np
 
 from tiago_mpc.dynamics import Friction, Sign, Tanh, passive_torque
 from tiago_mpc.interfaces import Command, ControlLaw, EffortHandling, Fault, Plan, SafetyInterface, State
-from tiago_mpc.tiago import PD_KD, PD_KP, limits
+from tiago_mpc.tiago import PD_KD, PD_KP, limits, urdf_friction
 
 
 LEASE_S = .1  # A plan may be commanded at most this long after its measured source state.
@@ -171,10 +171,14 @@ class FrictionFeedforward:
     constraint and cannot be added here. At zero planned velocity the added
     torque is zero, with no independent breakaway kick. Keep predictor friction
     off when using this law to compensate the same joint losses externally.
+
+    The defaults are the loops' default law: the URDF's fitted right-arm friction
+    (urdf_friction), PD about the plan (PlanFeedback's stored gains) and a 0.01 rad/s
+    tanh width, as tuned in simulation (experiments/controller_tuning.py).
     """
-    friction: Friction
-    base_law: ControlLaw = SampleKnot()
-    evaluation: Tanh | Sign = Tanh(.03)
+    friction: Friction = field(default_factory=urdf_friction)
+    base_law: ControlLaw = field(default_factory=PlanFeedback)
+    evaluation: Tanh | Sign = Tanh(.01)
 
     def __post_init__(self) -> None:
         if not isinstance(self.evaluation, (Tanh, Sign)):

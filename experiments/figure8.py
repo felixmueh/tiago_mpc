@@ -1,6 +1,7 @@
 """Horizontal figure-eight tracking (robot: checks only by default).
 
-In simulation with StickSlip Coulomb friction in the plant and Tanh in the predictor.
+Simulation uses StickSlip Coulomb friction in the plant. Execution uses the defaults:
+external friction feedforward with PD, and a loss-free predictor.
 
 Run from the checkout's root: python -m experiments.figure8 [--help]."""
 from __future__ import annotations
@@ -58,8 +59,7 @@ class Figure8:
 
 FIGURE8 = replace(tm.TIAGO, dt_s=.01, solver=replace(tm.TIAGO.solver, mu=1.),
                   cost=tm.default_cost(tm.TIAGO.N, velocity=.01, torque=1e-6),
-                  admm=replace(tm.TIAGO.admm, rho_u=None),  # GATO's, for the control cost 1e-6
-                  friction=tm.urdf_friction(), friction_law=tm.Tanh(.1))
+                  admm=replace(tm.TIAGO.admm, rho_u=None))  # GATO's, for the control cost 1e-6
 
 
 def metrics(error, unit="m"):
@@ -94,12 +94,11 @@ def main(argv=None):
     args = arguments(__doc__, argv)
     task = Figure8() if args.target is None else Figure8(start_m=tuple(args.target))
     plant = tm.SimConfig(friction=tm.urdf_friction(), integrator="euler")
-    pieces = setup(args, plant, tm.VirtualTimeSettings.like(tm.RealTimeSettings()))
+    pieces = setup(args, plant)
     if isinstance(pieces, int):  # the robot's checks, or a cancelled execution
         return pieces
     plant, settings, loop = pieces
-    record = run_experiment(plant, FIGURE8, task, tm.PlanFeedback(), settings, loop=loop,
-                            compensation=tm.default_compensation(settings),
+    record = run_experiment(plant, FIGURE8, task, settings=settings, loop=loop,
                             duration=args.duration, out=args.output)
     evaluate(record)
     print(json.dumps(record.metadata, indent=2, default=str))

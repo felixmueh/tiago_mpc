@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from tiago_mpc.laws import FrictionFeedforward, PlanFeedback
+from tiago_mpc.laws import FrictionFeedforward, PlanFeedback, SampleKnot
 from tiago_mpc.util import inertia_gains
 from tiago_mpc.dynamics import Friction, StickSlip, Tanh
 from tiago_mpc.interfaces import Plan, State
@@ -27,12 +27,13 @@ def test_friction_feedforward_uses_planned_velocity_and_native_signs():
     measured = State(1.005, np.zeros(7), -v0)
     friction = Friction((1.,)*7, (.5,)*7)
     expected = torque[0] + np.tanh(1.5*v0/.03) + .5*1.5*v0
-    np.testing.assert_allclose(FrictionFeedforward(friction)(plan, 1.005, measured).applied, expected)
+    np.testing.assert_allclose(FrictionFeedforward(friction, SampleKnot(), Tanh(.03))(plan, 1.005, measured).applied,
+                               expected)
     pd = PlanFeedback(kp=0., kd=2.)
-    np.testing.assert_allclose(FrictionFeedforward(friction, pd)(plan, 1.005, measured).applied,
+    np.testing.assert_allclose(FrictionFeedforward(friction, pd, Tanh(.03))(plan, 1.005, measured).applied,
                                expected + 2*(1.5*v0 - measured.qd))
     with pytest.raises(RuntimeError, match='last knot'):
-        FrictionFeedforward(friction)(plan, 1.02, measured)
+        FrictionFeedforward(friction, SampleKnot())(plan, 1.02, measured)
 
 
 def test_smooth_feedforward_has_no_breakaway_kick_at_rest():
@@ -121,7 +122,8 @@ def test_saved_metrics_and_portable_motion_use_truth_separately_from_feedback(tm
     timing = tm.VirtualTimeSettings(.008, .008, .0055)
     mpc = Mpc(N=3, dt=.03, wall=.004)
     mpc.params = replace(PARAMS, N=3, cost=tm.default_cost(3, velocity=.01, torque=1e-4, terminal_position=80.))
-    record = run_experiment(config, mpc, Figure8(period_s=.048), tm.SampleKnot(), timing, out=tmp_path/'run')
+    record = run_experiment(config, mpc, Figure8(period_s=.048), tm.SampleKnot(), timing, compensation=None,
+                            out=tmp_path/'run')
     row = export_and_measure(record, tmp_path/'executed.npz', 'default')
     assert row['status'] == 'done' and row['samples'] == 7
     np.testing.assert_allclose(record.ticks['state_t'], [0, 0, 0, .02, .02, .04, .04])

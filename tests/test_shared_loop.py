@@ -16,8 +16,8 @@ SETTINGS = tm.VirtualTimeSettings(.002, .002, 0.)
 
 
 def run(mpc=None, plant=None, law=None, *, settings=SETTINGS, duration=.01, **options):
-    args = () if law is None else (law,)
-    return tm.run_virtual_time(plant or Plant(), mpc or Mpc(), Task(), *args,
+    options.setdefault("compensation", None)  # these traces are uncompensated
+    return tm.run_virtual_time(plant or Plant(), mpc or Mpc(), Task(), law or tm.SampleKnot(),
                                settings=settings, duration=duration, **options)
 
 
@@ -93,7 +93,7 @@ def test_virtual_loop_applies_explicit_effort_policy_to_explicit_law(handling, e
     plant, ticks = Plant(), []
     outcome = tm.run_virtual_time(plant, Mpc(), Task(),
         lambda plan, t, state: tm.Command(np.full(7, 1000.), np.full(7, 1000.)),
-        [ticks.append], settings=SETTINGS, effort_handling=handling, duration=.004)
+        [ticks.append], settings=SETTINGS, effort_handling=handling, duration=.004, compensation=None)
     assert outcome.status == 'timeout' and plant.applied
     for tick in ticks:
         if tick.command is not None:
@@ -172,7 +172,7 @@ def test_solve_messages_keep_unused_plans_and_exact_reference_snapshots():
 
     messages, ticks, task = [], [], Reference()
     tm.run_virtual_time(Plant(), Mpc(), task, tick_callbacks=[ticks.append],
-        solve_completed_callbacks=[messages.append], settings=replace(SETTINGS, solve_latency_s=.006), duration=.008)
+        solve_completed_callbacks=[messages.append], settings=replace(SETTINGS, solve_latency_s=.006), duration=.008, law=tm.SampleKnot(), compensation=None)
     solves = [message for message in messages if isinstance(message, tm.SolveCompleted)]
     active = {id(tick.plan) for tick in ticks if tick.command is not None}
     assert len(solves) == 2 and sum(id(message.plan) not in active for message in solves) == 1
@@ -207,7 +207,7 @@ def test_each_notification_stream_receives_its_payload_once(loop, settings, wall
         diagnostics.append(value)
 
     outcome = loop(plant, mpc, Task(), settings=settings, compensation=None, duration=.006,
-                   tick_callbacks=[tick], solve_completed_callbacks=[solved], diagnostic_callbacks=[diagnostic])
+                   tick_callbacks=[tick], solve_completed_callbacks=[solved], diagnostic_callbacks=[diagnostic], law=tm.SampleKnot())
     assert outcome.status == 'timeout'
     assert [value.t for value in ticks] == pytest.approx([0., .002, .004, .006])
     assert [value.request_time_s for value in solves] == pytest.approx([0., .002, .004])
@@ -260,7 +260,7 @@ def test_requests_own_stable_snapshots_without_observers(loop, settings, wall):
             task.updates['nested']['values'].append(len(submitted))
             super().request(state, reference, updates)
 
-    outcome = loop(plant, Capturing(), task, settings=settings, compensation=None, duration=.006)
+    outcome = loop(plant, Capturing(), task, settings=settings, compensation=None, duration=.006, law=tm.SampleKnot())
     assert outcome.status == 'timeout' and len(submitted) == 3
     for index, (state, reference, updates) in enumerate(submitted):
         np.testing.assert_array_equal(state.q, np.full(7, index))
@@ -290,7 +290,7 @@ def test_each_actual_request_forecasts_once_while_an_early_plan_waits(monkeypatc
     loop = tm.run_real_time if real else tm.run_virtual_time
     settings = tm.RealTimeSettings(.002, 0.) if real else tm.VirtualTimeSettings(.002, 0., .002)
     outcome = loop(plant, mpc, Task(), settings=settings, duration=.018,
-                   compensation=tm.LatencyCompensation(latency_s=.006), tick_callbacks=[ticks.append])
+                   compensation=tm.LatencyCompensation(latency_s=.006), tick_callbacks=[ticks.append], law=tm.SampleKnot())
     assert outcome.status == 'timeout'
     assert len(forecasts) == len(mpc.requests) == 3
     assert [now for now, _ in forecasts] == pytest.approx([0., .006, .012])
@@ -314,7 +314,7 @@ def test_real_observers_follow_publication(wall):
     plant = Emitting()
     outcome = tm.run_real_time(plant, Mpc(), Task(), settings=tm.RealTimeSettings(.002, 1.),
         compensation=tm.LatencyCompensation(latency_s=.002), duration=1.,
-        solve_completed_callbacks=[observer], diagnostic_callbacks=[observer])
+        solve_completed_callbacks=[observer], diagnostic_callbacks=[observer], law=tm.SampleKnot())
     assert outcome.reason == 'lease_expired'
     assert order[:3] == [('apply', .002), ('SolveCompleted', .002), ('Diagnostic', pytest.approx(.122))]
     assert [t for t, _ in plant.applied] == [.002]
@@ -511,7 +511,7 @@ def test_normal_completion_collects_an_async_result_and_leaves_the_mpc_reusable(
         record = tm.RunRecord(tmp_path / str(index))
         outcome = tm.run_virtual_time(plant, mpc, Task(done_at), settings=replace(SETTINGS, solve_latency_s=.1),
             duration=.004, tick_callbacks=[record, messages.append],
-            solve_completed_callbacks=[record.solve_completed, messages.append])
+            solve_completed_callbacks=[record.solve_completed, messages.append], law=tm.SampleKnot(), compensation=None)
         assert outcome.status == expected_status and mpc.waiting is None
         assert not plant.applied and plant.calls == ['start', 'stop']
         solved = [message for message in messages if isinstance(message, tm.SolveCompleted)]
@@ -1062,7 +1062,7 @@ def test_real_time_retains_100ms_lease_with_custom_permissive_safety(wall):
     plant = Plant()
     outcome = tm.run_real_time(plant, Mpc(N=32, replies=1), Task(),
                                settings=tm.RealTimeSettings(.002, 1.), compensation=None,
-                               safety=Safety(), effort_handling=None, duration=.2)
+                               safety=Safety(), effort_handling=None, duration=.2, law=tm.SampleKnot())
     assert outcome.reason == 'lease_expired' and outcome.t == pytest.approx(.1)
     assert all(t < .1 for t, _ in plant.applied)
 
@@ -1106,5 +1106,5 @@ def test_real_time_rejects_clipping_before_plant_start():
     plant = Plant()
     with pytest.raises(ValueError, match='cannot clip'):
         tm.run_real_time(plant, Mpc(), Task(), settings=tm.RealTimeSettings(),
-                         effort_handling=tm.EffortClip(), duration=.01)
+                         effort_handling=tm.EffortClip(), duration=.01, law=tm.SampleKnot())
     assert not plant.calls

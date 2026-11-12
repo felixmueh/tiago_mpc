@@ -7,10 +7,21 @@ simulation, and the same experiments on the robot or in Gazebo through ROS 2.
 
 A command loop runs at the command rate. At each command tick it reads the
 plant's state, requests a control update when one is due, turns the latest plan
-into a torque command with a control law (the mains' default `PlanFeedback()`: the
-planned torque as feedforward plus PD about the plan at time t, counted from the time
-of the plan's state; `SampleKnot()` commands the knot due at t) and sends it to the
-plant, which holds it until the next tick.
+into a torque command with a control law and sends it to the plant, which holds it
+until the next tick. The default law is `FrictionFeedforward()`: the planned torque,
+plus PD about the plan at time t (`PlanFeedback()`, counted from the time of the
+plan's state), plus the URDF's fitted friction at the planned velocity (tanh width
+0.01 rad/s). `SampleKnot()` commands the knot due at t alone.
+
+**Defaults live in the types and loops** (2026-11-12). `run_virtual_time` defaults to
+`VirtualTimeSettings.constant_rate()` (500 Hz commands, 100 Hz updates, each solve
+declared to take one update period: the worst case), `run_real_time` to
+`RealTimeSettings()` (500 Hz commands, 100 Hz updates); both default to
+`FrictionFeedforward()` and to latency compensation (`compensation="default"`, from
+`default_compensation(settings)`). `run_experiment` passes the same defaults when it
+gets no law or settings. Predictor friction is off by default
+(`MpcParams.friction=None`, `TIAGO` and `FIGURE8`). Experiments that differ say so
+explicitly.
 
 There are two loops (`tiago_mpc/loops.py`), named after their time.
 `run_real_time` runs on wall time (`WallClock`, `tiago_mpc/clock.py`): solves take as
@@ -75,7 +86,7 @@ require a finite, nonnegative duration and reject runs over ten minutes before
 starting the plant. Virtual runs disable cyclic garbage collection and restore
 the caller's previous GC policy on exit.
 `safety=ExecutionSafety(max_plan_age_s=None)` disables the measurement-age expiry;
-a finite plan still ends at its horizon. Its default law is `SampleKnot()`;
+a finite plan still ends at its horizon. Its default law is `FrictionFeedforward()`;
 `safety`, `effort_handling` and `compensation` are separate run arguments. A custom
 law still receives the default safety and effort handling. Real-time execution
 retains its mandatory strict checks and rejects clipping.
@@ -343,10 +354,10 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
 ```
 
 - **Timing.** `--plant sim` (the default) runs `run_virtual_time` with an in-process
-  `Mpc`, on the main's `VirtualTimeSettings` (`VirtualTimeSettings.like(RealTimeSettings())` for reach, figure8
-  and random100: the real MPC's defaults, 500 Hz commands, 50 Hz control updates and
-  latency compensation, each solve declared, not measured, to last one control period,
-  20 ms). `--solve-latency` says how long a solve lasts on the timeline: declared
+  `Mpc`, on the main's `VirtualTimeSettings`. Reach, figure8, obstacles and random100
+  use the defaults above: `VirtualTimeSettings.constant_rate()`, 500 Hz commands and
+  100 Hz updates, each solve declared, not measured, to last one update period,
+  10 ms, with latency compensation. `--solve-latency` says how long a solve lasts on the timeline: declared
   seconds (0: the ideal) or `measured`, the solve's own wall time
   (`plan.stats["wall_s"]`). A plan takes effect at the first command tick at or
   after its request plus that latency; no new request is made while a solve is
@@ -397,19 +408,19 @@ python -m experiments.random100.run --dry-run  # 100 reaches: experiments/random
   `late_plan` event ([docs/robot.md](docs/robot.md#latency)).
 - **Rates:** `--command-period` sets the command rate (default 2 ms, 500 Hz,
   in simulation and on the robot), `--update-period` the control rate (default
-  20 ms, 50 Hz; TIAGO's knot interval is 30 ms, FIGURE8's 10 ms; 0: back to back, a request at the tick
+  10 ms, 100 Hz; a constant rate's declared latency follows it; TIAGO's knot interval is 30 ms, FIGURE8's 10 ms; 0: back to back, a request at the tick
   the previous plan takes effect); either may differ from the knot interval. Only
   the options given replace the timing's values. `--duration S` ends a run after at
   most S seconds. In code, a period written as a rate is `tm.hz_to_s(hz)`
   (`hz_to_s(500) == .002`).
 - **reach:** `TIAGO` defaults (32 knots of 30 ms, planning speeds at 60 % of the raw
-  limits), loss-free with the fitted armature, 3 ms RK4 substeps, `PlanFeedback()` on
-  `VirtualTimeSettings.like(RealTimeSettings())`, from `Q_START`
+  limits), loss-free with the fitted armature, 3 ms RK4 substeps, the default
+  execution, from `Q_START`
   (PAL's comfortable pose with joint 4 at −2.33 rad, not −2.35); arrival within
   5 cm with the grasp point slower than 2 cm/s, timeout 8 s.
 - **figure8:** `FIGURE8` (in `experiments/figure8.py`): URDF friction, `StickSlip`
-  Coulomb in the plant (Euler, 1 ms substeps) and `Tanh(.1)` (width 0.1 rad/s) in the
-  predictor; status `done` at the end of its period.
+  Coulomb in the plant (Euler, 1 ms substeps), a loss-free predictor and the default
+  friction feedforward; status `done` at the end of its period.
 - **Exit status** 1 on a timeout (the reach), a fault, an interruption or a raw-limit
   excess; 2 for a cancelled execution.
 

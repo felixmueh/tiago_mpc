@@ -210,7 +210,7 @@ def test_settings_based_compensation_seeds_from_the_control_period_and_activates
     options = {} if real else dict(compensation=tm.default_compensation(settings))
     loop = tm.run_real_time if real else tm.run_virtual_time
     outcome = loop(Plant(), mpc, Task(), tick_callbacks=[ticks.append], settings=settings,
-                   duration=first_origin+command_period, **options)
+                   duration=first_origin+command_period, **options, law=tm.SampleKnot())
     assert outcome.status == 'timeout'
     assert mpc.predictions[0].t == pytest.approx(first_origin)
     assert mpc.predictions[0].measured_t == 0.
@@ -259,7 +259,7 @@ def test_real_default_forecasts_the_previous_observed_request_to_result_delay_in
 
     mpc, ticks = Variable(), []
     outcome = tm.run_real_time(Plant(), mpc, Task(), settings=tm.RealTimeSettings(.002, .008),
-                               compensation='default', duration=.034, tick_callbacks=[ticks.append])
+                               compensation='default', duration=.034, tick_callbacks=[ticks.append], law=tm.SampleKnot())
     assert outcome.status == 'timeout'
     assert mpc.request_times == pytest.approx([0., .008, .0203])
     assert mpc.result_times == pytest.approx([.0063, .0203, .0223])

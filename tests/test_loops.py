@@ -9,7 +9,7 @@ import pytest
 from tiago_mpc import clock as clock_module
 from tiago_mpc import loops
 from tiago_mpc.laws import FrictionFeedforward, HoldFirst, PlanFeedback, SampleKnot
-from tiago_mpc.dynamics import Friction
+from tiago_mpc.dynamics import Friction, Tanh
 from tiago_mpc.mpc import TIAGO
 from tiago_mpc.prediction import LatencyCompensation
 from tiago_mpc.loops import STOP, RealTimeSettings, Schedule, VirtualTimeSettings, run_real_time, run_virtual_time
@@ -205,7 +205,7 @@ def test_no_feedback_warning_without_plan_feedback_or_with_compensation(loop, ca
     mpc = Mpc(wall=.004)
     mpc.params = TIAGO
     friction = Friction((1.,)*7, (.5,)*7)
-    law = {"sample_knot": SampleKnot(), "feedforward": FrictionFeedforward(friction),
+    law = {"sample_knot": SampleKnot(), "feedforward": FrictionFeedforward(friction, SampleKnot()),
            "compensated_pd": PlanFeedback(), "compensated_both": FrictionFeedforward(friction, PlanFeedback())}[case]
     settings = dict(command_period=.002, update_period=.02)
     if case.startswith("compensated"):
@@ -238,7 +238,8 @@ def test_physical_friction_and_armature_do_not_count_as_double_compensation(loop
     else:
         compensation = settings.pop("compensation", None)
         settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
-    outcome = loop(plant, mpc, Task(), FrictionFeedforward(friction), duration=.006, **settings)
+    outcome = loop(plant, mpc, Task(), FrictionFeedforward(friction, SampleKnot(), Tanh(.03)), duration=.006,
+                   **settings)
     assert outcome.status == 'timeout' and mpc.requests
 
 
@@ -258,12 +259,13 @@ def go(
     settings = dict(command_period=.01, update_period=update_period, **kw)
     if loop is run_virtual_time:
         settings = dict(settings=VirtualTimeSettings(**settings))
+        options.setdefault("compensation", None)  # these traces are uncompensated
     elif loop is run_real_time:
         compensation = settings.pop("compensation", None)
         settings = dict(settings=RealTimeSettings(**settings), compensation=compensation)
     outcome = loop(plant, mpc, task, tick_callbacks=[ticks.append],
                    diagnostic_callbacks=[] if diagnostics is None else [diagnostics.append],
-                   duration=duration, **settings, **options)
+                   duration=duration, **settings, **options, law=SampleKnot())
     return plant, ticks, outcome
 
 
@@ -396,12 +398,14 @@ def test_virtual_settings_need_a_valid_solve_latency(solve_latency):
         VirtualTimeSettings(.01, .01, solve_latency)
 
 
-@pytest.mark.parametrize("loop", [run_virtual_time, run_real_time])
-def test_each_loop_requires_a_settings_object_before_starting_the_plant(loop):
-    plant = Plant()
-    with pytest.raises(TypeError, match="settings"):
-        loop(plant, Mpc(), Task(), duration=.01)
-    assert not plant.calls
+def test_each_loop_defaults_to_its_settings_compensation_and_the_feedforward_law():
+    import inspect
+    from tiago_mpc.tiago import urdf_friction
+    for loop, settings in ((run_virtual_time, VirtualTimeSettings.constant_rate()), (run_real_time, RealTimeSettings())):
+        defaults = {name: p.default for name, p in inspect.signature(loop).parameters.items()}
+        assert defaults["settings"] == settings and defaults["compensation"] == "default"
+        assert defaults["law"] is None  # resolved to FrictionFeedforward() at the call
+    assert FrictionFeedforward() == FrictionFeedforward(urdf_friction(), PlanFeedback(), Tanh(.01))
 
 
 @pytest.mark.parametrize('loop, settings', [
@@ -411,7 +415,7 @@ def test_each_loop_requires_a_settings_object_before_starting_the_plant(loop):
 def test_each_loop_requires_a_duration_before_starting_the_plant(loop, settings):
     plant = Plant()
     with pytest.raises(TypeError, match='duration'):
-        loop(plant, Mpc(), Task(), settings=settings)
+        loop(plant, Mpc(), Task(), settings=settings, law=SampleKnot())
     assert not plant.calls
 
 
@@ -423,7 +427,7 @@ def test_each_loop_requires_a_duration_before_starting_the_plant(loop, settings)
 def test_invalid_duration_is_rejected_before_startup(loop, settings, duration):
     plant, mpc = Plant(), Mpc()
     with pytest.raises(ValueError, match='duration'):
-        loop(plant, mpc, Task(), settings=settings, duration=duration)
+        loop(plant, mpc, Task(), settings=settings, duration=duration, law=SampleKnot())
     assert not plant.calls and not mpc.warmups and not mpc.requests
 
 
@@ -435,12 +439,12 @@ def test_zero_duration_and_exact_ten_minute_limit_are_accepted(wall, loop, setti
     assert loops.MAX_RUNTIME_MIN == 10
     for duration in (0., 600.):
         plant = Plant()
-        outcome = loop(plant, Mpc(), Task(done_at=0.), settings=settings, duration=duration)
+        outcome = loop(plant, Mpc(), Task(done_at=0.), settings=settings, duration=duration, law=SampleKnot())
         assert outcome.status == 'done' and outcome.t == 0.
         assert plant.calls == ['start', 'stop'] and not plant.applied
     plant = Plant()
     with pytest.raises(ValueError, match='Not validated for long runs'):
-        loop(plant, Mpc(), Task(), settings=settings, duration=600.001)
+        loop(plant, Mpc(), Task(), settings=settings, duration=600.001, law=SampleKnot())
     assert not plant.calls
 
 
@@ -458,7 +462,7 @@ def test_run_virtual_time_requires_timing_in_settings(setting, value):
     plant = Plant()
     with pytest.raises(TypeError, match=setting):
         run_virtual_time(plant, Mpc(), Task(), settings=VirtualTimeSettings.ideal(),
-                         duration=.01, **{setting: value})
+                         duration=.01, **{setting: value}, law=SampleKnot())
     assert not plant.calls
 
 
@@ -548,7 +552,7 @@ def test_a_dead_mpc_process_is_noticed_within_one_tick_and_stops_the_plant(wall)
 
     with pytest.raises(RuntimeError, match="exited"):
         run_real_time(plant, mpc, Task(), tick_callbacks=[die], settings=RealTimeSettings(.01, .05), compensation=None,
-                      duration=1.)
+                      duration=1., law=SampleKnot())
     assert plant.calls == ["start", "stop"] and wall.now == pytest.approx(.03)
 
 
@@ -657,7 +661,7 @@ def test_zero_period_schedule_stays_ready_and_alignment_does_not_advance_it():
 def test_real_time_uses_and_replaces_a_plan_with_an_unused_excessive_future_knot(wall, compensation):
     mpc, plant, ticks = Mpc(delay=1, over=2), Plant(), []
     outcome = run_real_time(plant, mpc, Task(), tick_callbacks=[ticks.append],
-                            settings=RealTimeSettings(.01, .01), compensation=compensation, duration=.08)
+                            settings=RealTimeSettings(.01, .01), compensation=compensation, duration=.08, law=SampleKnot())
     assert outcome.status == "timeout" and outcome.reason is None
     selected = next(k.plan for k in ticks if k.plan_activated and k.plan.torques[0, 1] == 0.)
     assert selected.torques[-1, 6] == 26.1
@@ -703,7 +707,7 @@ def test_a_stop_request_ends_the_run_without_a_later_command(wall, loop, kw):
             STOP.set()
 
     plant, ticks = Plant(), []
-    outcome = loop(plant, Mpc(), Task(), tick_callbacks=[stop, ticks.append], duration=1., **kw)
+    outcome = loop(plant, Mpc(), Task(), tick_callbacks=[stop, ticks.append], duration=1., **kw, law=SampleKnot())
     assert outcome.status == "interrupted" and outcome.reason == "stop_requested"
     assert all(t <= .02 for t, _ in plant.applied)
     assert plant.calls == ["start", "stop"]
@@ -726,7 +730,7 @@ def test_plant_diagnostics_arrive_before_the_next_tick_once(wall):
         order.append(('tick', value.t))
 
     run_virtual_time(plant, Mpc(), Task(), tick_callbacks=[tick], diagnostic_callbacks=[diagnostic],
-                     settings=VirtualTimeSettings(.01, .01, 0.), duration=.02)
+                     settings=VirtualTimeSettings(.01, .01, 0.), duration=.02, law=SampleKnot(), compensation=None)
     assert [value.t for value in diagnostics] == pytest.approx([.01, .02])
     assert order == [('tick', 0.), ('diagnostic', .01), ('tick', .01),
                      ('diagnostic', pytest.approx(.02)), ('tick', pytest.approx(.02))]
@@ -740,8 +744,8 @@ def test_timing_presets_and_explicit_loop_selection(wall):
     assert VirtualTimeSettings.constant_latency(.02, update_period=.02) == VirtualTimeSettings(.002, .02, .02)
     assert VirtualTimeSettings.as_fast_as_possible() == VirtualTimeSettings(.002, 0., "measured")
     assert VirtualTimeSettings.constant_rate() == VirtualTimeSettings(.002, .01, .01)
-    assert RealTimeSettings() == RealTimeSettings(.002, .02)
-    assert VirtualTimeSettings.like(RealTimeSettings()) == VirtualTimeSettings(.002, .02, .02)
+    assert RealTimeSettings() == RealTimeSettings(.002, .01)
+    assert VirtualTimeSettings.like(RealTimeSettings()) == VirtualTimeSettings(.002, .01, .01)
     for timing, clock in ((VirtualTimeSettings(.01, .01, .025), "VirtualClock"), (RealTimeSettings(.01, .01), "WallClock")):
         plant, ticks = Plant(), []
         loop = run_real_time if isinstance(timing, RealTimeSettings) else run_virtual_time
@@ -768,7 +772,7 @@ def test_a_500_hz_tick_fits_well_inside_its_2_ms(tmp_path):
     record = RunRecord(tmp_path / "r", task=task, params=TIAGO)
     run_virtual_time(plant, Mpc(N=32, dt=.002), task, tick_callbacks=[record],
                      solve_completed_callbacks=[record.solve_completed],
-                     settings=VirtualTimeSettings(.002, .002, 0.), duration=2.)
+                     settings=VirtualTimeSettings(.002, .002, 0.), duration=2., law=SampleKnot(), compensation=None)
     body = np.diff(stamps) * 1e3
     print(f"tick body ms: median {np.median(body):.3f}, p99 {np.percentile(body, 99):.3f}, max {body.max():.3f}")
     assert len(body) == 999 and np.isfinite(record.ticks["command"][:-1]).all()

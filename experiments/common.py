@@ -55,8 +55,8 @@ def run_experiment(
     plant: tm.SimConfig | tm.RobotConfig,
     mpc: tm.MpcParams | tm.MpcInterface,
     task: tm.TaskInterface,
-    law: tm.ControlLaw,
-    settings: Any,
+    law: tm.ControlLaw | None = None,
+    settings: Any = None,
     *,
     loop: Callable[..., tm.Outcome] = tm.run_virtual_time,
     compensation: tm.LatencyCompensation | None | Literal["default"] = "default",
@@ -74,15 +74,24 @@ def run_experiment(
     A parameter-built MPC belongs to this call and is closed on exit. Real-time runs
     build MpcProcess; virtual and custom loops build Mpc. The solve wall-time budget
     is retained for real time and measured virtual latency. Passed MPCs remain the
-    caller's. Default policies follow the selected loop: observed-delay compensation
-    and effort rejection on real time, no compensation and clipping otherwise.
+    caller's. law None is FrictionFeedforward() and settings None the loop's default
+    (VirtualTimeSettings.constant_rate() or RealTimeSettings()); a custom loop needs its
+    settings. Default policies follow the selected loop: compensation from
+    default_compensation for the package's settings (none for a custom loop's), effort
+    rejection on real time and clipping otherwise.
 
     The record stores settings, loop name and resolved policies separately. Faults
     and errors retain their records and replay; setup failures before recording
     leave no run directory.
     """
+    law = tm.FrictionFeedforward() if law is None else law
+    if settings is None:
+        if loop not in (tm.run_virtual_time, tm.run_real_time):
+            raise ValueError("a custom loop needs explicit settings")
+        settings = tm.VirtualTimeSettings.constant_rate() if loop is tm.run_virtual_time else tm.RealTimeSettings()
     if compensation == "default":
-        compensation = tm.default_compensation(settings) if loop is tm.run_real_time else None
+        package_settings = isinstance(settings, (tm.VirtualTimeSettings, tm.RealTimeSettings))
+        compensation = tm.default_compensation(settings) if package_settings else None
     if effort_handling == "default":
         effort_handling = tm.RejectOnEffort() if loop is tm.run_real_time else tm.EffortClip()
     owned: tm.Mpc | tm.MpcProcess | None = None  # built here, so closed here
@@ -194,20 +203,24 @@ def handle_stop_signals() -> None:
 def setup(
     args: argparse.Namespace,
     plant: tm.SimConfig,
-    settings: Any,
+    settings: Any = tm.VirtualTimeSettings.constant_rate(),
     *,
     loop: Callable[..., tm.Outcome] = tm.run_virtual_time,
 ) -> tuple[tm.SimConfig | tm.RobotConfig, Any, Callable[..., tm.Outcome]] | int:
     """Select the plant, settings and loop for the command line.
 
     Simulation retains the supplied loop and settings dataclass with explicit timing
-    overrides. Rehearsal and robot execution select run_real_time. Robot check-only
+    overrides; a new update period of a constant rate (latency = update period) moves
+    its latency along. Rehearsal and robot execution select run_real_time. Robot check-only
     and typed-confirmation gates run before any MPC compilation.
     """
     periods = {key: value for key, value in (("command_period", args.command_period),
                                               ("update_period", args.update_period)) if value is not None}
     if args.plant == "sim":
         latency = {} if args.solve_latency is None else dict(solve_latency_s=args.solve_latency)
+        if (not latency and "update_period" in periods and isinstance(settings, tm.VirtualTimeSettings)
+                and settings.solve_latency_s == settings.update_period):
+            latency = dict(solve_latency_s=periods["update_period"])  # a constant rate stays one
         return plant, replace(settings, **periods, **latency), loop
     if args.plant == "rehearsal":
         return plant, replace(tm.RealTimeSettings(), **periods), tm.run_real_time

@@ -118,9 +118,9 @@ def plant_config(feedback_period_s=FEEDBACK_PERIOD_S):
 
 
 def cases():
-    estimate, pd = tm.urdf_friction(), tm.PlanFeedback()
-    return {'default': tm.SampleKnot(), 'feedforward': tm.FrictionFeedforward(estimate),
-            'pd': pd, 'both': tm.FrictionFeedforward(estimate, pd),
+    estimate, pd, width = tm.urdf_friction(), tm.PlanFeedback(), tm.Tanh(.03)  # the study's, not the defaults
+    return {'default': tm.SampleKnot(), 'feedforward': tm.FrictionFeedforward(estimate, tm.SampleKnot(), width),
+            'pd': pd, 'both': tm.FrictionFeedforward(estimate, pd, width),
             'mpc_friction': tm.SampleKnot(), 'mpc_friction_pd': pd}
 
 
@@ -270,7 +270,7 @@ def main(argv=None):
                 continue
             try:
                 record = run_experiment(plant, case_params(name, params, args.mpc_friction_width),
-                                        Figure8(), law, timing, duration=args.duration,
+                                        Figure8(), law, timing, compensation=None, duration=args.duration,
                                         out=out / name, case=name, dependency_source=config['provenance'])
             except Exception:
                 traceback.print_exc()

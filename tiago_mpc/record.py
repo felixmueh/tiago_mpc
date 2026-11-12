@@ -57,7 +57,7 @@ True
 True
 >>> real = tm.to_dict(tm.RealTimeSettings())
 >>> real
-{'type': 'RealTimeSettings', 'command_period': 0.002, 'update_period': 0.02}
+{'type': 'RealTimeSettings', 'command_period': 0.002, 'update_period': 0.01}
 >>> tm.from_dict(real) == tm.RealTimeSettings()
 True
 >>> tm.from_dict(tm.to_dict(tm.ExecutionSafety(None)))

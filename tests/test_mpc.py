@@ -73,7 +73,8 @@ def fake_binary(directory, params, plant=None):
     return path
 
 
-@pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(FIGURE8, friction_law=Tanh(.05))])
+@pytest.mark.parametrize("params", [TIAGO, FIGURE8, replace(FIGURE8, friction=URDF_FRICTION),
+                                    replace(FIGURE8, friction=URDF_FRICTION, friction_law=Tanh(.05))])
 def test_load_controller_imports_the_binary_and_passes_the_params_to_gato(monkeypatch, no_compile, tmp_path, params):
     seen = {}
     binary = fake_binary(tmp_path, params)

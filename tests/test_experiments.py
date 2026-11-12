@@ -24,6 +24,46 @@ from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import GRASP_FRAME, Q_START, RIGHT_ARM_JOINTS, arm_urdf, fk, urdf_friction
 
 
+@pytest.mark.parametrize("real", [False, True])
+def test_run_experiment_defaults_to_the_feedforward_law_the_loops_settings_and_compensation(real, monkeypatch, tmp_path):
+    loop, seen = (rc.tm.run_real_time if real else rc.tm.run_virtual_time), {}
+    def fake(plant, mpc, task, law, **options):
+        seen.update(law=law, **options)
+        return rc.tm.Outcome("timeout", None, 0.)
+    fake.__name__ = loop.__name__
+    monkeypatch.setattr(rc.tm, loop.__name__, fake)
+    mpc = Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)))
+    common.run_experiment(SimConfig(), mpc, rc.Reach(), loop=fake, out=tmp_path / "r")
+    settings = RealTimeSettings() if real else VirtualTimeSettings.constant_rate()
+    assert seen["law"] == rc.tm.FrictionFeedforward() and seen["settings"] == settings
+    assert seen["compensation"] == rc.tm.default_compensation(settings)
+    with pytest.raises(ValueError, match="custom loop"):
+        common.run_experiment(SimConfig(), mpc, rc.Reach(), loop=lambda *a, **k: None, out=tmp_path / "c")
+
+
+@pytest.mark.parametrize("module", [rc, f8])
+@pytest.mark.parametrize("plant", ["sim", "rehearsal", "robot"])
+def test_cli_simulation_uses_shared_execution_defaults_and_preserves_wall_time_laws(module, plant, monkeypatch, tmp_path):
+    captured = {}
+    def run(config, params, task, law=None, settings=None, **options):
+        captured.update(params=params, law=law, settings=settings, **options)
+        return NS(metadata=dict(status="arrived" if module is rc else "done", results=dict(limits_pass=True)), out=tmp_path)
+    monkeypatch.setattr(module, "handle_stop_signals", lambda: None)
+    monkeypatch.setattr(module, "run_experiment", run)
+    monkeypatch.setattr(module, "evaluate", lambda record: None)
+    if plant == "robot":
+        # Bypass the hardware gate without constructing a robot, to check the pieces
+        # the main passes only after setup has authorized that path.
+        monkeypatch.setattr(module, "setup", lambda args, config, settings=None: (
+            rc.tm.RobotConfig(), RealTimeSettings(), rc.tm.run_real_time))
+    assert module.main(["--plant", plant]) == 0
+    assert captured["law"] is None  # run_experiment's default, FrictionFeedforward(), on every plant
+    assert "compensation" not in captured  # the default as well
+    assert captured["settings"] == (VirtualTimeSettings.constant_rate() if plant == "sim" else RealTimeSettings())
+    assert captured["params"] == (rc.tm.TIAGO if module is rc else f8.FIGURE8)
+    assert captured["params"].friction is None  # predictor friction is off by default
+
+
 def test_figure8_reference_includes_edge_clearance_and_leaves_orientation_free():
     task = f8.Figure8(start_m=(.3, -.2, .1))
     times = 1.3 + np.arange(7)*.002
@@ -93,13 +133,14 @@ def test_experiment_records_its_run_and_replay(tmp_path, name):
     if name == "reach":
         task = rc.Reach(timeout_s=.05, orientation_rad=tuple(rc.tm.ee_orientation(Q_START)))
         record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, dt_s=.01, cost=rc.tm.default_cost(4))), task,
-                                       SampleKnot(), VirtualTimeSettings(.01, .01, .01), out=tmp_path / name)
+                                       SampleKnot(), VirtualTimeSettings(.01, .01, .01), compensation=None,
+                                       out=tmp_path / name)
         rc.evaluate(record)
     else:
         task = f8.Figure8(period_s=.05, orientation_rad=(0., 0., 0.))
         record = common.run_experiment(SimConfig(friction=urdf_friction(), integrator="euler"),
                                        Mpc(replace(f8.FIGURE8, N=4, cost=rc.tm.default_cost(4, velocity=.01, torque=1e-6))), task, SampleKnot(), VirtualTimeSettings(.01, .01, 0.),
-                                       out=tmp_path / name)
+                                       compensation=None, out=tmp_path / name)
         f8.evaluate(record)
     summary = json.loads((tmp_path / name / "summary.json").read_text())
     config, metadata, results = summary["config"], summary["metadata"], summary["metadata"]["results"]
@@ -358,7 +399,7 @@ def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
     """An effort refusal is saved without rejecting unapplied planned knots."""
     record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4)), extra=30.), rc.Reach(),
                                    SampleKnot(),
-                                   VirtualTimeSettings(.01, .03, 0.),
+                                   VirtualTimeSettings(.01, .03, 0.), compensation=None,
                                    effort_handling=rc.tm.RejectOnEffort(effort=(.01,)*7),
                                    out=tmp_path / "r")
     run = load_run(record.out)
@@ -370,7 +411,8 @@ def test_a_fault_ends_the_run_saved_with_its_reason_and_replay(tmp_path):
     assert len(run.plans["t0"]) == 1 and run.plans["update_t"][0] == 0. and run.plans["torques"][0, -1, 6] > 26.
     # a 30 ms plan, 50 ms late
     record = common.run_experiment(SimConfig(substep=.003), Mpc(replace(rc.tm.TIAGO, N=4, dt_s=.01, cost=rc.tm.default_cost(4))), rc.Reach(),
-                                   SampleKnot(), VirtualTimeSettings(.01, .01, .05), out=tmp_path / "late")
+                                   SampleKnot(), VirtualTimeSettings(.01, .01, .05), compensation=None,
+                                   out=tmp_path / "late")
     assert record.metadata["status"] == "fault" and record.metadata["reason"] == "lease_expired"
     assert (record.out / "replay.npz").exists() and len(record.ticks["t"]) == 6
 
@@ -474,11 +516,13 @@ def test_setup_replaces_the_options_in_an_experiments_own_timing():
 
 
 @pytest.mark.parametrize("argv, solver, timing, budget, compensation", [
-    ([], "Mpc", VirtualTimeSettings(.002, .02, .02), None, LatencyCompensation(latency_s=.02)),
-    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTimeSettings(.01, .02, .005),
+    ([], "Mpc", VirtualTimeSettings(.002, .01, .01), None, LatencyCompensation(latency_s=.01)),
+    (["--update-period", ".02"], "Mpc", VirtualTimeSettings(.002, .02, .02), None,  # a constant rate stays one
+     LatencyCompensation(latency_s=.02)),
+    (["--solve-latency", ".005", "--command-period", ".01"], "Mpc", VirtualTimeSettings(.01, .01, .005),
      None, LatencyCompensation(latency_s=.005)),
-    (["--solve-latency", "measured"], "Mpc", VirtualTimeSettings(.002, .02, "measured"),
-     .01, LatencyCompensation(initial_latency_s=.02)),
+    (["--solve-latency", "measured"], "Mpc", VirtualTimeSettings(.002, .01, "measured"),
+     .01, LatencyCompensation(initial_latency_s=.01)),
     (["--solve-latency", "measured", "--update-period", ".007"], "Mpc", VirtualTimeSettings(.002, .007, "measured"),
      .01, LatencyCompensation(initial_latency_s=.007)),
     (["--plant", "rehearsal", "--update-period", "0"], "MpcProcess", RealTimeSettings(.002, 0.),
@@ -517,6 +561,7 @@ def test_the_main_runs_on_the_mpc_run_experiment_builds(
     assert rec.to_dict(run.config["params"]) == rec.to_dict(built[0].params) == rec.to_dict(expected)
     assert run.config["settings"] == timing and run.config["plant"] == SimConfig(substep=.003)
     assert run.config["compensation"] == compensation
+    assert run.config["law"] == rc.tm.FrictionFeedforward()
     assert isinstance(run.config["effort_handling"],
                       rc.tm.RejectOnEffort if isinstance(timing, RealTimeSettings) else rc.tm.EffortClip)
     assert run.config["duration"] == .02 and "distance_m" in run.ticks
@@ -607,7 +652,8 @@ def test_runner_resolves_loop_specific_defaults_and_records_the_actual_policies(
     record = common.run_experiment(SimConfig(substep=.002), mpc, rc.Reach(), law, settings,
                                    loop=loop, duration=.03 if real else .004, out=tmp_path / 'r')
     assert record.config['loop'] == loop.__name__
-    assert record.config['compensation'] == (LatencyCompensation(initial_latency_s=.006) if real else None)
+    assert record.config['compensation'] == (LatencyCompensation(initial_latency_s=.006) if real
+                                             else LatencyCompensation(latency_s=0.))
     assert isinstance(record.config['effort_handling'], rc.tm.RejectOnEffort if real else rc.tm.EffortClip)
     assert record.metadata['status'] == ('fault' if real else 'timeout')
     if real:

@@ -66,7 +66,7 @@ def estimate(scale: float = 1., source: str = 'thesis') -> tm.Friction:
 # Simulation presets, not hardware-qualified gains. External width only; the
 # 30 ms friction-in-MPC predictor keeps its separately qualified width .2.
 TUNED_PD = tm.PlanFeedback()
-TUNED_FEEDFORWARD = tm.FrictionFeedforward(estimate(), evaluation=tm.Tanh(.01))
+TUNED_FEEDFORWARD = tm.FrictionFeedforward(estimate(), tm.SampleKnot(), tm.Tanh(.01))
 TUNED_BOTH = tm.FrictionFeedforward(estimate(), TUNED_PD, evaluation=tm.Tanh(.01))
 
 
@@ -79,10 +79,10 @@ def laws() -> dict[str, tm.ControlLaw]:
     old_pd = tm.PlanFeedback(*tm.inertia_gains(30.))
     result = {'default': tm.SampleKnot(), 'mpc_friction': tm.SampleKnot(), 'mpc_friction_pd': TUNED_PD,
               'old_pd': old_pd,
-              'old_ff': tm.FrictionFeedforward(estimate(source='nominal')),
-              'old_both': tm.FrictionFeedforward(estimate(source='nominal'), old_pd)}
+              'old_ff': tm.FrictionFeedforward(estimate(source='nominal'), tm.SampleKnot(), tm.Tanh(.03)),
+              'old_both': tm.FrictionFeedforward(estimate(source='nominal'), old_pd, tm.Tanh(.03))}
     result.update(pd)
-    result.update({key: tm.FrictionFeedforward(value, evaluation=tm.Tanh(width))
+    result.update({key: tm.FrictionFeedforward(value, tm.SampleKnot(), tm.Tanh(width))
                    for key, (value, width) in ff.items()})
     result.update({p + '+' + f: tm.FrictionFeedforward(friction, law, evaluation=tm.Tanh(width))
                    for p, law in pd.items() for f, (friction, width) in ff.items()})
@@ -230,7 +230,7 @@ def main() -> int:
                 key = task_name + '/' + name
                 try:
                     record = run_experiment(plant, case_params(name, params), tasks()[task_name], laws()[name], timing,
-                                            duration=args.duration, out=out/key, case=name, task_name=task_name,
+                                            compensation=None, duration=args.duration, out=out/key, case=name, task_name=task_name,
                                             scenario=args.scenario, dependency_source=config['provenance'])
                     evaluate(record)
                     row = dict(record.metadata['results']['tuning'])
