@@ -7,6 +7,14 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-11-13: PCG cap1,000 in the PCG/BDSV comparison** (Felix).
+  Set `max_pcg_iters=1000` for every horizon of the B1 comparison and rerun
+  the full GTX 1070 B1 horizon sweep as a separate cohort, comparing N128 with
+  its earlier retained measurements. Retain
+  the other matched settings and the actual iteration counts/cap-hit records.
+  Update the temporary Jetson delivery. The separate thesis matrix keeps its
+  original PCG120 budget and batch grid.
+
 - **2026-11-13: Jetson PCG/BDSV is a B1 horizon sweep** (Felix).
   Update the temporary Jetson experiment delivery to compare plain PCG and
   BDSV at N16/32/64/128/256/512 with **batch size one at every horizon**.

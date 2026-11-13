@@ -47,7 +47,7 @@ without blocking the experiment.
 ## PCG/BDSV horizon sweep: batch one
 
 N16/32/64/128/256/512, **B1 at every N**, plain PCG versus BDSV, one SQP
-iteration, three fresh repeats of one complete four-second figure-eight. The
+iteration, **PCG cap1,000**, three fresh repeats of one complete four-second figure-eight. The
 native solver's batch size is checked before warm-up and recorded per update;
 any batch size other than one is rejected. The simulator uses 500 Hz commands, 20 Hz control updates,
 10 ms knots, zero declared solve latency and no latency compensation. The only
@@ -75,6 +75,22 @@ spans, initial-merit time, the accepted step and a completion wall timestamp.
 These counters already exist in the native solver; no probe kernels are added.
 No executed line search is represented by `line_search_ran=false` and a zero
 placeholder `step_size`.
+
+Each case runs in its own process so a native CUDA exit does not stop other
+solvers or horizons. Scalar updates are streamed to `progress.jsonl` and
+recovered after an abnormal worker exit; unknown task quality stays explicitly
+unavailable. PCG can converge before its cap1,000; actual iterations and cap
+hits are kept, including incomplete and failed cases. No horizon is silently
+dropped to accommodate a GPU resource limit.
+
+The GTX 1070 cap1,000 trial attempted all 36 cases. Both solvers completed
+N16–128, and BDSV also completed N256: 27 episodes / 2,160 timings. PCG at
+N256 and both paths at N512 failed during CUDA shared-memory setup. This GPU
+allows 48 KiB per block; the N256 PCG scratch requests 72,368 bytes and the
+N512 BDSV guard requests 57,632 bytes. These are resource failures, not PCG
+iteration-cap exits. Keep all six horizons on Jetson and measure its actual
+support separately. At N128, PCG still used at most 113 iterations; raising
+the cap from120 to1,000 left iteration and prediction-error sequences unchanged.
 
 ## Reading timing distributions
 

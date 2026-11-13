@@ -20,6 +20,7 @@ def test_comparison_changes_only_active_solver_and_has_one_sqp(name, n):
     assert study.fingerprint(task, plant, pcg) == study.fingerprint(task, plant, bdsv)
     assert study.fingerprint(task, plant, pcg) != study.fingerprint(task, plant, replace(pcg, dt_s=.02))
     assert params.solver.max_sqp_iters == 1 and params.max_sqp_time_s is None and params.N == n
+    assert params.solver.max_pcg_iters == study.PCG_CAP == 1000
     assert len(params.cost.frame_pos.weight) == n
     assert study.SETTINGS.solve_latency_s == 0 and study.SETTINGS.update_period == .05 and params.dt_s == .01
     assert task.duration_s == study.DURATION_S
@@ -124,7 +125,7 @@ def synthetic_case(tmp_path, monkeypatch):
 def test_direct_simulator_recorder_persists_no_trajectory_data_and_preserves_fault(tmp_path, monkeypatch):
     directory, case = synthetic_case(tmp_path, monkeypatch)
     assert case["status"] == "fault" and case["solves"] == 1
-    assert {file.name for file in directory.iterdir()} == {"case.json", "stats.npz", "stats.csv"}
+    assert {file.name for file in directory.iterdir()} == {"case.json", "stats.npz", "stats.csv", "progress.jsonl"}
     columns = np.load(directory / "stats.npz", allow_pickle=False)
     assert set(columns.files) == {"simulation_s", *study.SCALAR_STATS}
     assert all(columns[key].ndim == 1 for key in columns)
@@ -158,7 +159,22 @@ def test_absent_line_search_is_explicit_in_scalar_diagnostics():
     assert result["batch_size"] == 1
 
 
-@pytest.mark.parametrize("problem", ["missing", "nan", "mode", "admm", "batch", "fingerprint", "resolved", "shift", "law", "plant"])
+def test_native_worker_exit_preserves_streamed_timings_and_binary_identity(tmp_path, monkeypatch):
+    directory, case = synthetic_case(tmp_path, monkeypatch)
+    case["status"] = "running"
+    study.write_json(directory / "case.json", case)
+    process = NS(exitcode=1, start=lambda: None, join=lambda: None)
+    monkeypatch.setattr(study.multiprocessing, "get_context", lambda _: NS(Process=lambda **_: process))
+    recovered = study.run_isolated_case(directory, 32, "reach", "pcg", 1, None, None)
+    assert recovered["status"] == "error" and recovered["solves"] == 1
+    assert recovered["binary_sha256"] == case["binary_sha256"]
+    assert recovered["quality"]["limits_pass"] is None
+    stats = np.load(directory / "stats.npz", allow_pickle=False)
+    assert stats["batch_size"].tolist() == [1]
+    assert stats["solve_time_us"].tolist() == [900.]
+
+
+@pytest.mark.parametrize("problem", ["missing", "nan", "mode", "admm", "batch", "cap", "fingerprint", "resolved", "shift", "law", "plant"])
 def test_analysis_rejects_misleading_timing_or_pairing(tmp_path, monkeypatch, problem):
     directory, _ = synthetic_case(tmp_path, monkeypatch)
     stats = dict(np.load(directory / "stats.npz", allow_pickle=False))
@@ -173,6 +189,8 @@ def test_analysis_rejects_misleading_timing_or_pairing(tmp_path, monkeypatch, pr
         stats["admm"] = np.array([1])
     elif problem == "batch":
         stats["batch_size"] = np.array([2])
+    elif problem == "cap":
+        case["config"]["params"]["solver"]["max_pcg_iters"] = 120
     elif problem == "fingerprint":
         case["config"]["input_fingerprint"] = "wrong"
     elif problem == "resolved":
@@ -228,4 +246,4 @@ def test_actual_virtual_loop_records_80_scalar_solves_without_a_run_record(tmp_p
     case = study.run_case(tmp_path / "case", 32, "reach", "pcg", 1, binary)
     assert case["status"] == "done" and case["solves"] == 80
     assert case["quality"]["observations"] == 2001
-    assert {p.name for p in (tmp_path / "case").iterdir()} == {"case.json", "stats.npz", "stats.csv"}
+    assert {p.name for p in (tmp_path / "case").iterdir()} == {"case.json", "stats.npz", "stats.csv", "progress.jsonl"}

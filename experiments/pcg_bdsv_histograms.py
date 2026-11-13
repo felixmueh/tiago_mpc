@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 import csv
 import hashlib
 import json
+import multiprocessing
 from pathlib import Path
 import platform
 import shutil
@@ -34,7 +35,8 @@ KNOTS = (16, 32, 64, 128, 256, 512)
 SETTINGS = tm.VirtualTimeSettings.ideal(command_period=.002, update_period=.05)
 DURATION_S = 4.
 BARRIER = dict(mu=3e-3, delta=.05)
-PROTOCOL = "jetson-b1-barrier-pcg-bdsv-sqp1-figure8-4s-20hz-stages-v6"
+PCG_CAP = 1000
+PROTOCOL = "jetson-b1-barrier-pcg1000-bdsv-sqp1-figure8-4s-20hz-stages-v7"
 STAGE_NAMES = ("kkt_us", "schur_us", "linsys_stage_us", "merit_us", "line_search_us")
 DIAGNOSTICS = (*STAGE_NAMES, "initial_merit_us", "linear_solve_us", "step_size", "line_search_ran",
                "completed_unix_s", "batch_size")
@@ -74,7 +76,7 @@ def task_configuration(name: str, n: int = 128):
     else:
         raise ValueError(f"unknown task {name}")
     params = replace(base, N=n, dt_s=.01, cost=cost, max_sqp_time_s=None, warmup=True,
-                     solver=replace(base.solver, max_sqp_iters=1),
+                     solver=replace(base.solver, max_sqp_iters=1, max_pcg_iters=PCG_CAP),
                      warm_start="hold", friction=None, reseed_threshold=None,
                      linsys="pcg", reset_rho_each_step=True,
                      admm_linsys=None, collision=None)
@@ -214,6 +216,7 @@ def run_case(
     task, plant_config, params = task_configuration(name, n)
     params = replace(params, linsys=mode, solver=replace(params.solver, linsys=mode))
     rows: list[dict] = []
+    progress = (out / "progress.jsonl").open("w", buffering=1)
     quality, diagnostics = Quality(task), Counter()
     mpc, plant = None, None
     config = dict(task=task, plant=plant_config, params=params, settings=SETTINGS,
@@ -228,6 +231,7 @@ def run_case(
             raise RuntimeError(f"the prior N{n} build failed; no repeated build attempted:\n{build_error}")
         binary = tm.compile_binary(params, jobs=1) if binary is None else binary
         case.update(binary=str(binary), binary_sha256=sha256(binary))
+        write_json(out / "case.json", case)
         mpc = tm.Mpc(params, binary)
         config["batch_size"] = int(mpc.controller.solver.batch_size)
         if config["batch_size"] != 1:
@@ -247,6 +251,7 @@ def run_case(
             if any(np.ndim(value) != 0 for value in row.values()):
                 raise ValueError("a recorded solver statistic is not scalar")
             rows.append(row)
+            progress.write(json.dumps(tm.to_dict(row), allow_nan=False) + "\n")
 
         def diagnostic(item: tm.Diagnostic) -> None:
             diagnostics[item.kind] += 1
@@ -260,6 +265,7 @@ def run_case(
     except Exception:
         case.update(status="error", error=traceback.format_exc())
     finally:
+        progress.close()
         if plant is not None:
             plant.close()
         if mpc is not None:
@@ -268,6 +274,46 @@ def run_case(
         case.update(quality=quality.result(), diagnostic_counts=dict(diagnostics),
                     solves=len(rows), ended_unix_s=time.time())
         write_json(out / "case.json", case)
+    return case
+
+
+def run_isolated_case(
+    out: Path,
+    n: int,
+    name: str,
+    mode: str,
+    repeat: int,
+    binary: Path | None,
+    build_error: str | None,
+) -> dict:
+    """Keep native CUDA exits confined to one attempt and recover its streamed scalar rows."""
+    process = multiprocessing.get_context("spawn").Process(
+        target=run_case, args=(out, n, name, mode, repeat, binary, build_error))
+    process.start()
+    process.join()
+    case_path = out / "case.json"
+    case = json.loads(case_path.read_text()) if case_path.exists() else {}
+    if process.exitcode == 0 and case.get("status") != "running" and case:
+        return case
+    out.mkdir(parents=True, exist_ok=True)
+    rows = []
+    progress = out / "progress.jsonl"
+    if progress.exists():
+        for line in progress.read_text().splitlines():
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                break  # A native exit may leave the final scalar line incomplete.
+    task, _, _ = task_configuration(name, n)
+    case.update(knots=n, task=name, solver=mode, repeat=repeat,
+                status="interrupted" if tm.STOP.is_set() else "error",
+                reason=f"worker exited with code {process.exitcode}",
+                error=f"native worker exit {process.exitcode}; streamed timings recovered; task quality unavailable",
+                binary=case.get("binary"), binary_sha256=case.get("binary_sha256"),
+                solves=len(rows), end_t=None, ended_unix_s=time.time(),
+                quality=Quality(task).result(), diagnostic_counts={})
+    save_stats(out / "stats.npz", rows)
+    write_json(case_path, case)
     return case
 
 
@@ -323,7 +369,7 @@ def run_study(out: Path, knots: tuple[int, ...], repeats: int) -> bool:
             for n, name, mode, repeat in case_order(knots, repeats):
                 relative = Path("cases") / f"N{n}" / name / f"repeat-{repeat:02d}-{mode}"
                 print(f"Starting {relative}", flush=True)
-                case = run_case(out / relative, n, name, mode, repeat, binaries.get(n), build_errors.get(n))
+                case = run_isolated_case(out / relative, n, name, mode, repeat, binaries.get(n), build_errors.get(n))
                 if case["binary"] is not None:
                     binaries[n] = Path(case["binary"])
                 elif case["status"] == "error":
@@ -368,7 +414,7 @@ def timing_rows(out: Path) -> tuple[list[dict], list[dict]]:
                 raise ValueError(f"{directory}: actual linear solver differs from request")
             actual = case["config"]["params"]
             if (actual["N"] != entry["knots"] or actual["dt_s"] != .01 or actual["max_sqp_time_s"] is not None
-                    or actual["solver"]["max_sqp_iters"] != 1 or actual["solver"]["max_pcg_iters"] != 120
+                    or actual["solver"]["max_sqp_iters"] != 1 or actual["solver"]["max_pcg_iters"] != PCG_CAP
                     or actual["linsys"] != entry["solver"] or actual["solver"]["linsys"] != entry["solver"]
                     or actual["warm_start"] != "hold" or actual["friction"] is not None
                     or actual["reseed_threshold"] is not None):
@@ -405,7 +451,7 @@ def timing_rows(out: Path) -> tuple[list[dict], list[dict]]:
                             unexpected_sqp_count=int(np.count_nonzero(stats["sqp"] != 1)),
                             unexpected_admm_count=int(np.count_nonzero((stats["admm"] != 0)
                                                                       | (stats["admm_linsys"] != 0))),
-                            pcg_cap_hits=int(np.count_nonzero(stats["pcg"] >= 120)) if entry["solver"] == "pcg" else 0,
+                            pcg_cap_hits=int(np.count_nonzero(stats["pcg"] >= PCG_CAP)) if entry["solver"] == "pcg" else 0,
                             **case["quality"]))
     return rows, quality
 
@@ -535,7 +581,7 @@ def analyze(out: Path) -> bool:
               "with 500 Hz commands, 20 Hz control updates, 10 ms knots, "
               "zero declared solve latency and no latency compensation. N changes prediction horizon to (N−1)*10 ms. "
               "Costs are reconstructed for N with unchanged per-knot weights and terminal weights. "
-              "Each fresh controller has a one-SQP-iteration cap, PCG cap120 and no wall-time cap. "
+              f"Each fresh controller has a one-SQP-iteration cap, PCG cap{PCG_CAP} and no wall-time cap. "
               "ADMM is disabled. Relaxed limit barriers use mu=0.003 and delta=0.05 with unchanged planning bounds. "
               "Both plants use the fitted URDF friction with coupled StickSlip and 1 ms Euler substeps. "
               "The predictor is loss-free. SampleKnot applies plan torques without PD or friction feedforward; "

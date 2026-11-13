@@ -5,7 +5,7 @@ studies. Keep the statistics and reports before removing the branch after use.
 
 | Study | Status | Scope / next step |
 | --- | --- | --- |
-| PCG/BDSV histograms | Updated Jetson horizon sweep ready | **B1 only** at N16/32/64/128/256/512. Plain PCG/BDSV with relaxed limit barriers, ADMM off, 20 Hz updates and 500 Hz commands. SQP1, four-second figure-eight, friction mismatch, direct torque without PD/feedforward, unshifted retained warm starts, three repeats. 36 episodes / 2,880 solves planned, with scalar stage timings and batch-size checks. |
+| PCG/BDSV histograms | Updated Jetson horizon sweep ready | **B1 only** at N16/32/64/128/256/512. Plain PCG/BDSV, **PCG cap1,000**, relaxed limit barriers, ADMM off, 20 Hz updates and 500 Hz commands. SQP1, four-second figure-eight, friction mismatch, direct torque without PD/feedforward, unshifted retained warm starts, three repeats. 36 episodes / 2,880 solves planned, with scalar stage timings and batch-size checks. |
 | Thesis horizon × batch matrix | Prepared for Jetson | Same six N values × B1/2/4/8/16, one SQP iteration, two repeats of 300 measured updates. Current stack, historical timing/seeding/weighting protocol. |
 | Falling-cylinder B1/B16 demonstration | Discuss | Recover the historical runner and choose a paired protocol with measured solve latency charged to simulation. |
 | Collision ADMM off/on | Discuss | Agree on a matched scene, clearance metrics and outcome criteria. |
