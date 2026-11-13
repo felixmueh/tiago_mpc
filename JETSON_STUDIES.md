@@ -1,5 +1,10 @@
 # Jetson solve-time studies
 
+Updated 2026-11-13. The PCG/BDSV comparison uses **batch size one only** at
+N16/32/64/128/256/512. It uses relaxed limit barriers with ADMM disabled and
+20 Hz control updates. The separate horizon × batch matrix keeps
+N16/32/64/128/256/512 × B1/2/4/8/16 and its original timing protocol.
+
 After fetching and checking out the temporary experiment branch, run this from
 the repository root inside the existing Jetson container:
 
@@ -19,6 +24,7 @@ For a CPU-only protocol preview, or to select one study:
 ./run_jetson_studies.sh describe
 ./run_jetson_studies.sh histograms
 ./run_jetson_studies.sh matrix
+./run_jetson_studies.sh histograms _expr_data/jetson-barrier-b1
 ./run_jetson_studies.sh all _expr_data/jetson-studies-repeat
 ```
 
@@ -34,22 +40,57 @@ Both studies save statistics only: per-solve times/work counters, compact task
 metrics, outcomes, source identities and plots. They do not save trajectories,
 tick histories, plans or replays. Initialization is excluded from histogram
 samples; matrix initialization statistics are retained separately. No robot or
-ROS connection is opened. MODE_40W is user-confirmed; clocks and power mode are
-not changed and no host checks are required.
+ROS connection is opened. Clocks and power mode are never changed. Available
+Jetson power/clock queries are recorded read-only; missing tools are recorded
+without blocking the experiment.
 
-## Histogram sweep
+## PCG/BDSV horizon sweep: batch one
 
-N16/32/64/128/256/512, PCG versus factored BDSV, one SQP iteration, three fresh
-repeats, one complete six-second figure-eight and one six-second 192.368 mm
-reach plus hold. The simulator uses 500 Hz commands, 100 Hz control updates,
+N16/32/64/128/256/512, **B1 at every N**, plain PCG versus BDSV, one SQP
+iteration, three fresh repeats of one complete four-second figure-eight. The
+native solver's batch size is checked before warm-up and recorded per update;
+any batch size other than one is rejected. The simulator uses 500 Hz commands, 20 Hz control updates,
 10 ms knots, zero declared solve latency and no latency compensation. The only
-solver difference within a task pair is `admm_linsys="pcg"` versus
-`admm_linsys="bdsv_factor"`. All completed episodes supply 600 timings.
+solver difference within a task pair is `linsys="pcg"` versus `linsys="bdsv"`.
+ADMM is disabled; relaxed barriers use mu=0.003 and delta=0.05 with unchanged
+planning bounds. Actual barrier rows, plain solver path and zero ADMM work are
+verified. All completed episodes supply 80 timings.
 
-The default sweep has 72 episodes and 43,200 measured solves if all cases
+Both plants use fitted friction with coupled StickSlip and Euler substeps;
+both predictors omit friction. The execution controller samples plan torque
+directly, without PD or friction feedforward. The winning trajectory is reused
+without shifting, with automatic reseeding disabled. Prediction horizons are
+0.15/0.31/0.63/1.27/2.55/5.11 s. Increasing N changes lookahead while per-knot
+and terminal cost weights remain fixed. Subsets remain selectable on the
+module CLI with `--knots`.
+
+The default comparison has 36 episodes and 2,880 measured solves if all cases
 complete. `REPORT.md`, histogram plots, scalar `stats.csv`/`stats.npz`, compact
-case outcomes and provenance remain in the output. Every tail sample and failed
-case is retained. Arrival does not shorten the reaching distribution.
+case outcomes, warm-start error diagnostics and provenance remain in the output.
+Every tail sample and failed or unsupported case is retained. Earlier desktop
+cohorts stay separate.
+
+Each update also records KKT, Schur, linear-solve, merit and line-search event
+spans, initial-merit time, the accepted step and a completion wall timestamp.
+These counters already exist in the native solver; no probe kernels are added.
+No executed line search is represented by `line_search_ran=false` and a zero
+placeholder `step_size`.
+
+## Reading timing distributions
+
+The desktop BDSV bands moved between otherwise identical simulated updates;
+the leading explanation is runtime scheduling/contention, not an established
+intrinsic BDSV mode. On Jetson, compare full-update timing with work counts,
+stage spans and clock/load logs before interpreting peaks. CUDA event spans can
+include scheduling delays and are not exclusive arithmetic timings.
+
+Run the timing section with the GPU otherwise idle, and keep power/clock
+settings consistent across cells. The launcher serializes these studies but
+does not stop unrelated applications. Clock/load monitoring uses `nvidia-smi`
+when usable, otherwise `tegrastats --interval 200` writes `tegrastats.log` on
+Jetson. Unavailable monitoring is explicit. `nvpmodel -q` and
+`jetson_clocks --show` are optional read-only provenance queries, not launch gates.
+Initialization and compilation stay outside the measured distributions.
 
 ## Horizon × batch matrix
 
@@ -62,8 +103,10 @@ complete. Per-call scalar JSONL/CSV, cell tables, outcomes and heatmaps are kept
 This is the current stack using the thesis matrix's timing, seeding and scaled
 weights. The canonical model, grasp frame and fitted armature are current. It
 is a new cohort, separate from historical thesis measurements. The retained
-GTX 1070 N32/SQP5 pilot also remains a separate earlier protocol; these final
-SQP1 sweeps have not been run on Jetson or GTX 1070 by this preparation session.
+GTX 1070 N32/SQP5 pilot remains a separate earlier protocol. A new N128/SQP1
+desktop cohort uses the amended friction-mismatch workload. The full B1 horizon
+sweep is prepared; no new desktop horizon sweep was run. Jetson measurements
+and the SQP1 matrix remain pending.
 
 ## Reproducible dependency sources
 

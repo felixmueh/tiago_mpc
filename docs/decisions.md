@@ -7,6 +7,47 @@ where known. Pending implementation is marked explicitly; git keeps superseded w
 
 ## Purpose and shape
 
+- **2026-11-13: Jetson PCG/BDSV is a B1 horizon sweep** (Felix).
+  Update the temporary Jetson experiment delivery to compare plain PCG and
+  BDSV at N16/32/64/128/256/512 with **batch size one at every horizon**.
+  Retain the four-second figure-eight, SQP1, limit barriers/ADMM off,
+  20 Hz updates, direct torque, friction mismatch and unshifted warm starts.
+  Keep the separate horizon × batch matrix unchanged, including B1/2/4/8/16.
+  Check native batch identity and retain scalar stage times, accepted steps,
+  completion timestamps and available clock/load logs to investigate timing
+  bands. Three repeats per solver/N give 36 episodes / 2,880 planned updates.
+  This updates the already authorized temporary `experiment/jetson-sqp1-stats`
+  publication; the development worktree stays uncommitted.
+
+- **2026-11-12: plain PCG/BDSV with barriers and slower updates** (Felix).
+  Disable ADMM and use GATO's relaxed limit barriers, preserving the planning
+  bounds. Compare `linsys="pcg"` and `"bdsv"`; the ADMM inner solver is no
+  longer the comparison. Use a 20 Hz control-update rate (50 ms), chosen for
+  Felix's request to slow updates, with 500 Hz commands. Keep the four-second
+  figure-eight, N128/SQP1, PCG120, fitted plant friction, loss-free predictor,
+  direct torque without PD/feedforward, unshifted retained warm starts and no
+  reseeding. Use default barrier mu=0.003 and delta=0.05. Three repeats per
+  solver produce 80 updates per run, 480 total if all cases complete. Preserve
+  all earlier ADMM cohorts separately and retain timing/work/quality statistics.
+
+- **2026-11-12: four-second figure-eight PCG/BDSV follow-up** (Felix).
+  Try the same N128/SQP1 direct-torque/friction-mismatch comparison with a
+  four-second figure-eight period. Record one full cycle with three fresh
+  repeats per solver; the other settings stay unchanged. Do not rerun the
+  reaching task. Keep this cohort separate from the six-second measurements.
+  Felix also confirmed the absence of an external feedforward controller:
+  execution samples planned torque only, without added friction feedforward or PD.
+
+- **2026-11-12: harder PCG/BDSV presentation comparison** (Felix; supersedes
+  the histogram workload below). Use N128, fitted friction in the simulated
+  plant, a loss-free predictor and direct planned torque (`SampleKnot`), with
+  no PD or friction feedforward. Reuse the winning trajectory without shifting
+  (`warm_start="hold"`); automatic reseeding stays off. Keep the one-SQP budget,
+  two six-second tasks, three repeats, zero declared solve latency and statistics-only
+  recording. Run this new GTX 1070 cohort separately from the retained N32/SQP5
+  pilot, and inspect the earlier GATO timing/CDF evidence. Timing multimodality
+  is a hypothesis to measure. The thesis horizon × batch matrix is unchanged.
+
 - **2026-11-12: PCG/BDSV presentation experiment** (Felix). Compare only
   `admm_linsys="pcg"` and `"bdsv_factor"` on a six-second figure-eight and a
   medium reach with identical simulator settings and zero declared solve latency,
