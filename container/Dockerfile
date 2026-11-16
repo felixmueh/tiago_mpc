@@ -1,13 +1,13 @@
 # The ROS 2 container for tiago_mpc: system Python 3.10, a pinned uv, ROS 2 Humble and
 # PAL's interface overlay. No Python environment is baked in; `uv sync` creates the
-# checkout's .venv-container (README, "In the container").
+# checkout's .venv-container (docs/robot.md).
 # BASE_IMAGE is the CUDA devel image of the target (docker.sh: --target desktop|jetson).
 ARG BASE_IMAGE=nvidia/cuda:12.9.1-devel-ubuntu22.04
 FROM ${BASE_IMAGE}
 
 ARG LOCAL_UID=1000
 ARG LOCAL_GID=1000
-ARG LOCAL_USER=felix
+ARG LOCAL_USER=developer
 ARG UV_VERSION=0.11.6
 ARG ROS_DISTRO=humble
 

@@ -300,7 +300,7 @@ def test_each_plan_that_skips_its_knot_0_is_a_late_plan_event():
     late = diagnostics_of(diagnostics, "late_plan")
     assert [e.data["plan"] for e in late] == list(range(7)) and late[0].data["delay_s"] == pytest.approx(.01)
     assert [round(e.t, 6) for e in late] == [round(k.t, 6) for k in ticks[:-1] if k.plan_activated]  # the last sends nothing
-    assert "10.0 ms after its state" in late[0].message and "docs/robot.md" in late[0].message
+    assert "10.0 ms after its state" in late[0].message and "knot 0 never runs" in late[0].message
     diagnostics.clear()
     _, ticks, _ = go(Mpc(), diagnostics=diagnostics, duration=.08, solve_latency_s=0.)  # zero latency: every plan from its knot 0
     assert not diagnostics_of(diagnostics, "late_plan")

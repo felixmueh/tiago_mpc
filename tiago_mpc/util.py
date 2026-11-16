@@ -64,7 +64,7 @@ def main_checkout(repo: Path) -> Path:
 
 def cache_root() -> Path:
     """GATO_CACHE_DIR if set, else the main checkout's .cache/gato, shared by every
-    worktree, host and container (Felix, 2026-10-23); exported for GATO."""
+    worktree, host and container; exported for GATO."""
     default = main_checkout(Path(__file__).resolve().parents[1]) / ".cache/gato"
     root = Path(os.environ.get("GATO_CACHE_DIR") or default).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)

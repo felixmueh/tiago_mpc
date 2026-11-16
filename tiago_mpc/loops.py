@@ -135,14 +135,13 @@ def _check_setup(mpc: MpcInterface, law: ControlLaw, compensation: LatencyCompen
         warnings.warn("PlanFeedback without latency compensation: when the first plan takes effect after its "
                       "solve latency, the arm is still held, and the D term can push the command beyond the "
                       "effort limit at the start of a fast motion. Pass compensation=LatencyCompensation(...) "
-                      "with an initial_latency_s that covers the first solve (docs/latency-compensation.md).",
+                      "with an initial_latency_s that covers the first solve (see LatencyCompensation's docstring).",
                       RuntimeWarning, stacklevel=3)
 
 
 # The late-plan diagnostic of both loops: knot 0 holds the correction each new plan makes,
 # and a plan that first takes effect a knot interval or more after its state never runs
-# it (docs/robot.md, Latency). Remedies (thesis workspace, research/tiago-mpc-latency-
-# analysis.md, "How other MPC systems apply their plans"): (a) feedback around the plan
+# it. Remedies: (a) feedback around the plan
 # at the command rate, e.g. u = u_plan(t) + Kp (q_plan(t) - q) + Kd (qd_plan(t) - qd) on
 # the plan's knot states (OCS2: Riccati gains; BiConMP: joint impedance); (b) latency
 # compensation: solve from the state predicted at the plan's application time under the
@@ -150,7 +149,7 @@ def _check_setup(mpc: MpcInterface, law: ControlLaw, compensation: LatencyCompen
 def _late_plan(plan: Plan, t: float, plan_index: int) -> Diagnostic:
     """Report a plan that activates after its first knot."""
     return Diagnostic(t, "late_plan", f"a plan took effect {1e3 * (t - plan.t0):.1f} ms after its state, "
-                                 f"{1e3 * plan.dt:g} ms knots: its knot 0 never runs (docs/robot.md, Latency)",
+                                 f"{1e3 * plan.dt:g} ms knots: its knot 0 never runs",
                  dict(plan=plan_index, delay_s=t - plan.t0))
 
 
