@@ -6,8 +6,8 @@ name = "tiago-mpc"
 version = "0.1.0"
 requires-python = "==3.10.*"  # ROS 2 Humble's rclpy is 3.10; GATO's module key includes the Python ABI
 dependencies = [
-    "gato-mpc==0.1.7",         # pins grid-rbd==0.6.0 itself (0.6.0 in uv.lock)
-    "grid-rbd==0.6.0",         # direct dependency so this experiment's local armature source is selected
+    "gato-mpc==0.2.1",         # pins the released GRiD generator and native resources
+    "grid-rbd==0.7.1",
     "pin==3.9.0",
     "cmeel-urdfdom==4.0.1",    # Pinocchio 3.9 wheels link urdfdom 4 / tinyxml2 10; unconstrained latest breaks import
     "cmeel-tinyxml2==10.0.0",
@@ -29,11 +29,6 @@ module-root = ""               # flat layout: tiago_mpc/ at the checkout's root
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]  # grid-rbd ships Linux wheels only
-
-# A local GATO checkout instead of PyPI, on a branch or worktree only (README.md, "A local
-# GATO fork"): uncomment, point path at the checkout, then `uv lock` and `uv sync`.
-# [tool.uv.sources]
-# gato-mpc = { path = "../GATO", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "tiago_mpc/record.py"]  # record.py: its docstring's example (conftest.py)
@@ -61,9 +56,3 @@ ignore_errors = false
 module = ["gato.*", "pinocchio.*", "coal.*", "scipy.*", "trimesh.*", "rclpy.*", "builtin_interfaces.*", "rcl_interfaces.*",
           "controller_manager_msgs.*", "sensor_msgs.*", "std_msgs.*", "sea_state_msgs.*"]
 ignore_missing_imports = true
-
-# TODO: Move to upstream once they support armature.
-# Local armature support and per-SQP collision-row caching; see README.md.
-[tool.uv.sources]
-gato-mpc = { path = "../GATO/.worktrees/tiago-combined", editable = true }
-grid-rbd = { path = "../GRiD" }  # wheel build stages GRiD's validated peer/resources bundle

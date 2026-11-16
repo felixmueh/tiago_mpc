@@ -317,8 +317,8 @@ wheels = [
 
 [[package]]
 name = "gato-mpc"
-version = "0.1.7"
-source = { editable = "../GATO/.worktrees/tiago-combined" }
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4", marker = "sys_platform == 'linux'" },
     { name = "cmake", marker = "sys_platform == 'linux'" },
@@ -332,58 +332,15 @@ dependencies = [
     { name = "sympy", marker = "sys_platform == 'linux'" },
     { name = "trimesh", marker = "sys_platform == 'linux'" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "beautifulsoup4", specifier = ">=4.9.3" },
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.0" },
-    { name = "cmake", specifier = ">=3.24" },
-    { name = "grid-rbd", specifier = "==0.6.0" },
-    { name = "gymnasium", marker = "extra == 'examples'", specifier = ">=0.29" },
-    { name = "gymnasium", marker = "extra == 'test'", specifier = ">=0.29" },
-    { name = "ipykernel", marker = "extra == 'examples'", specifier = ">=6.29.5" },
-    { name = "jax", marker = "extra == 'test'", specifier = ">=0.4.40" },
-    { name = "jupyter", marker = "extra == 'examples'", specifier = ">=1.1.1" },
-    { name = "lxml", specifier = ">=4.2.1" },
-    { name = "matplotlib", marker = "extra == 'examples'", specifier = ">=3.10.1" },
-    { name = "meshcat", marker = "extra == 'examples'", specifier = ">=0.3.2" },
-    { name = "mujoco", marker = "extra == 'examples'", specifier = ">=3.2,<3.14" },
-    { name = "mujoco", marker = "extra == 'test'", specifier = ">=3.2,<3.14" },
-    { name = "myst-parser", marker = "extra == 'docs'", specifier = "==4.0.0" },
-    { name = "myst-parser", marker = "extra == 'test'", specifier = "==4.0.0" },
-    { name = "ninja", specifier = ">=1.11.1.4" },
-    { name = "numpy", specifier = ">=1.17.4" },
-    { name = "osqp", marker = "extra == 'examples'", specifier = ">=0.6.7.post3" },
-    { name = "pin", marker = "extra == 'examples'", specifier = ">=3.4.0" },
-    { name = "pin", marker = "extra == 'test'", specifier = ">=3.4.0" },
-    { name = "platformdirs", specifier = ">=4.0" },
-    { name = "pybind11", specifier = ">=2.13.6" },
-    { name = "pydata-sphinx-theme", marker = "extra == 'docs'", specifier = "==0.16.0" },
-    { name = "pydata-sphinx-theme", marker = "extra == 'test'", specifier = "==0.16.0" },
-    { name = "pyqt5", marker = "extra == 'examples'", specifier = ">=5.15.11" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-gpu-proof", marker = "extra == 'dev'", specifier = "==0.5.0" },
-    { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "pyyaml", marker = "extra == 'dev'" },
-    { name = "scipy", specifier = ">=1.15.2" },
-    { name = "seaborn", marker = "extra == 'examples'", specifier = ">=0.13.2" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = "==8.1.3" },
-    { name = "sphinx", marker = "extra == 'test'", specifier = "==8.1.3" },
-    { name = "sphinx-design", marker = "extra == 'docs'", specifier = "==0.6.1" },
-    { name = "sphinx-design", marker = "extra == 'test'", specifier = "==0.6.1" },
-    { name = "sympy", specifier = ">=1.7.1" },
-    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'" },
-    { name = "torch", marker = "extra == 'examples'", specifier = ">=2.6.0" },
-    { name = "torch", marker = "extra == 'test'", specifier = ">=2.6.0" },
-    { name = "tqdm", marker = "extra == 'examples'", specifier = ">=4.60" },
-    { name = "trimesh", specifier = ">=4" },
+sdist = { url = "https://files.pythonhosted.org/packages/33/24/682fcb02d2242dd04e053739c8e08b78978a4340ea0d82d00b30ec7649d7/gato_mpc-0.2.1.tar.gz", hash = "sha256:e96d8b0e271a162898e44a115b55bf8fc1ec48bdd51e53d2afbba4ad85dbbdc6", size = 17992834, upload-time = "2026-11-12T22:55:24.211Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/27/eded9a80bafcaf247dbeece1bec074a36de7100305a82b61340da9310b0d/gato_mpc-0.2.1-py3-none-any.whl", hash = "sha256:143e0535b6d2c249494655d28ff0de579e2bf60caf2a603df4c3f8498735723d", size = 12478168, upload-time = "2026-11-12T22:55:21.053Z" },
 ]
-provides-extras = ["examples", "dev", "docs", "test"]
 
 [[package]]
 name = "grid-rbd"
-version = "0.6.0"
-source = { directory = "../GRiD" }
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4", marker = "sys_platform == 'linux'" },
     { name = "lxml", marker = "sys_platform == 'linux'" },
@@ -393,24 +350,10 @@ dependencies = [
     { name = "sympy", marker = "sys_platform == 'linux'" },
     { name = "trimesh", marker = "sys_platform == 'linux'" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "beautifulsoup4", specifier = ">=4.9.3" },
-    { name = "grid-rbd", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "grid-rbd", extras = ["jax"], marker = "extra == 'all'" },
-    { name = "grid-rbd", extras = ["torch"], marker = "extra == 'all'" },
-    { name = "jax", marker = "extra == 'jax'", specifier = ">=0.4.40" },
-    { name = "lxml", specifier = ">=4.2.1" },
-    { name = "numpy", specifier = ">=1.23" },
-    { name = "platformdirs", specifier = ">=4.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "scipy", specifier = ">=1.9" },
-    { name = "sympy", specifier = ">=1.7.1" },
-    { name = "torch", marker = "extra == 'torch'", specifier = ">=2.1" },
-    { name = "trimesh", specifier = ">=4" },
+sdist = { url = "https://files.pythonhosted.org/packages/f7/67/06640eb41ccd27e40276b1c433db9bf12be95ca41609323c80e7342ab1b8/grid_rbd-0.7.1.tar.gz", hash = "sha256:63728a7b4d1a3fded12497076d87892bed3c0e61ed273279f66e6c4e1d204283", size = 1469235, upload-time = "2026-11-12T06:16:53.18Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/22/a6/35e2271896fa09c5f8c958c98cb7e722f46555637b6b9c6c635df9f2ae7b/grid_rbd-0.7.1-cp310-cp310-manylinux_2_34_x86_64.whl", hash = "sha256:c5a0c9fa2e8d37c44f66a47682540ba03ecd5abf143e5ffd6f6e7026e959fad7", size = 1928349, upload-time = "2026-11-12T06:16:44.5Z" },
 ]
-provides-extras = ["jax", "torch", "all", "dev"]
 
 [[package]]
 name = "iniconfig"
@@ -802,8 +745,8 @@ requires-dist = [
     { name = "cmake", specifier = "==3.31.10" },
     { name = "cmeel-tinyxml2", specifier = "==10.0.0" },
     { name = "cmeel-urdfdom", specifier = "==4.0.1" },
-    { name = "gato-mpc", editable = "../GATO/.worktrees/tiago-combined" },
-    { name = "grid-rbd", directory = "../GRiD" },
+    { name = "gato-mpc", specifier = "==0.2.1" },
+    { name = "grid-rbd", specifier = "==0.7.1" },
     { name = "matplotlib", specifier = "==3.10.9" },
     { name = "pin", specifier = "==3.9.0" },
     { name = "typing-extensions", specifier = "==4.16.0" },

@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECKOUT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-WORKSPACE_HOST="$(cd "${CHECKOUT}/.." && pwd)"   # impl/: sibling worktrees and ../GATO resolve
+WORKSPACE_HOST="$(cd "${CHECKOUT}/.." && pwd)"   # the parent: relative paths to sibling checkouts resolve
 WORKDIR="/workspace/$(basename "${CHECKOUT}")"
 LOCAL_UID="$(id -u)"
 LOCAL_GID="$(id -g)"

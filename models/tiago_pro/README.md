@@ -27,7 +27,7 @@ The armature (kg m², joints 1 to 7) is supplied separately from the URDF. The r
 `PD_KP` and `PD_KD` gains. `MpcParams.armature`, `SimConfig.armature` and
 `LatencyCompensation.armature` default to it; `(0.,) * 7` turns it off.
 Pinocchio receives its `model.armature` property; the predictor requires the
-local GRiD/GATO armature extensions. Nothing is added to the XML or folded into
+released GRiD/GATO armature support. Nothing is added to the XML or folded into
 link inertias. The left arm's supplied armature is 0.511, 1.19, 0.472, 0.296,
 0.424, 0.151, 0.14.
 

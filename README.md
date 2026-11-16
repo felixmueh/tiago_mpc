@@ -7,9 +7,7 @@ the examples show how to compose them.
 
 Linux, an NVIDIA GPU, CUDA toolkit 12.x, a compatible host compiler, Git LFS
 and [uv](https://docs.astral.sh/uv/) are required. uv selects Python 3.10.
-The current `pyproject.toml` and lock require local GATO and GRiD sources at
-`../GATO/.worktrees/tiago-combined` and `../GRiD`. These supply native extensions
-used here; a standalone clone cannot yet install from the lock without them.
+GATO 0.2.1 and GRiD 0.7.1 are installed from their published packages.
 
 ```bash
 git lfs install
