@@ -3,7 +3,7 @@
 The `controller_manager_msgs` snapshot contains unchanged `.msg`, `.srv`,
 and `package.xml` files from
 `pal-alum-controller-manager-msgs` **4.32.2-1jammy.20250627.080505**, installed in
-the university simulator image `development-tiago-pro-12:alum-25.01` on c3po.
+the PAL simulator image `development-tiago-pro-12:alum-25.01`.
 Captured 2026-09-23 from `/opt/pal/alum/share/controller_manager_msgs`.
 Package repository: `https://repo.pal-robotics.com/clients/alum/25.01/pal`.
 The package declares the BSD license; original authors/maintainers are preserved

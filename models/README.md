@@ -36,9 +36,5 @@ convention, not a calibrated TCP, and it does not follow the opening gripper.
 The MPC always tracks it (there is no end-effector setting); GATO selects it through `ee_frame`, Pinocchio by name; the full URDF does not
 have it.
 
-Every task measures it through `tiago.ee_position`, including random100 (the
-grasp-frame positions at its frozen goal postures) and the latency study's far
-reach.
-Replays record `end_effector_frame`; missing metadata means the flange. Old
-flange-goal results, such as earlier random100 runs, must not be relabeled as
-grasp-center results.
+Tasks use `tiago.ee_position` to measure this frame. See
+[tiago.py](../tiago_mpc/tiago.py) for model derivation and coordinates.
