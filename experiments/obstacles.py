@@ -1,14 +1,9 @@
-"""Reaches past the robot's own body and past obstacles (spheres, capsules, boxes and
-planes), in simulation, with GATO's
-collision rows enforced ("on", ADMM) and only reported ("off", telemetry).
+"""Reach among obstacles with collision constraints enabled or reported as telemetry.
 
-Both modes compile the same module and upload the same environment (the body's stored
-cover and the scene's obstacles, tiago_mpc/collision.py); only the rows' mechanism differs.
-evaluate measures the executed motion against the collision meshes (experiments/clearance.py).
-The runs take the defaults, as the reach: VirtualTimeSettings.constant_rate() (100 Hz
-updates, each solve one control period), latency compensation and FrictionFeedforward().
-
-Run from the checkout's root: python -m experiments.obstacles [--help]"""
+Compare --mode on with --mode off. Both use the same collision model; evaluation
+checks the executed arm against the original meshes at sampled command ticks.
+Run with: uv run python -m experiments.obstacles [--help]
+"""
 from __future__ import annotations
 
 import argparse
@@ -39,28 +34,11 @@ class Scene:
 
 
 SCENES = {
-    # Low in front of the torso: without the rows the wrist hits the mobile base
-    # (_expr_data/obstacles-20261029/screen_front.sh).
     "body": Scene((.25, -.10, -.40)),
-    # Beside and behind the torso's front: without the rows the upper arm ends inside the
-    # torso; with them the arm stops 12 cm short, joint 2 at its planning limit and the upper
-    # arm at the margin (_expr_data/obstacles-20261029/find_targets.py, candidate 1).
     "behind": Scene((-.12, -.492, -.278)),
-    # Sideways to the right. Two 5 cm spheres that the arm cover of the unconstrained reach
-    # (rows off, no obstacles) penetrates by 12 and 9 cm, while the covers of the start
-    # and goal postures clear them by at least 2 cm and the body's by 3 cm
-    # (_expr_data/obstacles-20261029/grid_obstacles.py on free-side-off).
     "obstacles": Scene((.40, -.65, -.20), ((.342, -.42, -.484, .05), (.362, -.36, -.324, .05))),
-    # The same reach past a vertical pole (3 cm radius, 30 cm long), and past a thin wall
-    # (20 x 4 x 20 cm, turned 20 degrees about z). The exact meshes of the unconstrained reach
-    # (rows off, obstacles-latency-20261101/obstacles-off-sqp1) penetrate them by 5.4 and
-    # 6.0 cm, while the start and goal postures clear them by at least 5 cm
-    # (_expr_data/obstacles-primitives-20261103/check_candidates.py).
     "capsule": Scene((.40, -.65, -.20), capsules=((.342, -.403, -.628, .342, -.403, -.328, .03),)),
     "box": Scene((.40, -.65, -.20), boxes=((.372, -.403, -.478, 0., 0., .173648, .984808, .10, .02, .10),)),
-    # The body reach above a table, the half-space z >= -0.60 m: the start posture clears it
-    # by 6.2 cm, the unconstrained reach's goal posture (body-off-sqp1) is 4.9 cm inside it.
-    # The plane is infinite, so it also cuts through the mobile base; the rows see only the arm.
     "table": Scene((.25, -.10, -.40), planes=((0., 0., 1., -.60),)),
 }
 

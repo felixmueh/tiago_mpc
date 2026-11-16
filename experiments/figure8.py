@@ -1,9 +1,9 @@
-"""Horizontal figure-eight tracking (robot: checks only by default).
+"""Track a moving figure-eight reference and measure the executed position error.
 
-Simulation uses StickSlip Coulomb friction in the plant. Execution uses the defaults:
-external friction feedforward with PD, and a loss-free predictor.
-
-Run from the checkout's root: python -m experiments.figure8 [--help]."""
+The simulated plant has Coulomb friction; execution adds friction feedforward and
+PD feedback around a loss-free prediction.
+Run with: uv run python -m experiments.figure8 [--help]
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace

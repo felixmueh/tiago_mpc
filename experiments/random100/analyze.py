@@ -1,183 +1,45 @@
-"""Saved-data audit and compact plots for a completed random100 cohort; no CUDA.
+"""Count arrivals and joint-position violations in saved reaches; no GPU.
 
-Run from the checkout's root: python -m experiments.random100.analyze <output-directory>"""
+Check every recorded position against the raw joint limits, with 1e-5 rad tolerance.
+"""
 import argparse
-from collections import Counter
 import json
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 
 from experiments.random100.run import load
 import tiago_mpc as tm
 
-DIFFERENCES = ("Modern GATO/GRiD, finite-budget ADMM limit rows, parameters recorded in study.json and per case. "
-               "Base SQP5 (historical1000), u_cost=1e-4 (historical1e-5), rho reset each feedback (historical "
-               "retained). Same native starts/goal postures/order; the position goals are the grasp frame's at the "
-               "goal postures (historical: the flange's), so results are not comparable with the historical cohort; "
-               "no original goal posture is used as a trajectory seed.")
+
+def summarize(study, records, lower, upper):
+    """Count each reach once; missing or invalid positions remain unchecked."""
+    arrived = sum(record.metadata["status"] == "arrived" for record in records)
+    checked, violations = 0, 0
+    for record in records:
+        q = np.asarray(record.ticks["q"])
+        if q.ndim != 2 or q.shape != (len(q), len(lower)) or not len(q) or not np.isfinite(q).all():
+            continue
+        checked += 1
+        violations += bool(np.any((q < lower - 1e-5) | (q > upper + 1e-5)))
+    return dict(cases=len(study.cases), arrived=arrived, joint_limit_violations=violations,
+                checked=checked, unchecked=len(study.cases) - checked)
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("output", type=Path)
-    args = p.parse_args()
-    out = args.output.resolve()
-    study, records = load(out)
-    provenance = json.loads((out / "study.json").read_text())["provenance"]
-    manifest = json.loads((out / "input_manifest.json").read_text())
-    if len(study.cases) != 100:
-        raise ValueError("analyze.py expects a complete 100-case run, not a --pairs subset")
-    if [r.config["case"] for r in records] != [c.name for c in study.cases]:
-        raise ValueError("Incomplete cohort or changed task order")
-    statuses = [r.metadata["status"] for r in records]
-    results = [r.metadata["results"] for r in records]
-    complete = [s in ("arrived", "timeout") for s in statuses]
-    counts = dict(assigned=len(study.cases), attempted=len(records), completed=sum(complete),
-                  arrivals=statuses.count("arrived"),
-                  full_limit_passes=sum(c and bool(r.get("limits_pass")) for c, r in zip(complete, results)),
-                  valid_arrivals=sum(s == "arrived" and bool(r.get("limits_pass")) for s, r in zip(statuses, results)),
-                  timeouts=statuses.count("timeout"), execution_errors=len(records) - sum(complete))
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path)
+    args = parser.parse_args(argv)
+    study, records = load(args.output)
     limits = tm.limits()
-    audits = []
-    total_work = Counter()
-    inner_modes = Counter()
-    native_us, wall_s = [], []
-    for case, record, status, row in zip(study.cases, records, statuses, results):
-        ticks, plans = record.ticks, record.plans
-        # The command sent at each tick but the last; NaN: none sent yet (zero torque held).
-        t, x, u = ticks["t"], np.c_[ticks["q"], ticks["qd"]], np.nan_to_num(ticks["command"][:-1])
-        if len(t) == 0 or x.shape != (len(t), 14) or len(u) != len(t)-1:
-            raise ValueError(f"Incomplete/invalid trajectory arrays: {case.name}")
-        if not np.allclose(x[0], case.initial_state, atol=1e-12):
-            raise ValueError(f"Wrong initial state: {case.name}")
-        finite = bool(np.isfinite(x).all() and np.isfinite(u).all())
-        if not finite or np.any(np.diff(t) <= 0):
-            raise ValueError(f"Nonfinite retained trajectory or invalid clock: {case.name}")
-        q_ex = np.maximum(limits.lower-x[:, :7], x[:, :7]-limits.upper)
-        v_ex = np.abs(x[:, 7:])-limits.velocity
-        u_ex = np.abs(u)-limits.effort if len(u) else np.zeros((0, 7))
-        maxima = {k: float(max(0, a.max(initial=0))) for k, a in
-                  (("joint", q_ex), ("speed", v_ex), ("torque", u_ex))}
-        done = status in ("arrived", "timeout")
-        actual_pass = done and max(maxima.values()) <= 1e-5
-        if done and actual_pass != row["limits_pass"]:
-            raise ValueError(f"Independent physical audit disagrees: {case.name}")
-        if done and not np.isclose(ticks["distance_m"][-1], row["final_distance_m"], atol=1e-12):
-            raise ValueError(f"Final error disagrees: {case.name}")
-        first = {}
-        for label, a, ts in (("joint", q_ex, t), ("speed", v_ex, t), ("torque", u_ex, t[:-1])):
-            bad = np.argwhere(a > 1e-5)
-            if len(bad):
-                i, j = bad[0]
-                first[label] = dict(time_s=float(ts[i]), joint=int(j+1), excess=float(a[i, j]))
-        audits.append(dict(case=case.name, status=status, reached=status == "arrived",
-                           full_limit_pass=actual_pass, max_excess=maxima,
-                           first_violations=first, command_ticks=len(t),
-                           final_error_mm=1000*float(ticks["distance_m"][-1])))
-        native_us.extend(plans["solve_time_us"].tolist())
-        wall_s.extend(plans["wall_s"].tolist())
-        for key in ("sqp", "pcg", "admm", "admm_linsys", "zero_pcg_rows"):
-            total_work[key] += int(plans[key].sum())
-        inner_modes.update(plans["admm_linsys_mode"].tolist())
-    arrivals = [r for r, s in zip(records, statuses) if s == "arrived"]
-    valid = [r for r in arrivals if r.metadata["results"]["limits_pass"]]
-    params, timing, timeout_s = records[0].config["params"], study.config.settings, records[0].config["task"].timeout_s
-    setting_line = (f"N{params.N}, B1, {1000*params.dt_s:g} ms knots, {1000*timing.update_period:g} ms control "
-                    f"updates, {1000*timing.solve_latency_s:g} ms declared solve latency, latency compensation "
-                    f"{'on' if study.config.compensation else 'off'}, law {type(records[0].config['law']).__name__}, "
-                    f"armature {'on' if any(params.armature) else 'off'} (predictor), "
-                    f"{'on' if any(study.config.plant.armature) else 'off'} (plant), "
-                    f"{1000*study.config.plant.substep:g} ms Pinocchio RK4, "
-                    f"SQP{params.solver.max_sqp_iters}/PCG{params.solver.max_pcg_iters}, "
-                    f"{(params.N-1)*params.dt_s:.3g} s preview, "
-                    f"native cost menu, {timeout_s:g} simulated seconds.")
-    admm_settings = tm.to_dict(params.admm)
-    bound_settings = {k: getattr(params, k) for k in ("joint_margin_rad", "velocity_fraction", "effort_fraction")}
-    result = dict(counts=counts, raw_audit_cases=len(audits),
-                  violating_episodes={k:sum(a["max_excess"][k] > 1e-5 for a in audits)
-                                      for k in ("joint", "speed", "torque")},
-                  max_excess={k:max(a["max_excess"][k] for a in audits)
-                              for k in ("joint", "speed", "torque")},
-                  work_totals=dict(total_work), actual_admm_inner_modes=dict(inner_modes),
-                  all_native_solve_time_s=float(np.sum(native_us)/1e6),
-                  controller_wall_time_s=float(np.sum(wall_s)),
-                  solve_time_median_ms=float(np.median(native_us)/1000),
-                  arrival_time_median_s=float(np.median([r.metadata["end_t"] for r in arrivals])) if arrivals else None,
-                  timeout_cases=[c.name for c, s in zip(study.cases, statuses) if s == "timeout"],
-                  error_cases=[c.name for c, s in zip(study.cases, statuses) if s not in ("arrived", "timeout")],
-                  audits=audits)
-    (out / "analysis.json").write_text(json.dumps(result, indent=2)+"\n")
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
-    for group, label in ((arrivals, "All arrivals"), (valid, "Arrivals within limits")):
-        times = sorted(r.metadata["end_t"] for r in group)
-        axes[0].step([0, *times, 8], [0, *range(1, len(times)+1), len(times)], where="post", label=label)
-    axes[0].set(xlabel="Simulation time (s)", ylabel="Arrivals / 100 assigned tasks", xlim=(0, 8), ylim=(0, 100))
-    axes[0].legend()
-    for status, color in (("arrived", "tab:blue"), ("timeout", "tab:orange"), ("fault", "tab:purple"),
-                          ("error", "tab:red")):
-        indices = [i for i, s in enumerate(statuses) if s == status]
-        if indices:
-            axes[1].scatter([i+1 for i in indices], [audits[i]["final_error_mm"] for i in indices], s=16, label=status, color=color)
-    axes[1].axhline(50, color="gray", ls="--", label="50 mm arrival threshold")
-    axes[1].set(xlabel="Frozen task order", ylabel="Final position error (mm)", yscale="log")
-    axes[1].legend()
-    fig.suptitle(f"Frozen random100 — ADMM, N{params.N}, SQP{params.solver.max_sqp_iters}, {1000*params.dt_s:g} ms knots")
-    fig.tight_layout(); fig.savefig(out / "overview.png", dpi=160); fig.savefig(out / "overview.pdf")
-    plt.close(fig)
-    (out / "REPORT.md").write_text(f"""# Frozen random100 on modern GATO / ADMM
-
-Source `{provenance['repository_commit']}`; exact 100 inputs from `{manifest['source_commit']}`.
-All tasks were attempted once in the original order, each from its own random
-posture at rest. No comfortable-start substitution, filtering or retries.
-
-| Outcome | Episodes / 100 |
-| --- | ---: |
-| Arrival within 8 simulated seconds | {counts['arrivals']} |
-| Whole-run simulated physical-limit pass | {counts['full_limit_passes']} |
-| Both arrival and physical-limit pass | {counts['valid_arrivals']} |
-| Finite timeout | {counts['timeouts']} |
-| Execution error | {counts['execution_errors']} |
-
-Independent raw-trajectory checks agree with every completed episode's limit
-label. Episodes exceeding joint position / speed / torque limits:
-{result['violating_episodes']['joint']} / {result['violating_episodes']['speed']} /
-{result['violating_episodes']['torque']}; overlaps are possible. Full per-task
-excesses and first violations are in `analysis.json`.
-
-![Arrival curve and terminal errors](overview.png)
-
-Settings: {setting_line}
-Position tolerance 5 cm, grasp-point speed <= 2 cm/s, zero dwell. Position-only;
-no final approach, collisions, clipping or physical hardware. The solve latency
-is declared, not measured. ADMM uses its finite upstream budget;
-actual inner modes/work are retained. GATO `{json.dumps(provenance['gato'])}`, package
-versions `{json.dumps(provenance['versions'])}` (study.json).
-
-Effective ADMM settings: `{json.dumps(admm_settings)}`.
-Planning bounds: `{json.dumps(bound_settings)}`; the physical
-URDF limits used for grading remain unchanged.
-
-{DIFFERENCES}
-
-This is a new cohort, not an isolated test of ADMM or an exact historical
-reproduction. Arrival stops each successful episode, so this does not establish
-post-arrival settling. Native/controller timings are diagnostic, not a quiet
-before/after performance comparison. The saved raw histories include every
-command tick, torque, solve timing, SQP/PCG/ADMM work and predicted violation.
-No KKT residual gate or solver repair was used.
-
-Regenerate from this repository:
-
-```bash
-.venv/bin/python -m experiments.random100.analyze {out}
-```
-""")
-    print(json.dumps({k:v for k,v in result.items() if k != "audits"}, indent=2))
+    counts = summarize(study, records, limits.lower, limits.upper)
+    (args.output / "analysis.json").write_text(json.dumps(counts, indent=2) + "\n")
+    print(f"Arrived: {counts['arrived']}/{counts['cases']}")
+    print(f"Joint-position limit violations: {counts['joint_limit_violations']}/{counts['checked']} checked reaches")
+    if counts["unchecked"]:
+        print(f"Unchecked reaches (missing or invalid positions): {counts['unchecked']}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

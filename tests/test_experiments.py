@@ -11,7 +11,6 @@ import pinocchio as pin
 import pytest
 
 from experiments import common, figure8 as f8, reach as rc, replay
-from experiments.latency_compensation import Compensated, run_compensated
 from test_loops import wall
 from tiago_mpc import record as rec
 from tiago_mpc.collision import Collision, arm_cover, body_cover, body_posture
@@ -22,6 +21,17 @@ from tiago_mpc.interfaces import Plan, Prediction, State
 from tiago_mpc.record import from_dict, load_run
 from tiago_mpc.sim import SimConfig
 from tiago_mpc.tiago import GRASP_FRAME, Q_START, RIGHT_ARM_JOINTS, arm_urdf, fk, urdf_friction
+
+
+@dataclass(frozen=True)
+class CustomSettings:
+    command_period: float = .002
+    update_period: float = .01
+    solve_latency_s: float = .02
+
+
+def custom_loop(*args, settings, **kwargs):
+    return rc.tm.run_virtual_time(*args, settings=VirtualTimeSettings(**vars(settings)), **kwargs)
 
 
 @pytest.mark.parametrize("real", [False, True])
@@ -511,8 +521,8 @@ def test_setup_replaces_only_the_given_options(argv, timing):
 def test_setup_replaces_the_options_in_an_experiments_own_timing():
     plant = SimConfig(substep=.003)
     args = common.arguments("", ["--solve-latency", ".03", "--command-period", ".004"])
-    assert common.setup(args, plant, Compensated(), loop=run_compensated) == (
-        plant, Compensated(.03, .004), run_compensated)
+    assert common.setup(args, plant, CustomSettings(), loop=custom_loop) == (
+        plant, CustomSettings(.004, .01, .03), custom_loop)
 
 
 @pytest.mark.parametrize("argv, solver, timing, budget, compensation", [
@@ -584,40 +594,8 @@ def test_stop_signals_set_the_flag_and_a_second_one_aborts():
             signal.signal(s, handler)
 
 
-def test_the_random100_study_round_trips_and_load_reads_its_runs(tmp_path):
-    from experiments.random100 import run as random100
-
-    config = random100.Random100Config(ids=(3546, 3331), inputs_sha256="0" * 64)
-    study = random100.Random100Study(config, random100.cases(config))
-    (tmp_path / "study.json").write_text(json.dumps(dict(provenance={}, study=rec.to_dict(study))))
-    case = study.cases[0]
-    assert case.name == "pair_03546" and len(case.initial_state) == 14
-    record = common.run_experiment(replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:]),
-                                   Mpc(replace(config.params, N=4, cost=rc.tm.default_cost(4))), rc.Reach(case.target_m, timeout_s=.01),
-                                   SampleKnot(), config.settings, out=tmp_path / "runs" / case.name, case=case.name)
-    rc.evaluate(record)
-    loaded, records = random100.load(tmp_path)
-    assert rec.to_dict(loaded) == rec.to_dict(study)
-    assert [r.config["case"] for r in records] == [case.name]  # the second case did not run
-    assert records[0].config["task"] == rc.Reach(case.target_m, timeout_s=.01)
-    np.testing.assert_array_equal(np.r_[records[0].ticks["q"][0], records[0].ticks["qd"][0]], case.initial_state)
-    assert records[0].metadata == record.metadata
 
 
-@pytest.mark.parametrize('settings, expected', [
-    (VirtualTimeSettings(.002, .01, .0055), LatencyCompensation(latency_s=.0055)),
-    (VirtualTimeSettings(.002, .007, 'measured'), LatencyCompensation(initial_latency_s=.007)),
-    (VirtualTimeSettings(.004, 0., 'measured'), LatencyCompensation(initial_latency_s=.004)),
-])
-def test_random100_resolves_its_forecast_from_the_chosen_settings_and_preserves_explicit_overrides(settings, expected):
-    from experiments.random100 import run as random100
-
-    config = random100.Random100Config(ids=(3546,), inputs_sha256='0'*64, settings=settings)
-    assert config.compensation == expected
-    assert from_dict(json.loads(json.dumps(rec.to_dict(config))), classes=[random100.Random100Config]) == config
-    fixed = LatencyCompensation(latency_s=.013)
-    assert replace(config, compensation=fixed).compensation is fixed
-    assert replace(config, compensation=None).compensation is None
 
 
 def test_save_replay_takes_a_reference_orientation_per_sample_nan_for_none(tmp_path):
@@ -664,11 +642,48 @@ def test_runner_resolves_loop_specific_defaults_and_records_the_actual_policies(
 
 
 def test_runner_accepts_explicit_custom_loop_and_plain_settings(tmp_path):
-    settings = Compensated(.01, .01, .01, compensate=False)
+    settings = CustomSettings(.01, .01, .01)
     record = common.run_experiment(SimConfig(substep=.003),
                                    Mpc(replace(rc.tm.TIAGO, N=4, cost=rc.tm.default_cost(4))),
-                                   rc.Reach(), SampleKnot(), settings, loop=run_compensated,
+                                   rc.Reach(), SampleKnot(), settings, loop=custom_loop,
                                    duration=.03, out=tmp_path / 'r')
-    loaded = load_run(record.out, classes=[rc.Reach, Compensated])
-    assert loaded.config['settings'] == settings and loaded.config['loop'] == 'run_compensated'
+    loaded = load_run(record.out, classes=[rc.Reach, CustomSettings])
+    assert loaded.config['settings'] == settings and loaded.config['loop'] == 'custom_loop'
     assert loaded.metadata['status'] == 'timeout' and len(loaded.ticks['t']) == 4
+
+
+def test_the_random100_study_round_trips_and_load_reads_its_runs(tmp_path):
+    from experiments.random100 import run as random100
+
+    config = random100.Random100Config(ids=(3546, 3331), inputs_sha256="0" * 64)
+    study = random100.Random100Study(config, random100.cases(config))
+    (tmp_path / "study.json").write_text(json.dumps(dict(provenance={}, study=rec.to_dict(study))))
+    case = study.cases[0]
+    assert case.name == "pair_03546" and len(case.initial_state) == 14
+    record = common.run_experiment(replace(config.plant, q=case.initial_state[:7], qd=case.initial_state[7:]),
+                                   Mpc(replace(config.params, N=4, cost=rc.tm.default_cost(4))), rc.Reach(case.target_m, timeout_s=.01),
+                                   SampleKnot(), config.settings, out=tmp_path / "runs" / case.name, case=case.name)
+    rc.evaluate(record)
+    loaded, records = random100.load(tmp_path)
+    assert rec.to_dict(loaded) == rec.to_dict(study)
+    assert [r.config["case"] for r in records] == [case.name]  # the second case did not run
+    assert records[0].config["task"] == rc.Reach(case.target_m, timeout_s=.01)
+    np.testing.assert_array_equal(np.r_[records[0].ticks["q"][0], records[0].ticks["qd"][0]], case.initial_state)
+    assert records[0].metadata == record.metadata
+
+
+
+@pytest.mark.parametrize('settings, expected', [
+    (VirtualTimeSettings(.002, .01, .0055), LatencyCompensation(latency_s=.0055)),
+    (VirtualTimeSettings(.002, .007, 'measured'), LatencyCompensation(initial_latency_s=.007)),
+    (VirtualTimeSettings(.004, 0., 'measured'), LatencyCompensation(initial_latency_s=.004)),
+])
+def test_random100_resolves_its_forecast_from_the_chosen_settings_and_preserves_explicit_overrides(settings, expected):
+    from experiments.random100 import run as random100
+
+    config = random100.Random100Config(ids=(3546,), inputs_sha256='0'*64, settings=settings)
+    assert config.compensation == expected
+    assert from_dict(json.loads(json.dumps(rec.to_dict(config))), classes=[random100.Random100Config]) == config
+    fixed = LatencyCompensation(latency_s=.013)
+    assert replace(config, compensation=fixed).compensation is fixed
+    assert replace(config, compensation=None).compensation is None

@@ -8,10 +8,8 @@ import numpy as np
 import pytest
 
 from experiments.figure8 import Figure8
-from experiments.friction_compensation import SampledSimConfig
-from experiments.latency_compensation import Compensated
-from experiments.random100.run import Case, Random100Config, Random100Study
 from experiments.reach import Reach
+from experiments.random100.run import Case, Random100Config, Random100Study
 from gato.cost_menu import CostMenu, LinearTerm, Term
 from test_loops import Mpc, Plant, Task
 from tiago_mpc.collision import Collision
@@ -265,10 +263,8 @@ RANDOM100 = Random100Config(ids=(1, 2), inputs_sha256="ab", params=SAMPLE["MpcPa
 EXPERIMENT_SAMPLES = [
     REACH, Figure8(start_m=(.4, -.2, .9), x_span_m=.2, y_amplitude_m=.05, edge_clearance_m=.01, period_s=12.,
                    orientation_rad=(.2, .1, -.2)),
-    Compensated(solve_latency_s=.03, command_period=.004, update_period=.02, compensate=False,
-                prediction_substep_s=.001, predictor="gpu"),
-    SampledSimConfig(physical=SAMPLE["SimConfig"], feedback_period_s=.005),
     CASE, RANDOM100, Random100Study(config=RANDOM100, cases=(CASE,)),
+
 ]
 EXPERIMENT_CLASSES = [type(sample) for sample in EXPERIMENT_SAMPLES]
 

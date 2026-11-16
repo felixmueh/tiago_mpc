@@ -7,7 +7,9 @@ import pytest
 import tiago_mpc as tm
 from tiago_mpc.laws import (FrictionFeedforward, HoldFirst, PlanFeedback, RealTimeEffort, RealTimeSafety, SampleKnot,
                             decide_command)
-from tiago_mpc.interfaces import Command, Fault, Plan
+from tiago_mpc.interfaces import Command, Fault, Plan, State
+from tiago_mpc.dynamics import Friction, StickSlip, Tanh
+from tiago_mpc.util import inertia_gains
 
 sample_knot, hold_first = SampleKnot(), HoldFirst()
 PLAN = Plan(10., .002, np.zeros((6, 4)), 1. + np.arange(5)[:, None] * np.ones(2), measured_t=10.)
@@ -212,3 +214,58 @@ def test_custom_safety_cannot_extend_the_finite_plan_horizon():
     decision = decide_command(plan, .02, state, lambda *args: pytest.fail("expired law"),
                               safety=Safety(), effort_handling=None)
     assert isinstance(decision, Fault) and decision.reason == "lease_expired"
+
+
+def test_pd_initialization_accounts_for_reflected_armature_once():
+    armature = np.array([.7, .8, .2, .6, .3, .35, .27])
+    old_kp, old_kd = inertia_gains(20., 1.4)
+    kp, kd = inertia_gains(20., 1.4, armature=armature)
+    np.testing.assert_allclose(np.subtract(kp, old_kp), armature*20.**2)
+    np.testing.assert_allclose(np.subtract(kd, old_kd), armature*2*1.4*20.)
+    with pytest.raises(ValueError, match='armature'):
+        inertia_gains(20., armature=(-1.,)*7)
+
+
+def test_friction_feedforward_uses_planned_velocity_and_native_signs():
+    v0 = np.array([.1, -.1, .2, -.2, .3, -.3, 0.])
+    v1 = 2*v0
+    states = np.array([np.r_[np.zeros(7), v] for v in (v0, v1)])
+    torque = np.arange(7.)[None]
+    plan = Plan(1., .01, states, torque, measured_t=1.)
+    measured = State(1.005, np.zeros(7), -v0)
+    friction = Friction((1.,)*7, (.5,)*7)
+    expected = torque[0] + np.tanh(1.5*v0/.03) + .5*1.5*v0
+    np.testing.assert_allclose(FrictionFeedforward(friction, SampleKnot(), Tanh(.03))(plan, 1.005, measured).applied,
+                               expected)
+    pd = PlanFeedback(kp=0., kd=2.)
+    np.testing.assert_allclose(FrictionFeedforward(friction, pd, Tanh(.03))(plan, 1.005, measured).applied,
+                               expected + 2*(1.5*v0 - measured.qd))
+    with pytest.raises(RuntimeError, match='last knot'):
+        FrictionFeedforward(friction, SampleKnot())(plan, 1.02, measured)
+
+
+def test_smooth_feedforward_has_no_breakaway_kick_at_rest():
+    plan = Plan(0., .01, np.zeros((2, 14)), np.ones((1, 7)), measured_t=0.)
+    law = FrictionFeedforward(Friction((3.,)*7, (2.,)*7))
+    np.testing.assert_array_equal(law(plan, .004, State(.004, np.zeros(7), np.zeros(7))).applied, np.ones(7))
+    with pytest.raises(ValueError, match='explicit'):
+        FrictionFeedforward(Friction((1.,)*7, (0.,)*7), evaluation=StickSlip())
+
+
+def step(x, u, h):
+    """A double integrator, qdd = u, with GATO's constant-acceleration step (exact here)."""
+    return np.r_[x[:7] + x[7:]*h + .5*u*h*h, x[7:] + u*h]
+
+
+def test_plan_feedback_follows_the_plans_constant_acceleration_between_knots():
+    x0, u = np.r_[np.zeros(7), np.ones(7)], np.full(7, 2.)
+    x1 = step(x0, u, .01)
+    plan = Plan(1., .01, np.array([x0, x1, step(x1, -u, .01)]), np.array([u, -u]), measured_t=1.)
+    law = PlanFeedback(kp=10., kd=np.arange(7.))
+    on = step(x0, u, .004)  # on the plan 4 ms into knot 0: the knot torque alone
+    np.testing.assert_allclose(law(plan, 1.004, State(1.004, on[:7], on[7:])).applied, u)
+    off = State(1.014, x1[:7] + .1, np.zeros(7))  # knot 1, 4 ms in
+    expected = step(x1, -u, .004)
+    np.testing.assert_allclose(law(plan, 1.014, off).applied, -u + 10.*(expected[:7] - off.q) + np.arange(7.)*expected[7:])
+    kp, kd = inertia_gains(30.)
+    assert len(kp) == 7 and all(p > 0 for p in kp) and kd[0] == pytest.approx(2 * kp[0] / 30.)

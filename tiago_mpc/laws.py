@@ -174,7 +174,7 @@ class FrictionFeedforward:
 
     The defaults are the loops' default law: the URDF's fitted right-arm friction
     (urdf_friction), PD about the plan (PlanFeedback's stored gains) and a 0.01 rad/s
-    tanh width, as tuned in simulation (experiments/controller_tuning.py).
+    tanh width, tuned in simulation.
     """
     friction: Friction = field(default_factory=urdf_friction)
     base_law: ControlLaw = field(default_factory=PlanFeedback)

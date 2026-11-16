@@ -1,62 +1,17 @@
-# random100: 100 random reaches (simulation only)
+# random100: 100 simulated reaches
 
-100 fixed start/goal pairs: random arm postures at rest, each with one reachable
-goal posture. Each case reaches the grasp frame's position at its goal posture
-(`ee_position`), like every other task. `manifest.json` lists the task IDs in
-their fixed order, and `inputs/` holds one NPZ per task; their stored targets are
-the flange's (`arm_right_tool_joint`) positions at the goal postures, which the
-runner only checks for the inputs' consistency.
-
-**New protocol (2026-10-24):** earlier random100 runs reached the flange
-positions, so their results are not comparable with grasp-frame runs. They keep
-their labels; never relabel them as grasp-frame results.
-
-**New protocol (2026-10-30):** runs from this date use the new defaults (30 ms
-knots, planning speeds at 60 %, 50 Hz control updates, a declared 20 ms solve
-latency, latency compensation, `PlanFeedback()`, and the supplied armature in the
-predictor, the plant and the compensation); earlier runs used 10 ms knots, 80 %,
-`VirtualTimeSettings.ideal()`, `SampleKnot` and no armature, another model. They keep
-their labels.
-
-**New protocol (2026-11-12):** runs from this date use the new defaults: 100 Hz
-control updates with a declared solve latency of one update period
-(`VirtualTimeSettings.constant_rate()`), latency compensation and
-`FrictionFeedforward()` (the URDF's fitted friction with PD). The runs of the earlier
-protocols were removed (Felix keeps backups); regenerate the study with this one.
-
-The virtual-time effort policy defaults to clipping the complete command at the
-raw torque limits, including feedback (2026-11-04). The policy is recorded in
-the separate execution configuration. Earlier results retain their original effort policy
-and labels.
+Run fixed start/goal pairs, then count arrivals and joint-position violations
+from the saved motions.
 
 ```bash
-.venv/bin/python -m experiments.random100.run --dry-run     # parameters only
-.venv/bin/python -m experiments.random100.run               # all 100 cases
-.venv/bin/python -m experiments.random100.run --pairs 8990  # a subset
-.venv/bin/python -m experiments.random100.analyze <output-directory>
+uv run python -m experiments.random100.run
+uv run python -m experiments.random100.analyze <output-directory>
 ```
 
-- **Run:** uses the TIAGo defaults (`TIAGO` in `tiago_mpc/mpc.py`, grasp
-  frame) with no solve-time limit (`PARAMS` in `run.py`), 3 ms RK4 substeps and
-  `VirtualTimeSettings.constant_rate()` with latency compensation. The
-  study is two frozen dataclasses: `Random100Config` (the ids, the sha256 of
-  `manifest.json`, which pins the inputs, and those pieces) and one `Case` per input
-  pair (its name, start state and grasp-frame target),
-  written with the provenance to `study.json` once, before the first run.
-  Each case runs once, in order: `run_experiment` with `Reach` and the study's law
-  (`FrictionFeedforward()`), then
-  `evaluate` from `experiments/reach.py`, with its own
-  `MpcProcess` on the GATO module compiled once at the start (`compile_binary`);
-  its run record is `runs/<name>/` (`case` in its config) in a fresh directory
-  under `_expr_data/`. Ctrl-C ends the running case as `interrupted` and stops the
-  study. The runner takes the shared GPU locks.
-  `load(path)` (in `run.py`) returns the study and the cases' run records.
-- **Outcomes:** arrival (position error at most 5 cm and grasp-point speed at most
-  2 cm/s within 8 simulated seconds) and simulated physical-limit compliance
-  are reported separately. A timeout, limit violation or numerical failure
-  keeps its output and the other cases continue; a shared setup failure stops
-  the run. Commands use the selected effort policy; cases are never retried.
-- **Analysis:** `analyze.py` needs no GPU. It reads the run with `load`, counts the
-  outcomes, checks each case's initial state, recomputes joint, speed and torque
-  limit excesses from all saved command ticks, and writes the per-case audit
-  (`analysis.json`), a plot and a short report next to the run.
+Use `run --pairs 8990` for a single case or `run --dry-run` to inspect the
+configuration. Runs go under `_expr_data/`; each case keeps its own record.
+Failures keep their output and the next case continues. Ctrl-C stops the study.
+
+Analysis prints arrival and violation totals and writes `analysis.json`.
+A position violation means a recorded joint exceeds its raw limit by more than
+1e-5 rad. Missing or invalid motions are counted as unavailable.

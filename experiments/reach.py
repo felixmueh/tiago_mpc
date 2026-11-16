@@ -1,7 +1,8 @@
-"""One position reach from the comfortable pose, in simulation or on the robot (checks only by default).
+"""One position reach, with a constant reference and arrival based on position and speed.
 
-Run from the checkout's root: python -m experiments.reach [--help]
-(on the robot: python -m experiments.reach --plant robot)."""
+Run with: uv run python -m experiments.reach [--help]
+Select --plant rehearsal for wall-time simulation or --plant robot for startup checks.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
