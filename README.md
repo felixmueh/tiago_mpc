@@ -47,3 +47,12 @@ The package documentation is in the source:
 [collision-safety coverage](docs/safety.md) describe the retained assets and
 hardware limitations. The ROS path has CPU fake-client coverage but has not
 been qualified against ROS, Gazebo or the physical robot.
+
+## License
+
+The code in this repository is licensed under the [MIT License](LICENSE). The
+robot model files in `models/` and the PAL interface snapshot in
+`container/pal_interfaces/controller_manager_msgs/` are third-party files under
+their own licenses; see [models/README.md](models/README.md),
+[models/licenses/](models/licenses/) and
+[container/pal_interfaces/README.md](container/pal_interfaces/README.md).

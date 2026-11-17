@@ -8,7 +8,8 @@
   its 18 meshes, `alpha_wrap_results.json` and the blacklist are byte for byte
   GATO's `tiago_configs/` at `fcc9621`, where `tiago_mpc/safety.py` was ported
   from `tiago_src/gato_tiago/safety_monitor.py`.
-- `licenses/`: upstream licenses of the two meshes from PAL repositories.
+- `licenses/`: upstream licenses of the two meshes downloaded from PAL's public
+  repositories.
 
 Every other robot file is derived from `tiago_pro.urdf` at run time, into the
 cache (`tiago_mpc/util.py:cache_root`), and never committed: the reduced right

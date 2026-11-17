@@ -4,6 +4,8 @@
 [project]
 name = "tiago-mpc"
 version = "0.1.0"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = "==3.10.*"  # ROS 2 Humble's rclpy is 3.10; GATO's module key includes the Python ABI
 dependencies = [
     "gato-mpc==0.2.1",         # pins the released GRiD generator and native resources

@@ -68,6 +68,7 @@ dt < 2/λ_max(M⁻¹ diag(b + c/w)). With the fitted values and armature this is
 the minimum over 500 poses. With link-only inertia it is below 0.5 ms at any
 width.
 
-`meshes/`: 33 files from GATO's `TiagoProURDF/meshes/` and two from PAL
+`meshes/`: all 35 meshes are PAL Robotics' TIAGo Pro meshes. 33 were copied
+from GATO's `TiagoProURDF/meshes/`, and two were downloaded from PAL's public
 repositories ([`mesh_sources.json`](mesh_sources.json), licenses in
-`../licenses/`). Mesh rights stay with their owners.
+`../licenses/`).
